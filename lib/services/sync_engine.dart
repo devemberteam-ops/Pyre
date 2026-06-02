@@ -138,6 +138,29 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
     await _tick();
   }
 
+  /// Wave CY.18.266: force a one-shot FULL re-pull by resetting the sync
+  /// watermark to 0, then ticking once.
+  ///
+  /// Needed when the user NEWLY enables provider-key sync on this device.
+  /// Providers are stamped with an mtime at desktop launch; if this device's
+  /// cursor has already advanced past that mtime (because it kept syncing
+  /// other collections), the normal `mtime > since` diff would never ship the
+  /// providers — turning the toggle on would appear to do nothing. Re-pulling
+  /// from `since = 0` is LWW-safe: the apply path only takes records strictly
+  /// newer than the local copy, so nothing already-present is clobbered;
+  /// records new to this device (the providers) get added.
+  ///
+  /// We must zero the PERSISTED watermark too, because `_tick` lazily reloads
+  /// `_lastServerTime` from prefs whenever it's 0 at the top of a tick.
+  Future<void> fullResync() async {
+    _lastServerTime = 0;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_prefLastServerTime, 0);
+    } catch (_) {}
+    await forceTick();
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {

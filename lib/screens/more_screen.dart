@@ -241,10 +241,10 @@ class _VersionFooterState extends State<_VersionFooter> {
             const Center(
               child: Text(
                 // Wave CY.18.209: align with About Pyre's footer (Wave 340).
-                // The real version is in pubspec.yaml (1.0.1) and is what the
+                // The real version is in pubspec.yaml and is what the
                 // update-check reads via PackageInfo; this is just a
                 // human-facing label, kept consistent across both screens.
-                'Pyre 1.0.2',
+                'Pyre 1.0.3',
                 style: TextStyle(color: EmberColors.textDim, fontSize: 11),
               ),
             ),

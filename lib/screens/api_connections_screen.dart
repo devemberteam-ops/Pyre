@@ -877,6 +877,42 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
           ),
         ),
         actions: [
+          // Wave CY.18.266: delete an existing provider. There was no UI to
+          // remove a provider anywhere before — only add/edit/reorder. Calls
+          // store.removeProvider (records a tombstone so a LAN-synced delete
+          // propagates, and drops the key from OS-secure storage).
+          if (!isNew)
+            TextButton(
+              onPressed: () async {
+                final confirmed = await showDialog<bool>(
+                  context: ctx,
+                  builder: (dctx) => AlertDialog(
+                    backgroundColor: EmberColors.bgPanel,
+                    title: const Text('Delete provider?'),
+                    content: Text(
+                      'Remove "${existing.name}" and its saved API key from '
+                      'this device? This can\'t be undone.',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dctx, false),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(dctx, true),
+                        child: const Text('Delete',
+                            style: TextStyle(color: Colors.redAccent)),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed != true) return;
+                store.removeProvider(existing.id);
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: const Text('Delete',
+                  style: TextStyle(color: Colors.redAccent)),
+            ),
           TextButton(
             onPressed: () => _testConnection(ctx, nameCtl, urlCtl, keyCtl,
                 modelCtl, kind),

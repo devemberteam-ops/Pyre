@@ -23,9 +23,11 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:provider/provider.dart';
 
 import '../services/lan_client.dart';
 import '../services/sync_engine.dart';
+import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
 
@@ -144,12 +146,20 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
   @override
   Widget build(BuildContext context) {
     final c = LanClient.instance;
+    // Wave CY.18.266: watch the store so the provider-sync toggle reflects
+    // store.uiPrefs.syncProviderKeys and rebuilds when it flips.
+    final store = context.watch<AppStore>();
     return Scaffold(
       appBar: AppBar(title: const Text('Connect to LAN')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          if (c.isPaired) ..._pairedSection(c) else ..._unpairedSection(),
+          if (c.isPaired) ...[
+            ..._pairedSection(c),
+            const SizedBox(height: 12),
+            _providerSyncCard(store),
+          ] else
+            ..._unpairedSection(),
           const SizedBox(height: 20),
           const Text(
             'How this works:\n'
@@ -281,6 +291,59 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
         ),
       ),
     ];
+  }
+
+  /// Wave CY.18.266: opt-in to RECEIVE the PC's AI providers + their API keys
+  /// over the LAN. This is the mobile-side mirror of the desktop's Network →
+  /// "Sync providers & API keys" toggle. Without it, `store.uiPrefs
+  /// .syncProviderKeys` stayed false on the phone forever (no UI to flip it),
+  /// so SyncEngine.applyProviders() always early-returned and incoming
+  /// providers were silently dropped.
+  ///
+  /// Turning it ON triggers a FULL re-pull (fullResync) because the providers
+  /// were stamped on the PC before this device's sync cursor — a normal
+  /// mtime-diff tick wouldn't ship them.
+  Widget _providerSyncCard(AppStore store) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 2, 12, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SwitchListTile(
+              value: store.uiPrefs.syncProviderKeys,
+              onChanged: (v) async {
+                store.uiPrefs.syncProviderKeys = v;
+                store.notifyAndPersist();
+                setState(() {});
+                if (!v) return;
+                // Newly enabled — pull the providers right now. They were
+                // stamped before our cursor, so a plain tick wouldn't fetch
+                // them; fullResync re-pulls from since=0 (LWW-safe).
+                _snack('Pulling providers & keys from the PC…', short: true);
+                await SyncEngine.instance.fullResync();
+                if (!mounted) return;
+                final eng = SyncEngine.instance;
+                _snack(
+                  eng.status == SyncStatus.success
+                      ? 'Providers & keys synced.'
+                      : (eng.lastError ??
+                          'Sync attempted — make sure the PC has this turned ON too.'),
+                );
+              },
+              title: const Text('Sync providers & API keys'),
+              subtitle: const Text(
+                'Pull the AI providers + keys from your paired PC. Encrypted '
+                'over the LAN — the PC must have this turned ON too.',
+                style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+              ),
+              activeThumbColor: EmberColors.primary,
+              contentPadding: EdgeInsets.zero,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

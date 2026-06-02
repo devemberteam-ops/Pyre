@@ -1,5 +1,5 @@
 {
-  "latest": "1.0.2",
+  "latest": "1.0.3",
   "url": "https://github.com/devemberteam-ops/pyre/releases/latest",
-  "notes": "Pyre 1.0.2 — API key/provider sync to paired devices now works."
+  "notes": "Pyre 1.0.3 — phone-side toggle to receive synced providers & keys (with one-shot full re-pull) + you can finally delete providers."
 }
