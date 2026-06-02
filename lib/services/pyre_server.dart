@@ -995,6 +995,24 @@ class PyreServer {
         final incoming = ApiProvider.fromJson(j);
         final idx = store.providers.indexWhere((p) => p.id == id);
         if (idx >= 0 && store.providers[idx].mtime >= incomingMtime) {
+          // Wave CY.18.267: config is at least as fresh so we don't replace
+          // it, but backfill a MISSING key from the peer's envelope (never
+          // overwrite an existing key, never touch config). Mirrors
+          // SyncEngine.applyProviders — covers "this device restored a keyless
+          // backup, then a paired peer pushes the key".
+          if (store.providers[idx].apiKey.isEmpty) {
+            final env = j['apiKeyEnc'];
+            if (env is String && env.isNotEmpty && device != null) {
+              final secret =
+                  await DeviceRegistry.instance.secretForDevice(device);
+              final decrypted = await KeyCrypto.decryptApiKey(env, secret);
+              if (decrypted != null && decrypted.isNotEmpty) {
+                store.providers[idx].apiKey = decrypted;
+                await SecureKeys.write(id, decrypted);
+                return true;
+              }
+            }
+          }
           return false;
         }
         // Preserve the existing local plaintext key as the floor — a decrypt

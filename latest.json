@@ -1,5 +1,5 @@
 {
-  "latest": "1.0.3",
+  "latest": "1.0.4",
   "url": "https://github.com/devemberteam-ops/pyre/releases/latest",
-  "notes": "Pyre 1.0.3 — phone-side toggle to receive synced providers & keys (with one-shot full re-pull) + you can finally delete providers."
+  "notes": "Pyre 1.0.4 — key sync now backfills a missing API key onto a provider you already have (e.g. one restored from a keyless backup), so turning the sync toggle on just works."
 }

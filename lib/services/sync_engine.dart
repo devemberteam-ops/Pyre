@@ -461,6 +461,22 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             }
             final idx = store.providers.indexWhere((p) => p.id == id);
             if (idx >= 0 && store.providers[idx].mtime >= incomingMtime) {
+              // Wave CY.18.267: LWW says our config is at least as fresh, so we
+              // won't replace it. BUT if our local copy has NO key (a provider
+              // restored from a keyless backup, or one that pre-dated key-sync)
+              // and the peer is offering a decryptable key, backfill JUST the
+              // key. This never overwrites an existing key and never touches
+              // config — it only fills a missing secret. Without this, the
+              // common "restore a backup, then turn key-sync on" flow leaves
+              // the provider keyless forever (mtime ties → permanent skip).
+              if (store.providers[idx].apiKey.isEmpty) {
+                final (_, fillKey) = await decodeIncomingProvider(m, secret);
+                if (fillKey != null && fillKey.isNotEmpty) {
+                  store.providers[idx].apiKey = fillKey;
+                  await SecureKeys.write(id, fillKey);
+                  appliedAny = true;
+                }
+              }
               continue;
             }
             // Decode config + (maybe) decrypt the key via the pure helper.
