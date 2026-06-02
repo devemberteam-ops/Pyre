@@ -2121,7 +2121,13 @@ class _ChatScreenState extends State<ChatScreen> {
                 '- Every action / body language / inner thought is its own paragraph, wrapped in *…* only — no dialogue inside the stars.\n'
                 '- Blank line between every action paragraph and every dialogue paragraph. Alternating beats.\n'
                 '- Keep it short — one to three of these blocks total.\n'
-                '- Reply with the message body only, no preamble, no "[OOC: " framing.$examplesNudge]';
+                '- Reply with the message body only, no preamble, no "[OOC: " framing.\n\n'
+                'CRITICAL — no thinking out loud: output ONLY $personaName\'s '
+                'in-character message. Do NOT write any analysis, planning, a '
+                '"thinking process", numbered steps, or notes about these '
+                'instructions — none of that may ever appear in your reply. '
+                'Begin immediately with $personaName\'s first action or spoken '
+                'line.$examplesNudge]';
     // User-role turn so the model treats it as the latest user
     // instruction, not optional context.
     turns.add(ChatTurn('user', impPrompt));

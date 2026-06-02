@@ -438,9 +438,11 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                   const Padding(
                     padding: EdgeInsets.only(top: 2, left: 0, right: 0),
                     child: Text(
-                      'The encryption key is derived from the '
-                      'device-pairing secret — it protects the LAN '
-                      'connection, not data at rest.',
+                      'Turn this ON on BOTH devices — the one holding the keys '
+                      'AND the one receiving them; the receiver ignores synced '
+                      'keys while its own toggle is off. The encryption key is '
+                      'derived from the device-pairing secret — it protects the '
+                      'LAN connection, not data at rest.',
                       style: TextStyle(
                         color: EmberColors.textDim,
                         fontSize: 11,

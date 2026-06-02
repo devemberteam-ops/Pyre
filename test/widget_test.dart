@@ -866,6 +866,30 @@ void main() {
       await store.flushPersist();
     });
   });
+
+  // Wave CY.18.268: providers never got an mtime stamp on create/edit, so they
+  // stayed at mtime=0 forever — and the LAN key-sync diff only ships records
+  // where `mtime > since`, so `0 > since` is always false and opt-in key sync
+  // silently shipped NOTHING. addProvider / updateProvider now stamp mtime
+  // (mirroring the character / persona save paths).
+  group('AppStore — provider mtime (key-sync eligibility)', () {
+    test('addProvider stamps a non-zero mtime', () async {
+      final store = AppStore(storage: _NoopBackend());
+      final p = store.addProvider(name: 'OpenRouter');
+      expect(p.mtime, greaterThan(0));
+      expect(store.providers.last.mtime, greaterThan(0));
+      await store.flushPersist();
+    });
+
+    test('updateProvider bumps a zero mtime so the edit can sync', () async {
+      final store = AppStore(storage: _NoopBackend());
+      final p = ApiProvider(id: 'prov-1', name: 'Venice')..mtime = 0;
+      store.providers.add(p);
+      store.updateProvider(p); // simulate the editor saving the record
+      expect(store.providers.single.mtime, greaterThan(0));
+      await store.flushPersist();
+    });
+  });
 }
 
 /// No-op persistence backend for AppStore unit tests: keeps the debounced

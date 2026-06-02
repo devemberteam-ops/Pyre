@@ -238,7 +238,7 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
           const SizedBox(height: 20),
           const Center(
             child: Text(
-              'Pyre 1.0.1',
+              'Pyre 1.0.2',
               style: TextStyle(color: EmberColors.textDim, fontSize: 11),
             ),
           ),

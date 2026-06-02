@@ -633,6 +633,14 @@ class AppStore extends ChangeNotifier {
     for (final l in lorebooks) {
       l.mtime = stampMtimeIfZero(l.mtime, l.updatedAt, mtimeNow);
     }
+    // Wave CY.18.268: providers were MISSING from this repair pass, so a
+    // provider created before the mtime field existed (or by the old
+    // add/update paths that never stamped it) stayed at mtime=0 and was
+    // invisible to LAN key-sync forever. ApiProvider has no updatedAt, so
+    // installedAt is the stable fallback (now() on a fresh install).
+    for (final p in providers) {
+      p.mtime = stampMtimeIfZero(p.mtime, installedAt ?? mtimeNow, mtimeNow);
+    }
 
     // Wave CY.18.44: load-time reference-integrity sweep. Pre-Wave this
     // ran only after a manual backup restore (Wave CY.18.42 / 43). But
@@ -1247,6 +1255,11 @@ class AppStore extends ChangeNotifier {
       apiKey: apiKey,
       model: model,
     );
+    // Wave CY.18.268: stamp a real mtime on create (mirrors characters /
+    // personas). Without it a provider stays at mtime=0 forever, and the
+    // LAN key-sync diff (`mtime > since`) would NEVER include it — the
+    // opt-in key sync silently did nothing for every provider.
+    p.mtime = DateTime.now().millisecondsSinceEpoch;
     providers.add(p);
     activeProviderId ??= p.id;
     // Push the API key to OS-secure storage; the JSON blob never sees it.
@@ -1262,6 +1275,10 @@ class AppStore extends ChangeNotifier {
   void updateProvider(ApiProvider provider) {
     final i = providers.indexWhere((p) => p.id == provider.id);
     if (i < 0) return;
+    // Wave CY.18.268: bump mtime on every edit so the change is sync-eligible
+    // (LAN key-sync only ships records whose `mtime > since`). Mirrors the
+    // character / persona save paths.
+    provider.mtime = DateTime.now().millisecondsSinceEpoch;
     providers[i] = provider;
     // Sync the secure store with whatever the editor saved. Empty key
     // deletes the slot rather than writing an empty sentinel.
