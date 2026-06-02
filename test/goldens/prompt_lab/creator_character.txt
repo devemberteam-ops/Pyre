@@ -1,0 +1,66 @@
+[system]
+You are building one section of a character card. Return ONLY a single JSON object.
+
+QUALITY RULES (apply to every value you write):
+- English only: every value MUST be written in English, regardless of the language used in the conversation above.
+- Invent confidently: fill anything not explicitly discussed with specific, plausible detail, to a rich depth. Never leave a field thin, vague, or hedged.
+- Anti-seed-collapse: do NOT just echo or lightly expand the user's seed idea. The original seed should be at most ~30% of the result — build a fuller, fleshed-out character around it.
+- Stated traits must manifest: if the character is described as (e.g.) half-Japanese/half-Irish, shy, or a NEET, those facts must concretely show up in the relevant fields — not merely asserted once.
+- Frank and adult where the card calls for it: intimate, anatomical, and kink fields must be explicit and specific (this app is adult-friendly), never euphemistic or coy — when the batch contains such fields.
+- Named inner circle: relationship fields name real people with names, ages, and the bond — never "his mother" or "a friend" placeholders.
+- No meta: no author notes, no "as an AI", no fourth-wall breaks, no "this character is designed to…". Stay fully in-world.
+----------------------------------------
+[user]
+make a shy catgirl barista named Mina
+----------------------------------------
+[user]
+The full character sheet has these sections (filled across several passes): Full Name, Apparent Age, Height & Weight, Race, Born Gender & Gender Expression, Pronouns, Body Type, Attractiveness, Detailed Features, Clothing, Alternative Clothing, Intimate Details, General Appearance, Core Traits, Moral Alignment, Behavioral Bias, Response Pattern, Language / Writing Style / Spelling, Psychological Profile, Cognitive Awareness, Inhibition Level, Routine / Typical Day, Education Level, Voice to Others / Inner Voice, Strengths & Weaknesses, Likes & Dislikes, Interests, Instinctual Behavior / Desires, Temporal Mindset, Core Beliefs, Moral Logic / Justification System, Hidden Contradictions, Personal Rituals & Habits, Intimate Experience, Relational Dynamics, Possessiveness / Jealousy Level, Horniness Level, Fetishes & Kinks, Abilities, Power Scale, Combat Behavior & Approach, Storage & Carried Items, Special Object, Species / Classification Notes, Vulnerabilities & Countermeasures, Behavioral Modes, Background, Inner Circle, Known By / Rumors, Living Space, World Familiarity, Environmental Reactions, What They Want From the Future, Notes, Tagline, First Message, Dialogue Examples, Tags, Creator Notes.
+RIGHT NOW you are filling ONLY: Full Name, Apparent Age, Height & Weight, Race, Born Gender & Gender Expression, Pronouns, Body Type, Attractiveness, Detailed Features, Clothing, Alternative Clothing, Intimate Details, General Appearance. The other sections WILL be filled separately — so keep each field strictly scoped to itself: do NOT cram another field's content here, and do NOT repeat what belongs in another section.
+
+LENGTH DISCIPLINE — keep the Description tight. Across all of its sheet sections combined, aim for roughly ~5,000 tokens total. This is an APPROXIMATE target, NOT a hard limit: do NOT pad to reach it, and do NOT truncate a thought mid-sentence just to hit a number. To get there, write each sheet field tight — typically 1-3 sentences, a short paragraph at most — favouring concrete, specific detail over verbose or purple prose, and NEVER restate what another field already covers (the sections overlap a lot — e.g. Voice / Response Pattern / Language Style; Relational Dynamics / Inner Circle / Possessiveness; Intimate Experience / Horniness / Fetishes). Quality and completeness stay; only padding goes. This budget applies ONLY to the Description sheet fields — it does NOT apply to first_mes, the dialogue examples / mes_example, creator_notes, the tagline, or post_history_instructions; write those at their natural length and do NOT count them toward the ~5,000.
+
+Fill EXACTLY the following fields for the character defined above. For each field, write a rich, specific English value following the quality rules.
+
+"fullName" — Full Name: The character's NAME ONLY — given + family (e.g. "Akemi Tanaka"); aliases, nicknames, "goes by", and how others address them belong in other fields, NOT here.
+   JSON shape: a JSON string value.
+"apparentAge" — Apparent Age, Height & Weight: Concrete years; height + weight in cm/kg or ft/lbs.
+   JSON shape: a JSON string value.
+"race" — Race: Species / heritage — more than just "human".
+   JSON shape: a JSON string value.
+"bornGender" — Born Gender & Gender Expression: Birth sex AND how they present.
+   JSON shape: a JSON string value.
+"pronouns" — Pronouns:
+   JSON shape: a JSON string value.
+"bodyType" — Body Type: Build, silhouette, sensual presence.
+   JSON shape: a JSON string value.
+"attractiveness" — Attractiveness:
+   JSON shape: a JSON string value.
+"detailedFeatures" — Detailed Features: Per-feature physical specifics.
+   JSON shape: a JSON array of objects [{"label":"…","value":"…"}, …], one object per sub-point. Cover at least these sub-points (label = the sub-point, value = its description): Face, Hair, Eyes, Eyelashes, Skin, Voice, Scent, Movement. Add more if relevant.
+"clothing" — Clothing: The default outfit, layer by layer.
+   JSON shape: a JSON array of objects [{"label":"…","value":"…"}, …], one object per sub-point. Cover at least these sub-points (label = the sub-point, value = its description): Torso / Top, Legs / Bottom, Arms / Accessories, Footwear, Notable Magical/Symbolic Details. Add more if relevant.
+"alternativeClothing" — Alternative Clothing: Sleepwear, swimwear, alt looks.
+   JSON shape: a JSON string value.
+"intimateDetails" — Intimate Details: Anatomically explicit, frank, factual (or n/a if SFW).
+   JSON shape: a JSON array of objects [{"label":"…","value":"…"}, …], one object per sub-point. Cover at least these sub-points (label = the sub-point, value = its description): Chest / Breasts, Milk, Genitals, Butt / Anus, Responsiveness, Piercings / Plugs / Enchantments, Magical or Constructed Features. Add more if relevant.
+"generalAppearance" — General Appearance: Posture, presence, aura — how the visual reads.
+   JSON shape: a JSON string value.
+
+Respond with ONE JSON object whose keys are EXACTLY: fullName, apparentAge, race, bornGender, pronouns, bodyType, attractiveness, detailedFeatures, clothing, alternativeClothing, intimateDetails, generalAppearance. English values. No markdown fence, no text before or after the JSON object.
+----------------------------------------
+[render]
+Full Name: Mina Calloway
+
+Apparent Age, Height & Weight: 22, 158cm, 49kg
+
+Race: Catgirl (felis heritage — tufted ears, slim tail)
+
+Detailed Features:
+  * Hair: Ash-brown bob, perpetual cowlick
+  * Eyes: Wide amber, quick to dart away
+
+General Appearance: Small and self-effacing; folds in on herself behind the counter, ears flattening when spoken to.
+
+Core Traits: Shy, observant, secretly fierce, kind, anxious, deft.
+
+Background: Raised above the cafe by an aunt who taught her latte art before language; she stayed when the aunt passed, the espresso machine her only loud thing.

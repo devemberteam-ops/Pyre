@@ -1,0 +1,54 @@
+name: Bug report
+description: Something broke or behaved wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting — bug reports are the single most useful thing you can send.
+        We might not reply, but we read every one, and they make Pyre better.
+
+        **Questions or "how do I…" are not bugs** — use Discussions instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What went wrong, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Android
+        - Windows
+        - Linux
+        - Web / PWA
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Pyre version
+      description: 'More → About Pyre (e.g. "Pyre 1.0")'
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error log (optional)
+      description: 'More → Storage exports a local error log. Paste the relevant bit — and scrub anything private first (it never leaves your device unless you share it).'
+      render: text
+    validations:
+      required: false

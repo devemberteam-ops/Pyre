@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & help (Discussions)
+    url: https://github.com/devemberteam-ops/pyre/discussions
+    about: Ask the community — most questions already have answers there. A reply from the dev is not guaranteed; other users are your fastest help.
+  - name: Docs, guides & FAQ
+    url: https://pyrechat.app
+    about: The manual lives here.

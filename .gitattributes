@@ -1,0 +1,16 @@
+# Normalize text to LF in the repo and on checkout everywhere (Windows, Linux,
+# CI all agree — Dart/Flutter tooling expects LF). Avoids noisy CRLF diffs.
+* text=auto eol=lf
+
+# Binary assets — never normalize or try to diff these.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.webp binary
+*.gif  binary
+*.ico  binary
+*.ttf  binary
+*.otf  binary
+*.jks  binary
+*.keystore binary
+*.apk  binary

@@ -1,0 +1,110 @@
+{
+  "id": "example-world-vael",
+  "name": "The Vael — World Lore",
+  "description": "World lore for the Vael, the great fantasy world the example cards share — its god-era Gates, the people who live around them, and the tropical Saolen Reach where the Sunken Gate breathes cold air up out of the dark. Bound to both the Sunken Gate scenario and Vesna. Authored by the Ember Team as a Pyre example.",
+  "entries": [
+    {
+      "id": "vael-entry-world",
+      "keys": ["the Vael", "Vael", "this world", "the world"],
+      "content": "The Vael is a vast, old fantasy world stitched together out of jungle, tundra, desert, sea and stone — a place where gods walked once and left their doors standing open. It is roughly pre-industrial: steel and sail, candle and coin, no gunpowder to speak of and no machines, but threaded through with aether (raw magic) that leaks out of ancient ruins called Gates. Most people live ordinary lives in towns and holds, trade their goods, fear the wilds, and tell stories about the Gates the way a sailor tells stories about the deep. It is warm and adventurous and frankly dangerous, and it is the only world most of its people will ever know — though, very rarely, the Gates exhale and someone from another world entirely is spat out into the leaf-litter.",
+      "constant": true,
+      "enabled": true,
+      "order": 100
+    },
+    {
+      "id": "vael-entry-aether",
+      "keys": ["aether", "mana", "magic", "spell", "aether-scar", "casting"],
+      "content": "Aether is the raw stuff of magic — an invisible current that pools thick around the Gates and thins to almost nothing in the settled lands. Those with the knack can draw it to shape fire, mend flesh, ward a door, or speak across distance, and the closer they stand to a Gate the easier and the more dangerous it gets. Overdrawing aether leaves an aether-scar: a patch of burned-out nerves, a milky eye, a hand that never warms again, the mage's body paying for what the spell cost. Scholars at the Conclave argue endlessly about what aether actually IS; the people who live near the Gates just know it makes the air taste like a coin and the dead refuse to stay quiet."
+    },
+    {
+      "id": "vael-entry-gates",
+      "keys": ["the Gates", "Gate", "Sunken Gate", "the Maw", "the ruins", "ancient ruins", "portal"],
+      "content": "The Gates are the doors the old gods left behind — colossal arches of pale, sweating stone, scattered across the Vael and sunk into jungle, ice and dune, each one breathing cold mineral air up out of a dark that goes down further than anyone has mapped. They leak aether, and where they leak they spawn ruins, monsters, and treasure worth dying for, which is why delvers come and why so few come back. The Sunken Gate — the locals call it the Maw — is one of the largest, a ravine-bottomed arch in the southern rainforest with something heavy that shifts and clicks far down its cold throat. Once in a long while a Gate will exhale instead of inhale, and on those nights it drops an Outsider — a person from another world entirely — onto the leaf-litter, naked of any memory of how they came."
+    },
+    {
+      "id": "vael-entry-outsiders",
+      "keys": ["Outsider", "Outsiders", "the fallen", "Gate-spat", "not from here", "isekai", "another world"],
+      "content": "Outsiders are people the Gates have spat out from other worlds — Earth among them, though the locals have no word for Earth and wouldn't believe it. They arrive disoriented and empty-handed at the foot of a Gate, usually remembering their old life but not the crossing itself, and they're marked by everything they don't know: the coins, the courtesies, the names of the gods, which berries kill you. Some are taken for spies or omens; the Vekhi call them 'Gate-spat' and watch them very carefully. An Outsider's only real edge is the knowledge they carried in their head — and, for the lucky ones, someone local willing to keep them alive long enough to use it. Ren Brennan is one of these. So, it seems, is {{user}}."
+    },
+    {
+      "id": "vael-entry-saolen",
+      "keys": ["the Saolen Reach", "Saolen", "the Reach", "rainforest", "jungle", "the basin"],
+      "content": "The Saolen Reach is the deep tropical south of the Vael: a vast rainforest basin of green-black canopy, ravines choked with vine, sudden warm rain, and insect-drone so constant it becomes silence. It is hot, wet, beautiful and lethal — fever in the low ground, things with too many legs in the high ground, and the Sunken Gate breathing cold at the heart of it. The frontier town of Aldermere clings to its northern edge where the jungle meets navigable river, and beyond Aldermere the maps go vague and then blank. Outsiders who come through the Maw come through here, into heat like a wet cloth over the face."
+    },
+    {
+      "id": "vael-entry-aldermere",
+      "keys": ["Aldermere", "the town", "frontier town", "the market"],
+      "content": "Aldermere is the last real town before the Saolen Reach swallows the road — a muddy, humid, river-fed frontier settlement of stilt-houses, tarp markets, delver outfitters and too many taverns, where everyone is either passing through or stuck. It runs on the Gate trade: delvers buy rope and antivenom and sell back whatever they drag out of the ruins, and the prices are honest the way a knife is honest. Outsiders tend to wash up here because it's where the jungle road ends and there's work, of a kind, for the desperate. It's where Ren scrapes by, and where a clueless newcomer might bump into someone in a market corner who turns out to be just as out of place."
+    },
+    {
+      "id": "vael-entry-corwyn",
+      "keys": ["Corwyn", "the Crown", "the kingdom", "central kingdom"],
+      "content": "Corwyn is the central human kingdom of the Vael — temperate, populous, and old enough to think of itself as the natural centre of the world, which the rest of the world finds tiresome. The Crown taxes the Gate trade, licenses delvers through charters, and keeps a careful distance from the Gates themselves, preferring to profit from other people's risk. Its politics are the usual: scheming nobles, an overstretched treasury, and a quiet terror that one of the Gates will one day exhale something the army can't kill. Most Vael trade routes still measure distance from Corwyn's capital whether anyone likes it or not."
+    },
+    {
+      "id": "vael-entry-hjalmark",
+      "keys": ["the Hjalmark", "Hjalmark", "the frozen north", "the north", "tundra"],
+      "content": "The Hjalmark is the frozen north of the Vael — a hard country of black pine, long dark, frozen fjords and longhouses, home to the wolfkin and other cold-weather beastfolk. Its people are clan-bound, blunt, and contemptuous of the soft south, and they raise their young to hunt, fight and survive a winter that kills the unprepared. Vesna is Hjalmark-born and carries the whole country in her bones: she smells wrong-warm here in the south, says 'seen worse' to anything, and pretends the jungle's heat doesn't bother her when it plainly does. To a Hjalmark wolfkin, going this far south alone is either ambition or exile, and Vesna is cagey about which."
+    },
+    {
+      "id": "vael-entry-ashen",
+      "keys": ["the Ashen Expanse", "Ashen Expanse", "Qaresh", "the desert"],
+      "content": "The Ashen Expanse is the great desert of the Vael — wind-scoured pale dunes and salt-flats under a white sky, with the trade-city of Qaresh rising out of it like a mirage that turned out to be real. Qaresh is a place of water-debt, veiled caravans, spice-and-secret markets, and the most expensive shade in the world, and it grew rich guarding the one reliable route across the sand. Aether behaves strangely here — mirages that bite, storms that whisper — and the desert keeps its own Gates, half-buried, that the Qareshi will not discuss with outsiders. People say the Expanse remembers everyone who crosses it and forgives no one."
+    },
+    {
+      "id": "vael-entry-sundering-sea",
+      "keys": ["the Sundering Sea", "Sundering Sea", "Coral Thrones", "the archipelago", "sea-folk", "pirates"],
+      "content": "The Sundering Sea is the warm, island-scattered ocean to the Vael's southeast, where the Coral Thrones — a sprawling archipelago of reef-ringed isles — are ruled by squabbling sea-folk dynasties and the pirate-captains who pretend to serve them. It's a world of monsoon, salvage, blood-feud and trade, where a hull full of Gate-loot can buy a throne and lose it again in a season. The sea-folk are amphibious beastfolk of many shapes, proud of their lineages and their grudges, and they treat the land-bound Vael as a quaint backwater that occasionally has nice things to steal. There are drowned Gates down in the reef, and the divers who work them rarely come up the same."
+    },
+    {
+      "id": "vael-entry-lumenspire",
+      "keys": ["Lumenspire", "the Conclave", "the magocracy", "the scholars", "the mages"],
+      "content": "Lumenspire is the white-towered city of the Conclave — a magocracy of scholar-mages who have devoted themselves, for centuries, to understanding (and quietly coveting) the Gates. They send expeditions, write treatises no one else can read, and pay very well for anything dragged out of a ruin intact, which makes them both the delvers' best customer and their least trustworthy one. The Conclave's official line is that they study the Gates to protect the Vael; the cynical line is that whoever truly understands a Gate could open or close it at will, and several factions inside Lumenspire would very much like to be that whoever. They are intensely interested in Outsiders, and an Outsider who came to their attention might never be allowed to leave."
+    },
+    {
+      "id": "vael-entry-humans",
+      "keys": ["Humans", "human", "humankind"],
+      "content": "Humans are the most numerous people of the Vael, spread across every climate and stubbornly adaptable — Corwyn's farmers and nobles, Aldermere's delvers, Qaresh's caravaneers, the Conclave's scholars. They have no innate edge: no claws, no cold-blood, no long life, just numbers, ambition and a talent for organising. Most carry no aether at all, which makes the few who do precious and dangerous. To the beastfolk and the Ysili they can seem short-lived and greedy, building and burning in the same generation, but they are also the ones who keep the roads open and the markets honest enough to use."
+    },
+    {
+      "id": "vael-entry-beastfolk",
+      "keys": ["Beastfolk", "kemonomimi", "beast-folk", "wolfkin", "catfolk", "ears and tail"],
+      "content": "Beastfolk (the scholars say 'kemonomimi', everyone else says 'beastfolk') are the Vael's many part-animal peoples — wolfkin of the Hjalmark, the spotted jungle-cat Vekhi of the Saolen Reach, the amphibious sea-folk of the Coral Thrones, and dozens more. They carry the ears, tails, fangs, eyes and instincts of their kind alongside a fully human mind, and their senses and reflexes generally outclass a baseline human's. Each people has its own culture, grudges and pride of lineage, and they do NOT consider themselves one group — a Hjalmark wolfkin and a Saolen Vekhi are as foreign to each other as any two strangers, and might well dislike each other on principle. Vesna is wolfkin; the Vekhi who guard the Sunken Gate are something else entirely."
+    },
+    {
+      "id": "vael-entry-ysili",
+      "keys": ["the Ysili", "Ysili", "aether-folk", "the long-lived"],
+      "content": "The Ysili are the Vael's long-lived aether-folk — elf-adjacent in the storybook sense (tall, fine-boned, unhurried) but genuinely eerie up close, with too-still faces, eyes that catch the light wrong, and a way of speaking as if they've already heard your answer. They live for centuries, bind themselves to old groves and ruins, and have a relationship with aether and the Gates that predates human memory and which they do not explain. Some Ysili are gracious; all of them are patient in a way that unsettles short-lived people. The wise treat an Ysili's courtesy as a contract and read every word twice."
+    },
+    {
+      "id": "vael-entry-saurkin",
+      "keys": ["the Saur'kin", "Saurkin", "Saur'kin", "reptilian", "lizardfolk", "marsh-folk"],
+      "content": "The Saur'kin are the Vael's reptilian people — scaled, cold-blooded marsh and jungle dwellers who sun themselves on warm stone in the morning and turn sluggish when the night cools. They build stilt-villages in the Saolen wetlands and the river-deltas, keep long oral histories, and have a measured, unhurried temperament that warm-bloods often misread as stupidity right up until it costs them. In the heat of the Reach a Saur'kin is at their fastest and most dangerous, and they know the jungle's waterways better than anyone alive. They have an old, wary truce with the Vekhi over the southern territories."
+    },
+    {
+      "id": "vael-entry-stryx",
+      "keys": ["the Stryx", "Stryx", "owl-folk", "raptor-folk", "highland folk"],
+      "content": "The Stryx are the Vael's owl- and raptor-folk — feather-crested highland and mountain dwellers with wide unblinking eyes, a head that turns too far, and talons they keep filed for use. They nest in the high crags and cliff-cities above the tree line, prize sharp eyes and sharper memory, and serve across the Vael as scouts, message-fliers and uncomfortably good archers. Most Stryx cannot truly fly — their wings are vestigial or gliding at best — which is a sore point you do not raise. They are nocturnal by nature and find the bright lowland day faintly rude."
+    },
+    {
+      "id": "vael-entry-gatespawn",
+      "keys": ["Gate-spawn", "gatespawn", "aberration", "aberrations", "monster", "monsters", "the thing in the ruin"],
+      "content": "Gate-spawn are the monsters the Gates make — things grown wrong out of leaked aether, neither animal nor demon nor anything with a proper name, that infest the ruins and sometimes spill out into the wild. They range from chittering swarm-vermin to single horrors the size of a longhouse, and the deeper into a Gate you go the worse and the older they get. They don't eat for hunger so much as for the aether in living things, which is why a wounded delver attracts them and why the dying scream. Something heavy and patient shifts in the cold throat of the Sunken Gate; the Vekhi guard the Maw precisely so that whatever is down there stays down there."
+    },
+    {
+      "id": "vael-entry-vekhi",
+      "keys": ["the Vekhi", "Vekhi", "the tribe", "spotted", "jungle-cats", "the war-party", "the guardians"],
+      "content": "The Vekhi are the spotted jungle-cat beastfolk of the Saolen Reach — lean, golden-eyed, ears that flatten and tails that lash, moving headfirst down the trunks fast and silent with blowpipes and obsidian spears. They are the hereditary guardians of the Sunken Gate, sworn for more generations than they count to keep the Maw sealed and to kill or turn back anything that would wake what sleeps below — including Outsiders the Gate spits out at their feet. They speak a clicking, sing-song tongue and live by a hard law: the Maw is theirs, the canopy feeds, and trespass is answered with spears. They have a wary, old beef with the Saur'kin over territory and a flat contempt for delvers — which is exactly the trouble Vesna brings with her, being neither Vekhi nor welcome."
+    },
+    {
+      "id": "vael-entry-delvers-charter",
+      "keys": ["the Delvers' Charter", "Delvers' Charter", "the Charter", "adventurer guild", "guild", "delvers", "delver"],
+      "content": "The Delvers' Charter is the loose, Corwyn-licensed confederation of adventurer guilds that organises the Gate trade — registering delvers, posting bounties, brokering loot, and pretending to enforce a code that mostly means 'don't rob your own party'. A charter-marked delver gets contracts, fences their finds at honest-ish rates, and earns the dubious protection of a guild that will avenge them only if it's cheap. Vesna is of the Charter world — a registered delver, broke and far from her usual range — which puts her at odds with the Vekhi, who recognise no charter over the Maw and regard delvers as grave-robbers waiting to happen. The Charter's reach thins to nothing this deep in the Saolen Reach, where the only law is the jungle and whoever's holding the spear."
+    }
+  ],
+  "hidden": false,
+  "createdAt": 1748534400000,
+  "updatedAt": 1748534400000,
+  "mtime": 0,
+  "deleted": false
+}

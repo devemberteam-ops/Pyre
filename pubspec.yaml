@@ -1,0 +1,265 @@
+name: pyre
+description: "Pyre — a powerful, private roleplay frontend. BYOK."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+# The following defines the version and build number for your application.
+# A version number is three numbers separated by dots, like 1.2.43
+# followed by an optional build number separated by a +.
+# Both the version and the builder number may be overridden in flutter
+# build by specifying --build-name and --build-number, respectively.
+# In Android, build-name is used as versionName while build-number used as versionCode.
+# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
+# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
+# Read more about iOS versioning at
+# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+# In Windows, build-name is used as the major, minor, and patch parts
+# of the product and file versions while build-number is used as the build suffix.
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.0
+
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  provider: ^6.1.2
+  shared_preferences: ^2.3.2
+  path_provider: ^2.1.4
+  http: ^1.2.2
+  crypto: ^3.0.6
+  # Wave CY.18.257: AES-GCM-256 + HKDF-SHA256 for the encrypted opt-in
+  # API-key sync over LAN. Pure Dart on every Flutter target. Used only by
+  # lib/services/key_crypto.dart to wrap an API key in an envelope keyed by
+  # the pairing secret both peers already share.
+  cryptography: ^2.7.0
+  file_picker: ^10.3.4
+  uuid: ^4.5.1
+  webview_flutter: ^4.10.0
+  webview_flutter_android: ^4.0.0
+  # Wave CY.18.96: desktop browse-botbooru-in-Pyre. Edge WebView2 wrapper —
+  # the runtime is preinstalled on every Win10/11 machine (Microsoft pushes
+  # it through Windows Update) so users don't need a separate download.
+  # webview_flutter doesn't ship a Windows implementation; webview_windows
+  # fills only that gap. Mobile (Android/iOS) keeps the existing
+  # webview_flutter path. Linux/macOS desktop fall back to the
+  # external-launch UI — webview_windows is Windows-only by design.
+  webview_windows: ^0.4.0
+  url_launcher: ^6.3.1
+  # OS-level secret store — Android Keystore-backed EncryptedSharedPreferences,
+  # iOS Keychain, macOS Keychain, Linux Secret Service, Windows Credential
+  # Manager. Used by lib/services/secure_keys.dart to keep API keys out of the
+  # main JSON blob (which is plaintext on disk).
+  # Wave CY.18.46 note: tried bumping to 10.x to drop the ATL header
+  # dependency on Windows — turned out the Windows native side still
+  # uses `<atlstr.h>` in 10.x. Stayed on 9.x. To build Windows you
+  # need the "C++ ATL for v142 build tools" component installed via
+  # Visual Studio Installer (see docs/desktop-build.md if added).
+  flutter_secure_storage: ^9.2.2
+
+  # PDF text extraction for the AI-assisted character builder. Free under
+  # Syncfusion's Community License for individuals and small companies
+  # (<$1M annual revenue). See https://www.syncfusion.com/products/communitylicense
+  syncfusion_flutter_pdf: ^30.2.4
+
+  # OS-native share sheet — hands a backup file (or an exported card PNG)
+  # to whatever transport the user already trusts (Quick Share for
+  # device-to-device, WhatsApp/Telegram/Signal for sending to someone,
+  # Drive/Dropbox for cloud storage). We don't need to know what they
+  # pick. Replaces a hypothetical NFC transfer with something that
+  # actually works for multi-MB payloads.
+  share_plus: ^10.1.4
+
+  # Pure-Dart image decode / resize / re-encode. Used to downscale
+  # large photos before sending them to vision APIs — a 5MB image
+  # would otherwise take 10-20s to upload AND get billed by image-tile
+  # count regardless of how much the model actually inspects.
+  # Pure Dart = no extra native deps; runs in a compute() isolate
+  # so the UI stays responsive during the work.
+  image: ^4.3.0
+
+  # Wave BM: foreground-service keep-alive for in-progress LLM
+  # generations. Without this, Android can kill the app process when
+  # the user minimizes during a 1-2 minute generation, dropping the
+  # in-flight HTTP stream. The plugin shows a persistent notification
+  # ("Pyre — generating response") which earns the OS-level promise
+  # that we're doing user-facing work and shouldn't be culled.
+  flutter_foreground_task: ^9.1.0
+
+  # Wave CY.18.45: read the running app version (CFBundleShortVersion
+  # on iOS, versionName on Android, etc.) so the startup update-check
+  # can compare against `latest.json` hosted on GitHub. Used only by
+  # services/update_check.dart — nothing else needs the version
+  # string at runtime.
+  package_info_plus: ^8.1.0
+
+  # Wave CY.18.46: desktop window control (Windows + Linux + macOS).
+  # Sets initial window size, minimum size, and title so the user
+  # doesn't see a 200x200 black square on first launch. No-op on
+  # Android / iOS / web — guarded by Platform.isDesktop in main.dart.
+  window_manager: ^0.4.3
+
+  # Wave CY.18.51 NOTE: tentei adicionar `desktop_drop: ^0.6.0` mas
+  # quebra o APK Android — o plugin tem um Android side cujas deps
+  # androidx exigem compileSdk 34+ no AAR metadata, e o pacote em si
+  # foi compilado contra android-33. Removido por enquanto. Tarefa
+  # revisitada num wave futuro com `super_drag_and_drop` (mais
+  # moderno, cross-platform clean) ou downgrade pra desktop_drop
+  # 0.4.x (deps androidx mais antigas).
+
+  # Wave CY.18.55: system tray + close-to-tray on desktop. Plugin is
+  # Windows/macOS/Linux only — ships no Android/iOS code, so no AAR
+  # compat risk. Gated at runtime via `_isDesktop` regardless.
+  tray_manager: ^0.3.1
+
+  # Wave CY.18.65: HTTP server for Phase 3 LAN sync. `shelf` is pure
+  # Dart (no native code at all — runs on every platform Flutter
+  # targets), so adding it can't break Android the way desktop_drop /
+  # super_drag_and_drop did. `shelf_router` adds the path-pattern
+  # routing layer on top so we don't have to hand-roll URL parsing.
+  # The server itself is desktop-only via runtime _isDesktop gate in
+  # services/pyre_server.dart — mobile builds include the code but
+  # never invoke `serve()`.
+  shelf: ^1.4.1
+  shelf_router: ^1.1.4
+  # Wave CY.18.76: serve the Flutter web build as static files
+  # alongside the API. Lets a browser hit `http://<pc>:<port>/`
+  # and load the app directly, no separate hosting needed.
+  shelf_static: ^1.1.3
+
+  # Wave CY.18.68: QR code rendering for the LAN pairing flow. Pure
+  # Dart (CustomPainter under the hood) so it ships zero native code
+  # on any platform — Android, Windows, web, all safe. Only used on
+  # the desktop Network settings screen; mobile / web builds compile
+  # the import but never instantiate the widget unless the user opens
+  # that screen (which is gated on _isDesktop).
+  qr_flutter: ^4.1.0
+
+  # Wave CY.18.69: QR code SCANNING on mobile (camera) for the
+  # phone-side pairing flow. `mobile_scanner` wraps CameraX on
+  # Android and AVFoundation on iOS. Risk: native deps could conflict
+  # with our build like desktop_drop did. Mitigation: verified APK
+  # build immediately after adding — if it fails, we revert and use
+  # only the manual host/port/token form on mobile. Desktop / web
+  # never reach the scanner widget (gated at the screen level).
+  mobile_scanner: ^5.2.3
+
+  # Wave CY.18.56: native completion toasts on desktop. WinToast
+  # (Windows), NSUserNotification (macOS), libnotify (Linux). No
+  # Android/iOS side — pure desktop plugin. Used by
+  # services/desktop_notifier.dart to ping the user when a long
+  # generation finishes and the Pyre window isn't focused (minimized,
+  # background, or hidden in tray). Skipped entirely while the user
+  # is watching the window — no noise.
+  local_notifier: ^0.1.6
+
+  # Wave CY.18.60 NOTE: tried `super_drag_and_drop: ^0.9.1` as the
+  # parking-note-suggested alternative to `desktop_drop` (parked in
+  # Wave 51). It ALSO breaks Android — it pulls
+  # `irondash_engine_context` whose cargokit gradle plugin calls a
+  # deprecated `Project.exec()` method that the current Gradle
+  # version no longer exposes ("Could not find method exec()").
+  # Both modern Flutter drag-drop packages have hard Android-side
+  # native deps that conflict with our toolchain. The cost-benefit
+  # for a single-platform nicety (desktop-only drag-drop) doesn't
+  # justify upgrading the Android Gradle pipeline OR switching to
+  # a fork. Parked permanently in task #258 — drag-drop will require
+  # writing our own minimal Win32 / GTK / Cocoa native bridge if we
+  # really want it. For now: file picker via the existing "Import
+  # card" buttons is the documented path.
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # The "flutter_lints" package below contains a set of recommended lints to
+  # encourage good coding practices. The lint set provided by the package is
+  # activated in the `analysis_options.yaml` file located at the root of your
+  # package. See that file for information about deactivating specific lint
+  # rules and activating additional ones.
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.1
+
+flutter_launcher_icons:
+  android: 'launcher_icon'    # writes mipmap/launcher_icon.png at every density
+  ios: false                  # enable when an iOS target exists
+  # Wave CY.18.47: generate Windows .ico from the same source PNG used
+  # for Android, so the desktop build's title bar / taskbar / .exe
+  # File Explorer thumbnail all use the Pyre brand icon. Writes
+  # windows/runner/resources/app_icon.ico (already wired into the
+  # runner via Runner.rc → IDI_APP_ICON).
+  windows:
+    generate: true
+    image_path: 'assets/icon/icon.png'
+    icon_size: 256
+  image_path: 'assets/icon/icon.png'
+  adaptive_icon_background: '#0B0B0F'
+  adaptive_icon_foreground: 'assets/icon/icon_foreground.png'
+  min_sdk_android: 21
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+
+  # The following line ensures that the Material Icons font is
+  # included with your application, so that you can use the icons in
+  # the material Icons class.
+  uses-material-design: true
+
+  # Wave CY.18.121: bundled example cards. Both dirs are listed
+  # separately — Flutter does NOT recurse into subdirectories, so the
+  # avatars folder needs its own line. The JSON cards live in
+  # assets/examples/; the (optional) avatar PNGs in assets/examples/avatars/.
+  # Wave CY.18.181: dynamic scene backgrounds. The manifest and the
+  # images/ subdir are listed separately (Flutter does NOT recurse).
+  assets:
+    - assets/examples/
+    - assets/examples/avatars/
+    - assets/scene_bg/manifest.json
+    - assets/scene_bg/images/
+    # Wave CY.18.208: bundled .ico for the Windows system tray. tray_manager
+    # on Windows needs a real .ico (PNG renders blank). This is the same
+    # Pyre-brand icon the taskbar/.exe use (windows/runner/resources/app_icon.ico).
+    - assets/icon/app_icon.ico
+
+  # To add more assets to your application, add to the assets section
+  # above, like this:
+  #   - images/a_dot_burr.jpeg
+  #   - images/a_dot_ham.jpeg
+
+  # An image asset can refer to one or more resolution-specific "variants", see
+  # https://flutter.dev/to/resolution-aware-images
+
+  # For details regarding adding assets from package dependencies, see
+  # https://flutter.dev/to/asset-from-package
+
+  # To add custom fonts to your application, add a fonts section here,
+  # in this "flutter" section. Each entry in this list should have a
+  # "family" key with the font family name, and a "fonts" key with a
+  # list giving the asset and other descriptors for the font. For
+  # example:
+  # fonts:
+  #   - family: Schyler
+  #     fonts:
+  #       - asset: fonts/Schyler-Regular.ttf
+  #       - asset: fonts/Schyler-Italic.ttf
+  #         style: italic
+  #   - family: Trajan Pro
+  #     fonts:
+  #       - asset: fonts/TrajanPro.ttf
+  #       - asset: fonts/TrajanPro_Bold.ttf
+  #         weight: 700
+  #
+  # For details regarding fonts from package dependencies,
+  # see https://flutter.dev/to/font-from-package

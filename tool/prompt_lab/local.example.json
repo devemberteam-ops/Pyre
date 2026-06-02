@@ -1,0 +1,13 @@
+{
+  "//": "Prompt Lab — LIVE-MODE config (Wave CY.18.213). COPY this file to `tool/prompt_lab/local.json` (gitignored) and fill it in from one of your configured providers, then run the live harness (see `prompt_lab_live.dart` for the command). `local.json` holds your API key and must NEVER be committed — it is already in .gitignore.",
+  "//baseUrl": "The provider base URL, e.g. https://api.openai.com/v1 or your Venice/OpenRouter/local URL. Pyre appends `/chat/completions`.",
+  "//model": "The exact model id the provider expects, e.g. gpt-4o-mini, qwen-3.6-plus, etc.",
+  "//apiKey": "Your provider bearer token. Leave the placeholder here in the EXAMPLE file; only ever put a real key in local.json. Local servers (LM Studio/Ollama) usually ignore this — leave it blank for those.",
+  "//extraParams": "Optional. Extra fields spread into the request body (e.g. {\"reasoning\": {\"effort\": \"none\"}} to disable reasoning on Qwen 3.x).",
+  "//kind": "Optional. One of \"external\" (default), \"localhost\", or \"proxy\". Sets kind-aware timeouts; use \"localhost\" for LM Studio/Ollama.",
+  "baseUrl": "https://your-provider.example/v1",
+  "model": "your-model-id",
+  "apiKey": "PUT-YOUR-KEY-HERE",
+  "extraParams": {},
+  "kind": "external"
+}

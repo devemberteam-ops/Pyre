@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ data extraction rules.
+
+  We exclude EVERYTHING from both cloud backup and device-to-device
+  transfer. The app holds user chat history and (in OS-secure storage)
+  API bearer tokens; we don't want either copied off the device by an
+  unsupervised backup channel. Users who want to migrate state should
+  use the in-app Backup & Restore screen, which makes the export
+  contents explicit and gates API keys behind a confirm dialog.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

@@ -1,0 +1,163 @@
+# Pyre — multi-platform release build.
+#
+# Builds Android (APK), Windows, Linux, and Web in parallel, then attaches
+# everything to a DRAFT GitHub Release. The headline value is the **Linux**
+# and **Web** artifacts — you can't produce those on a Windows dev box, so CI
+# is the only way the README's platform table actually ships.
+#
+# HOW TO CUT A RELEASE:
+#   git tag v1.0.0
+#   git push origin v1.0.0
+# …or run it manually from the Actions tab (workflow_dispatch) to smoke-test
+# the builds without tagging (the release step is skipped unless it's a tag).
+#
+# The release is created as a DRAFT so you review + publish by hand.
+#
+# NOTE on Android signing: this builds a release APK that is DEBUG-SIGNED
+# unless you wire your keystore in as GitHub Secrets (KEYSTORE_BASE64,
+# STORE_PASSWORD, KEY_PASSWORD, KEY_ALIAS) and decode it into
+# android/key.properties in the android job. Your locally-signed APK (per
+# docs/RELEASE.md) stays the canonical install; the CI APK is fine for
+# quick testing / web+linux+windows are unaffected.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+env:
+  FLUTTER_VERSION: '3.44.0'
+
+jobs:
+  android:
+    name: Android (APK)
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      # Optional: produce a properly-signed release APK when the keystore
+      # secrets are set. Without them, Gradle falls back to debug signing
+      # (see android/app/build.gradle.kts), so the build still succeeds.
+      - name: Configure release signing
+        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          {
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyPassword=$KEY_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storeFile=upload-keystore.jks"
+          } > android/key.properties
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyre-android
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build windows --release
+      # Zip the WHOLE Release folder — the .exe needs its sibling DLLs +
+      # data/ to run; shipping the bare exe is broken.
+      - name: Zip Windows bundle
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath pyre-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyre-windows
+          path: pyre-windows-x64.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux (x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Install Linux desktop build deps
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libgtk-3-dev
+      - run: flutter config --enable-linux-desktop
+      - run: flutter pub get
+      - run: flutter build linux --release
+      - name: Tarball Linux bundle
+        run: tar -czf pyre-linux-x64.tar.gz -C build/linux/x64/release/bundle .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyre-linux
+          path: pyre-linux-x64.tar.gz
+          if-no-files-found: error
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter build web --release
+      - name: Zip web build
+        run: cd build/web && zip -r ../../pyre-web.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyre-web
+          path: pyre-web.zip
+          if-no-files-found: error
+
+  release:
+    name: Draft GitHub Release
+    needs: [android, windows, linux, web]
+    runs-on: ubuntu-latest
+    # Only publish a Release for an actual tag push — workflow_dispatch runs
+    # just build + upload the per-platform artifacts (a smoke test).
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten + checksum
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name '*.apk' -o -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} dist/ \;
+          mv dist/app-release.apk dist/pyre-android.apk 2>/dev/null || true
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: dist/*

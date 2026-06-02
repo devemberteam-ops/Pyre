@@ -1,0 +1,69 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Release signing — NEVER commit. The repo's contributors and CI fall
+# back to debug signing. Production builds inject these via secrets.
+/android/key.properties
+/android/app/upload-keystore.jks
+/android/app/*.jks
+/android/app/*.keystore
+*.jks
+*.keystore
+
+# Prompt Lab (Wave CY.18.211) — generated reports + the gitignored local
+# live-mode config (the user creates local.json from local.example.json in a
+# later wave; it holds an API key and must NEVER be committed).
+tool/prompt_lab/out/
+tool/prompt_lab/local.json
+
+# Per-platform Gradle/build outputs (the root /build/ above only covers the
+# top-level Flutter build dir, not Android's Gradle output).
+/android/build/
+/android/.gradle/
+
+# Release/ is the web-bundle mirror that build_all.ps1 produces — it's a copy
+# of build/web, not source. Never commit it.
+/Release/
