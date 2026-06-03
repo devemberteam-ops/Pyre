@@ -223,7 +223,8 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
 /// Accepts a few related shapes (see [tryParseLorebookJson]):
 ///   - chara_card_v2 full card (we extract `data.character_book`)
 ///   - bare `character_book` object
-///   - SillyTavern-format `{entries: [...]}` blob
+///   - SillyTavern World Info — standalone export `{entries: {uid: …}}`
+///     (object keyed by uid) or the array form `{entries: [...]}`
 ///   - Pyre's own Lorebook.toJson round-trip
 Future<void> _importLorebookFile(BuildContext context) async {
   final store = context.read<AppStore>();

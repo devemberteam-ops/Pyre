@@ -3,9 +3,10 @@
 // Two import sources land here:
 //
 //   1. Standalone JSON file picked from More → Lorebooks → Import.
-//      Accepted shapes: bare chara_card_v2 `character_book` object,
-//      SillyTavern lorebook format ({entries: [...]} with the ST keys),
-//      or Pyre's own Lorebook.toJson shape.
+//      Accepted shapes: bare chara_card_v2 `character_book` object
+//      (entries as an array), SillyTavern's standalone World Info export
+//      (entries as an object keyed by uid, ST field names), or Pyre's own
+//      Lorebook.toJson shape.
 //
 //   2. Embedded `character_book` extracted from a chara_card_v2 PNG / JSON
 //      during character import (handled via [showEmbeddedBookDialog] which
@@ -77,46 +78,59 @@ Lorebook lorebookFromCharacterBook(
   // diagnostics on the Storage screen.
   LorebookImportErrors.clear();
   final rawEntries = book['entries'];
-  final entries = <LoreEntry>[];
+  // chara_card_v2 `character_book` stores entries as a JSON ARRAY. A
+  // standalone SillyTavern World Info / lorebook export instead stores them
+  // as a JSON OBJECT keyed by uid ("0","1",…) — this is what ST's "Export"
+  // button writes. Accept BOTH by normalising to a flat list of entry maps
+  // before the shared field-mapping loop below. (Map iteration preserves
+  // file order via LinkedHashMap; injection priority is `order`, applied
+  // later at scan time, so iteration order here is cosmetic.)
+  final entryMaps = <Map<String, dynamic>>[];
   if (rawEntries is List) {
-    for (var i = 0; i < rawEntries.length; i++) {
-      final raw = rawEntries[i];
-      if (raw is! Map) continue;
-      final m = raw.cast<String, dynamic>();
-      // Keys: try `keys` (chara_card_v2 standard), then `key` (ST
-      // legacy), then `keywords` (some Risu cards). All accept either
-      // a String[] or a comma-separated String.
-      final keys = _readKeyList(m['keys']) ??
-          _readKeyList(m['key']) ??
-          _readKeyList(m['keywords']) ??
-          <String>[];
-      // Content: `content` (standard) or `entry` (ST world-info legacy).
-      final content = (m['content'] as String?) ??
-          (m['entry'] as String?) ??
-          '';
-      if (content.isEmpty && keys.isEmpty) continue; // skip dud
-      // Enabled defaults to TRUE if absent. Some exports use a
-      // `disable: true` inverted flag — honour both.
-      final enabled = m['enabled'] is bool
-          ? m['enabled'] as bool
-          : (m['disable'] is bool ? !(m['disable'] as bool) : true);
-      final constant = m['constant'] == true;
-      // Order — chara_card_v2 stores `insertion_order` (lower = inject
-      // first), Risu uses `priority`, Pyre uses `order` (higher = more
-      // important). Map across them; default 0.
-      final order = (m['insertion_order'] as num?)?.toInt() ??
-          (m['priority'] as num?)?.toInt() ??
-          (m['order'] as num?)?.toInt() ??
-          0;
-      entries.add(LoreEntry(
-        id: 'lore_${DateTime.now().millisecondsSinceEpoch}_$i',
-        keys: keys,
-        content: content,
-        constant: constant,
-        enabled: enabled,
-        order: order,
-      ));
+    for (final raw in rawEntries) {
+      if (raw is Map) entryMaps.add(raw.cast<String, dynamic>());
     }
+  } else if (rawEntries is Map) {
+    for (final raw in rawEntries.values) {
+      if (raw is Map) entryMaps.add(raw.cast<String, dynamic>());
+    }
+  }
+  final entries = <LoreEntry>[];
+  for (var i = 0; i < entryMaps.length; i++) {
+    final m = entryMaps[i];
+    // Keys: try `keys` (chara_card_v2 standard), then `key` (ST
+    // standalone), then `keywords` (some Risu cards). All accept either
+    // a String[] or a comma-separated String.
+    final keys = _readKeyList(m['keys']) ??
+        _readKeyList(m['key']) ??
+        _readKeyList(m['keywords']) ??
+        <String>[];
+    // Content: `content` (standard) or `entry` (ST world-info legacy).
+    final content = (m['content'] as String?) ??
+        (m['entry'] as String?) ??
+        '';
+    if (content.isEmpty && keys.isEmpty) continue; // skip dud
+    // Enabled defaults to TRUE if absent. Some exports use a
+    // `disable: true` inverted flag — honour both.
+    final enabled = m['enabled'] is bool
+        ? m['enabled'] as bool
+        : (m['disable'] is bool ? !(m['disable'] as bool) : true);
+    final constant = m['constant'] == true;
+    // Order — chara_card_v2 stores `insertion_order` (lower = inject
+    // first), Risu uses `priority`, ST standalone + Pyre use `order`
+    // (higher = more important). Map across them; default 0.
+    final order = (m['insertion_order'] as num?)?.toInt() ??
+        (m['priority'] as num?)?.toInt() ??
+        (m['order'] as num?)?.toInt() ??
+        0;
+    entries.add(LoreEntry(
+      id: 'lore_${DateTime.now().millisecondsSinceEpoch}_$i',
+      keys: keys,
+      content: content,
+      constant: constant,
+      enabled: enabled,
+      order: order,
+    ));
   }
   // Wave CY.18.44: empty-entries diagnostic. Pre-Wave a malformed book
   // (every entry's `keys` and `content` both missing/empty so the loop
@@ -162,7 +176,9 @@ Map<String, dynamic>? extractCharacterBook(Map<String, dynamic> card) {
 ///     → extracts and parses character_book
 ///   - `{ "character_book": {...} }`
 ///     → uses the inner object
-///   - `{ "entries": [...] }` → treats the whole blob as a character_book
+///   - `{ "entries": [...] }` (chara_card_v2 array) OR
+///     `{ "entries": {"0": {...}} }` (standalone SillyTavern World Info,
+///     keyed by uid) → parsed as a bare book
 ///   - Pyre's own Lorebook.toJson shape (has `id`, `entries`, `hidden`)
 ///     → round-trips losslessly via Lorebook.fromJson
 Lorebook? tryParseLorebookJson(
@@ -207,8 +223,10 @@ Lorebook? tryParseLorebookJson(
       nameFallback: nameFallback,
     );
   }
-  // Bare character_book shape (has entries directly).
-  if (root['entries'] is List) {
+  // Bare book shape (entries directly at root). chara_card_v2 uses a List;
+  // standalone SillyTavern World Info uses an object keyed by uid — accept
+  // both (lorebookFromCharacterBook normalises the two shapes).
+  if (root['entries'] is List || root['entries'] is Map) {
     return lorebookFromCharacterBook(root, nameFallback: nameFallback);
   }
   return null;

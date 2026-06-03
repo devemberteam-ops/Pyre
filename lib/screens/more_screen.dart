@@ -244,7 +244,7 @@ class _VersionFooterState extends State<_VersionFooter> {
                 // The real version is in pubspec.yaml and is what the
                 // update-check reads via PackageInfo; this is just a
                 // human-facing label, kept consistent across both screens.
-                'Pyre 1.0.6',
+                'Pyre 1.0.7',
                 style: TextStyle(color: EmberColors.textDim, fontSize: 11),
               ),
             ),
