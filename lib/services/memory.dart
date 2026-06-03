@@ -452,19 +452,41 @@ Future<MemoryCheckpoint?> generateCheckpoint({
     // not the one-shot completeChat — some providers (Chub/Soji) return
     // nothing usable on `stream:false`, which silently broke the
     // auto-summariser while the chat itself worked.
-    final firstChunk = await completeChatStreamed(
-      provider: provider,
-      settings: _recapSettings(settings),
-      messages: turns,
-      debugTag: 'ltm', // Wave CY.18.214 diagnostics tag
-    );
-    if (firstChunk.trim().isEmpty) {
-      // Wave CY.18.42: empty summary from a successful LLM call is
-      // surfaced too — the user can re-trigger with a different
-      // provider/preset rather than silently losing the checkpoint.
+    //
+    // Wave CY.18.268: ONE automatic retry on an empty/errored first call.
+    // A transient provider blip (network hiccup, a momentary refusal or an
+    // empty body) used to fail the whole summarise — the chat path has
+    // retry/fallback but this one didn't, so a single glitch surfaced the
+    // generic "couldn't summarise" toast. Retry once (short backoff) so a
+    // momentary blip self-heals; only give up if BOTH attempts come back
+    // empty or throw.
+    var firstChunk = '';
+    Object? lastErr;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+      }
+      try {
+        firstChunk = (await completeChatStreamed(
+          provider: provider,
+          settings: _recapSettings(settings),
+          messages: turns,
+          debugTag: 'ltm', // Wave CY.18.214 diagnostics tag
+        ))
+            .trim();
+        if (firstChunk.isNotEmpty) break;
+        lastErr = 'empty reply';
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (firstChunk.isEmpty) {
+      // Wave CY.18.42 / 268: both the call and its retry came back empty or
+      // errored — surface it so the user can re-trigger rather than
+      // silently losing the checkpoint.
       MemoryErrors.record(
         'generateCheckpoint',
-        'LLM returned empty summary',
+        'LLM returned no summary after retry: $lastErr',
       );
       return null;
     }
@@ -473,7 +495,7 @@ Future<MemoryCheckpoint?> generateCheckpoint({
     // completeChatStreamed already strips <think>/reasoning (Wave 160),
     // so each chunk is clean. We keep the loop small (≤ _kRecapMaxContinuations)
     // and always-terminating (empty-chunk break + cap).
-    var accumulated = firstChunk.trim();
+    var accumulated = firstChunk;
     final continuationTurns = List<ChatTurn>.from(turns);
     for (var i = 0; i < _kRecapMaxContinuations; i++) {
       if (recapLooksComplete(accumulated)) break;

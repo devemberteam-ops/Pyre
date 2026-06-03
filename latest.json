@@ -1,5 +1,5 @@
 {
-  "latest": "1.0.4",
+  "latest": "1.0.5",
   "url": "https://github.com/devemberteam-ops/pyre/releases/latest",
-  "notes": "Pyre 1.0.4 — key sync now backfills a missing API key onto a provider you already have (e.g. one restored from a keyless backup), so turning the sync toggle on just works."
+  "notes": "Pyre 1.0.5 — the long-term-memory summariser now retries once on a transient provider blip instead of failing the whole summary."
 }
