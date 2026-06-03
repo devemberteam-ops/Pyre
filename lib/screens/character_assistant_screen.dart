@@ -3112,7 +3112,19 @@ class _CharacterAssistantScreenState
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Character Creator'),
+            // Wave 271: Flexible + ellipsis so a narrow screen (small
+            // logical width or a large system font scale) TRUNCATES the
+            // title instead of overflowing the title slot and painting on
+            // top of the actions — that overflow was what made the title,
+            // the "(experimental)" badge and the Sheet/Chat toggle collide
+            // into garbled overlapping text on small phones.
+            const Flexible(
+              child: Text(
+                'Character Creator',
+                overflow: TextOverflow.ellipsis,
+                softWrap: false,
+              ),
+            ),
             const SizedBox(width: 6),
             Container(
               padding:
