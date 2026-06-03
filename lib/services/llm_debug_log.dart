@@ -29,6 +29,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:path_provider/path_provider.dart';
+import 'package:pyre/dev_flavor.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// One captured LLM call. Built at the chat_api chokepoint from the
@@ -271,7 +272,8 @@ class LlmDebugLog {
     }
     if (_dir != null) return _dir!;
     final docs = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docs.path}/$_logDirName');
+    final logDir = kDevFlavor ? '$_logDirName-dev' : _logDirName;
+    final dir = Directory('${docs.path}/$logDir');
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }

@@ -137,6 +137,20 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   final preset = inputs.preset;
   final segments = <PromptSegment>[];
 
+  // Pyre 1.1 (F1): the LTM recap can be placed anywhere via the {{summary}}
+  // macro. We resolve it ONCE here and let `fill()` substitute it; if the
+  // macro fires we suppress the hardcoded recap block below (no double inject).
+  final recap = ltm.buildRecapBlock(chat);
+  // `fill()` flips this when it substitutes a {{summary}} occurrence. We SEED
+  // it from a pre-scan of BOTH preset fields so the suppression is robust to
+  // fill order: the main prompt is filled BEFORE the hardcoded-recap decision
+  // (so the flag would already be set), but post-history is filled AFTER it —
+  // pre-scanning catches a macro placed only in post-history too.
+  final summaryMacroRegex = RegExp(r'\{\{summary\}\}', caseSensitive: false);
+  var summaryMacroUsed = preset != null &&
+      (summaryMacroRegex.hasMatch(preset.mainPrompt) ||
+          summaryMacroRegex.hasMatch(preset.postHistoryInstructions));
+
   // Wave CB: lorebook gathering + scanning is a pair of pure functions in
   // `services/lorebook_inject.dart`.
   final attached = collectBoundLorebooks(
@@ -182,6 +196,16 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
         .replaceAll(RegExp(r'\{\{wiBefore\}\}', caseSensitive: false),
             loreText.toString().trim())
         .replaceAll(RegExp(r'\{\{wiAfter\}\}', caseSensitive: false), '');
+    // Pyre 1.1 (F1): {{summary}} → the LTM recap, resolved anywhere the user
+    // places it. Use replaceAllMapped so we can record that it fired and then
+    // SUPPRESS the hardcoded recap block below (no double injection).
+    out = out.replaceAllMapped(
+      summaryMacroRegex,
+      (_) {
+        summaryMacroUsed = true;
+        return recap;
+      },
+    );
     // 2. {{group}} → comma-joined names of every member of this chat.
     final memberNames = chat.characterIds.map((id) {
       final c = chat.characterSnapshots[id] ?? inputs.lookupCharacter(id);
@@ -269,9 +293,10 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     }
   }
 
-  // Long-term memory recap.
-  final recap = ltm.buildRecapBlock(chat);
-  if (recap.isNotEmpty) {
+  // Long-term memory recap (auto-injected at the fixed spot). Pyre 1.1 (F1):
+  // SKIP this when the user's preset already placed the recap via the
+  // {{summary}} macro — otherwise the recap would appear twice.
+  if (recap.isNotEmpty && !summaryMacroUsed) {
     buffer.writeln('\n--- Story so far (recap) ---');
     buffer.writeln(recap);
     segments.add(PromptSegment(PromptSegmentKind.ltmRecap, recap,

@@ -28,6 +28,7 @@ import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:pyre/dev_flavor.dart';
 
 import 'lan_client.dart';
 
@@ -50,7 +51,7 @@ class AttachmentStore {
     if (kIsWeb) return null;
     if (_cachedDir != null) return _cachedDir;
     final docs = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docs.path}/EmberChat/attachments');
+    final dir = Directory('${docs.path}/${pyreDataDirName()}/attachments');
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }

@@ -53,6 +53,18 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // Wave 1.1 "Pyre Dev" channel: when built with the PYRE_DEV env var
+        // set, the app installs SIDE-BY-SIDE with production (distinct
+        // applicationId suffix + label). With NO env var (production + CI),
+        // this is inert — applicationId stays `app.pyre.client` and the label
+        // stays "Pyre", byte-identical to before. Paired with the
+        // `--dart-define=PYRE_DEV=true` that flips the Dart-side data dir.
+        manifestPlaceholders["appLabel"] = "Pyre"
+        if (System.getenv("PYRE_DEV") == "true") {
+            applicationIdSuffix = ".dev"
+            manifestPlaceholders["appLabel"] = "Pyre Dev"
+        }
     }
 
     signingConfigs {

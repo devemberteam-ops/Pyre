@@ -32,6 +32,7 @@ import 'dart:io' show File, Directory;
 
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:path_provider/path_provider.dart';
+import 'package:pyre/dev_flavor.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const String storageKey = 'emberchat.v1';
@@ -392,7 +393,7 @@ class JsonStorage {
 
   Future<Directory> _appDir() async {
     final dir = await getApplicationDocumentsDirectory();
-    return Directory('${dir.path}/EmberChat');
+    return Directory('${dir.path}/${pyreDataDirName()}');
   }
 
   Future<File> _stateFile() async {

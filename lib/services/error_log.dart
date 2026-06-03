@@ -37,6 +37,7 @@ import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter/widgets.dart'
     show FlutterError, FlutterErrorDetails;
 import 'package:path_provider/path_provider.dart';
+import 'package:pyre/dev_flavor.dart';
 
 class ErrorLog {
   ErrorLog._();
@@ -175,7 +176,8 @@ class ErrorLog {
   static Future<Directory> _resolveDir() async {
     if (_dir != null) return _dir!;
     final docs = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docs.path}/$_logDirName');
+    final logDir = kDevFlavor ? '$_logDirName-dev' : _logDirName;
+    final dir = Directory('${docs.path}/$logDir');
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }

@@ -38,6 +38,8 @@ import 'dart:io' show InternetAddress, ServerSocket, Socket, SocketException;
 
 import 'package:flutter/foundation.dart';
 
+import 'package:pyre/dev_flavor.dart';
+
 class SingleInstance {
   SingleInstance._();
 
@@ -45,7 +47,11 @@ class SingleInstance {
   /// here". Choosing a specific number (not 0) means the SECONDARY
   /// can know exactly where to send its wake ping without any prior
   /// discovery handshake.
-  static const int _lockPort = 51234;
+  // Wave 1.1: the Dev channel ("Pyre Dev") binds a SEPARATE port so a Dev
+  // desktop and the production desktop can run at the same time without one
+  // waking/focusing (and exiting into) the other. Const-folds since
+  // kDevFlavor is a compile-time const.
+  static const int _lockPort = kDevFlavor ? 51235 : 51234;
 
   static ServerSocket? _socket;
 
