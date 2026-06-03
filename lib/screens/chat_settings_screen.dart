@@ -23,6 +23,7 @@ import 'chat_behaviors_screen.dart';
 import 'live_sheet_settings_screen.dart';
 import 'long_term_memory_screen.dart';
 import 'presets_screen.dart';
+import 'regex_rules_screen.dart';
 import 'script_settings_screen.dart';
 
 class ChatSettingsScreen extends StatelessWidget {
@@ -53,6 +54,12 @@ class ChatSettingsScreen extends StatelessWidget {
               title: 'Presets',
               subtitle: 'Sampling defaults and prompt presets.',
               builder: (_) => const PresetsScreen(),
+            ),
+            _HubRow(
+              icon: Icons.find_replace,
+              title: 'Regex (find/replace)',
+              subtitle: 'Rewrite chat text on the fly (non-destructive).',
+              builder: (_) => const RegexRulesScreen(),
             ),
             _HubRow(
               icon: Icons.psychology,

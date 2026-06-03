@@ -52,6 +52,7 @@ import 'attachment_store.dart';
 import 'generation_keepalive.dart';
 import 'key_crypto.dart';
 import 'lan_client.dart';
+import 'regex_rules.dart';
 import 'secure_keys.dart';
 
 enum SyncStatus {
@@ -431,6 +432,33 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
 
+      // Pyre 1.1 (F4): apply incoming REGEX RULE records (LWW by mtime).
+      void applyRegex() {
+        final list = (updates['regexRules'] as List?) ?? const [];
+        for (final raw in list) {
+          if (raw is! Map) continue;
+          final m = raw.cast<String, dynamic>();
+          final id = m['id'] as String?;
+          if (id == null) continue;
+          try {
+            final incoming = RegexRule.fromJson(m);
+            if (store.isTombstonedNewer('regexRule', id, incoming.mtime)) {
+              continue;
+            }
+            final idx = store.regexRules.indexWhere((r) => r.id == id);
+            if (idx >= 0) {
+              if (store.regexRules[idx].mtime >= incoming.mtime) continue;
+              store.regexRules[idx] = incoming;
+            } else {
+              store.regexRules.add(incoming);
+            }
+            appliedAny = true;
+          } catch (e) {
+            debugPrint('[SyncEngine] skip bad regexRule "$id": $e');
+          }
+        }
+      }
+
       // Wave CY.18.261: apply incoming PROVIDER records (config + encrypted
       // API key). Gated on the LOCAL opt-in flag — if the user has key-sync
       // OFF on THIS device, provider records are ignored entirely (even if a
@@ -592,6 +620,16 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
                 appliedAny = true;
               }
               break;
+            case 'regexRule':
+              final removed = store.regexRules
+                  .where((r) => r.id == id && r.mtime < effective)
+                  .isNotEmpty;
+              if (removed) {
+                store.regexRules
+                    .removeWhere((r) => r.id == id && r.mtime < effective);
+                appliedAny = true;
+              }
+              break;
             case 'provider':
               // Wave CY.18.261: a deleted provider also drops its key from
               // OS-secure storage so a stale secret never lingers. Mirror the
@@ -616,6 +654,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
       applyChats();
       applyPresets();
       applyLorebooks();
+      applyRegex();
       // Wave CY.18.261: providers carry an encrypted key + need SecureKeys
       // writes, so this branch is async — await it before the tombstone reap
       // so a provider delete that arrived in the SAME pull reaps immediately.
@@ -776,6 +815,11 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
       'lorebooks': store.lorebooks
           .where((l) => l.mtime > since)
           .map((l) => l.toJson())
+          .toList(),
+      // Pyre 1.1 (F4): regex rules ride the synced set.
+      'regexRules': store.regexRules
+          .where((r) => r.mtime > since)
+          .map((r) => r.toJson())
           .toList(),
     };
   }

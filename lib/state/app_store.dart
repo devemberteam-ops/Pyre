@@ -13,6 +13,7 @@ import '../services/attachment_store.dart';
 import '../services/chat_api.dart' show warmUpProvider;
 import '../services/example_seed.dart';
 import '../services/provider_fallback.dart';
+import '../services/regex_rules.dart';
 import '../services/secure_keys.dart';
 import '../services/store_backend.dart';
 
@@ -233,6 +234,13 @@ class AppStore extends ChangeNotifier {
   /// `_architectPromptForSession` when active.
   List<CreatorPreset> creatorPresets = [];
   String? activeCreatorPresetId;
+
+  /// Pyre 1.1 (F4) — Regex find/replace rules. A top-level SYNCED list
+  /// (LWW via mtime + deleted, mirroring [lorebooks]). Applied
+  /// non-destructively at the prompt + display stages; stored messages are
+  /// never mutated. An EMPTY list leaves chat rendering + prompts
+  /// byte-identical to today.
+  List<RegexRule> regexRules = [];
 
   ModelSettings modelSettings = ModelSettings();
   ChatSettings chatSettings = ChatSettings();
@@ -490,6 +498,10 @@ class AppStore extends ChangeNotifier {
       creatorPresets = _parseList<CreatorPreset>(
           raw['creatorPresets'], 'creatorPresets', CreatorPreset.fromJson);
       activeCreatorPresetId = raw['activeCreatorPresetId'] as String?;
+      // Pyre 1.1 (F4): regex find/replace rules. Missing key → empty list,
+      // which leaves chat byte-identical to pre-1.1 behaviour.
+      regexRules = _parseList<RegexRule>(
+          raw['regexRules'], 'regexRules', RegexRule.fromJson);
 
       modelSettings = _parseObject<ModelSettings>(
           raw['modelSettings'],
@@ -1078,6 +1090,8 @@ class AppStore extends ChangeNotifier {
       'activePresetId': activePresetId,
       'creatorPresets': creatorPresets.map((p) => p.toJson()).toList(),
       'activeCreatorPresetId': activeCreatorPresetId,
+      // Pyre 1.1 (F4): regex find/replace rules.
+      'regexRules': regexRules.map((r) => r.toJson()).toList(),
       'modelSettings': modelSettings.toJson(),
       'chatSettings': chatSettings.toJson(),
       'memorySettings': memorySettings.toJson(),
@@ -1846,6 +1860,7 @@ class AppStore extends ChangeNotifier {
     activePresetId = lockedDefaultPresetId;
     creatorPresets = [buildLockedDefaultCreatorPreset()];
     activeCreatorPresetId = lockedDefaultCreatorPresetId;
+    regexRules = [];
     creatorSessions = [];
     activeCreatorSessionId = null;
     modelSettings = ModelSettings.fromJson(const <String, dynamic>{});
@@ -2299,6 +2314,34 @@ class AppStore extends ChangeNotifier {
   void setActiveCreatorPreset(String id) {
     if (!creatorPresets.any((p) => p.id == id)) return;
     activeCreatorPresetId = id;
+    _bump();
+  }
+
+  // -------------------------------------------------------------------------
+  // Regex rules (Pyre 1.1 — F4). Mirrors the Lorebook CRUD + tombstone path.
+
+  RegexRule addRegexRule(RegexRule r) {
+    r.mtime = DateTime.now().millisecondsSinceEpoch;
+    regexRules.add(r);
+    _bump();
+    return r;
+  }
+
+  void updateRegexRule(RegexRule r) {
+    final i = regexRules.indexWhere((x) => x.id == r.id);
+    if (i < 0) return;
+    r.mtime = DateTime.now().millisecondsSinceEpoch; // sync metadata
+    regexRules[i] = r;
+    _bump();
+  }
+
+  void removeRegexRule(String id) {
+    final removed = regexRules.indexWhere((r) => r.id == id) >= 0;
+    if (!removed) return;
+    regexRules.removeWhere((r) => r.id == id);
+    // Log a tombstone so the deletion propagates over LAN sync (mirrors
+    // the lorebook/preset delete path).
+    recordTombstone('regexRule', id);
     _bump();
   }
 

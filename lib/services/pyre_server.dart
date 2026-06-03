@@ -38,6 +38,7 @@ import 'chat_api.dart';
 import 'device_registry.dart';
 import 'key_crypto.dart';
 import 'rate_limit.dart';
+import 'regex_rules.dart';
 import 'secure_keys.dart';
 
 /// True only on platforms that can actually open a listener socket.
@@ -343,6 +344,13 @@ class PyreServer {
         updates['lorebooks'] = store.lorebooks
             .where((l) => l.mtime > since)
             .map((l) => l.toJson())
+            .toList();
+      }
+      // Pyre 1.1 (F4): regex find/replace rules.
+      if (wanted.contains('regexRules')) {
+        updates['regexRules'] = store.regexRules
+            .where((r) => r.mtime > since)
+            .map((r) => r.toJson())
             .toList();
       }
 
@@ -859,6 +867,8 @@ class PyreServer {
     'chats',
     'presets',
     'lorebooks',
+    // Pyre 1.1 (F4): regex find/replace rules.
+    'regexRules',
     // Wave CY.18.260: providers ride the synced set ONLY when the user has
     // opted in (uiPrefs.syncProviderKeys) AND the peer is native — the /pull
     // block below gates them out otherwise, so an old/web peer that asks for
@@ -980,6 +990,16 @@ class PyreServer {
           store.lorebooks.add(Lorebook.fromJson(j));
         }
         return true;
+      case 'regexRules':
+        final id = j['id'] as String;
+        final idx = store.regexRules.indexWhere((r) => r.id == id);
+        if (idx >= 0) {
+          if (store.regexRules[idx].mtime >= incomingMtime) return false;
+          store.regexRules[idx] = RegexRule.fromJson(j);
+        } else {
+          store.regexRules.add(RegexRule.fromJson(j));
+        }
+        return true;
       case 'providers':
         // Wave CY.18.260: providers carry the API key — gated identically to
         // the pull (opt-in flag AND peer-native). A non-native peer (e.g. web)
@@ -1062,6 +1082,9 @@ class PyreServer {
         return 'preset';
       case 'lorebooks':
         return 'lorebook';
+      // Pyre 1.1 (F4): regex-rule deletes propagate via the tombstone log.
+      case 'regexRules':
+        return 'regexRule';
       // Wave CY.18.260: provider deletes propagate via the tombstone log too.
       case 'providers':
         return 'provider';
@@ -1105,6 +1128,11 @@ class PyreServer {
         store.lorebooks
             .removeWhere((l) => l.id == id && l.mtime < tombstoneMtime);
         return store.lorebooks.length != before;
+      case 'regexRule':
+        final before = store.regexRules.length;
+        store.regexRules
+            .removeWhere((r) => r.id == id && r.mtime < tombstoneMtime);
+        return store.regexRules.length != before;
       case 'provider':
         // Wave CY.18.260: a deleted provider also drops its key from OS-secure
         // storage so a stale secret never lingers. We `await` the delete only

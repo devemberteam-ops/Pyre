@@ -33,6 +33,7 @@ import 'image_describe.dart' show encodeImageDataUrl;
 import 'live_sheet.dart' as lsheet;
 import 'lorebook_inject.dart';
 import 'memory.dart' as ltm;
+import 'regex_rules.dart';
 import 'story_roadmap.dart' as roadmap;
 
 // ===========================================================================
@@ -106,6 +107,13 @@ class ChatPromptInputs {
   /// (the widget passes its `_streamMessageId`; the harness passes null).
   final String? inFlightMessageId;
 
+  /// Pyre 1.1 (F4): the user's regex find/replace rules (`store.regexRules`).
+  /// Applied at the `prompt` stage to each history message BODY only (not the
+  /// system prompt, not lorebook injections). EMPTY by default → no change,
+  /// so the assembled turns stay byte-identical for any caller (e.g. the
+  /// prompt-lab harness) that doesn't pass rules.
+  final List<RegexRule> regexRules;
+
   const ChatPromptInputs({
     required this.chat,
     required this.character,
@@ -116,6 +124,7 @@ class ChatPromptInputs {
     required this.lookupCharacter,
     required this.lookupBook,
     this.inFlightMessageId,
+    this.regexRules = const [],
   });
 }
 
@@ -346,12 +355,21 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     );
     switch (m.kind) {
       case MessageKind.user:
-        final t = ChatTurn('user', txt);
+        // Pyre 1.1 (F4): non-destructive prompt-stage regex on the user
+        // stream. Empty rules list → identity.
+        final t = ChatTurn(
+            'user',
+            applyRegexRules(txt, inputs.regexRules,
+                stream: RegexStream.userInput, stage: RegexStage.prompt));
         turns.add(t);
         historyTurns.add(t);
         break;
       case MessageKind.char:
-        final t = ChatTurn('assistant', txt);
+        // Pyre 1.1 (F4): non-destructive prompt-stage regex on the AI stream.
+        final t = ChatTurn(
+            'assistant',
+            applyRegexRules(txt, inputs.regexRules,
+                stream: RegexStream.aiOutput, stage: RegexStage.prompt));
         turns.add(t);
         historyTurns.add(t);
         break;

@@ -19,6 +19,7 @@ import '../services/generation_keepalive.dart';
 import '../services/lorebook_inject.dart';
 import '../services/live_sheet.dart' as lsheet;
 import '../services/memory.dart' as ltm;
+import '../services/regex_rules.dart';
 import '../services/scene_background.dart' as scenebg;
 import '../services/story_roadmap.dart' as roadmap;
 import '../services/token_estimate.dart';
@@ -1232,6 +1233,7 @@ class _ChatScreenState extends State<ChatScreen> {
       lookupCharacter: store.characterById,
       lookupBook: store.lorebookById,
       inFlightMessageId: _streamMessageId,
+      regexRules: store.regexRules,
     );
     return buildChatPrompt(inputs).turns;
   }
@@ -3034,6 +3036,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         character: speaker,
                         chatSettings: settings,
                         persona: persona,
+                        regexRules: store.regexRules,
                         messageIndex: i,
                         isStreaming: _streamMessageId == m.id,
                         showSpeakerName: chat.characterIds.length > 1,
@@ -3255,6 +3258,11 @@ class _MessageBubble extends StatefulWidget {
   // one whose message changed via its widget identity.
   final ChatSettings chatSettings;
   final Persona? persona;
+  /// Pyre 1.1 (F4): the user's regex find/replace rules, passed in once at
+  /// the list level (like [chatSettings]) so a streaming notify doesn't
+  /// rebuild every bubble. Applied at the DISPLAY stage to normal user/AI
+  /// bubbles only (aux bubbles untouched). Empty list → render byte-identical.
+  final List<RegexRule> regexRules;
   // True while this exact message is the active streaming target. Used to
   // suppress mid-stream affordances (the Continue pill in particular —
   // every chunk leaves the message looking "truncated" until the final
@@ -3280,6 +3288,7 @@ class _MessageBubble extends StatefulWidget {
     required this.isLast,
     required this.chatSettings,
     required this.persona,
+    required this.regexRules,
     required this.messageIndex,
     this.isStreaming = false,
     this.showSpeakerName = false,
@@ -3528,10 +3537,24 @@ class _MessageBubbleState extends State<_MessageBubble> {
                           // to render as real names — same way they're
                           // already filled in the system prompt via
                           // _buildTurns.
-                          _fillNamePlaceholders(
-                            m.text,
-                            charName: widget.character?.name,
-                            personaName: widget.persona?.name,
+                          //
+                          // Pyre 1.1 (F4): non-destructive DISPLAY-stage
+                          // regex on top (after name-fill). Empty rules
+                          // list → identity, so the rendered text is
+                          // byte-identical when no rules exist. Only
+                          // normal user/AI bubbles reach here (aux
+                          // bubbles return early above).
+                          applyRegexRules(
+                            _fillNamePlaceholders(
+                              m.text,
+                              charName: widget.character?.name,
+                              personaName: widget.persona?.name,
+                            ),
+                            widget.regexRules,
+                            stream: isUser
+                                ? RegexStream.userInput
+                                : RegexStream.aiOutput,
+                            stage: RegexStage.display,
                           ),
                           hideReasoning: _reasoningOverride ??
                               chatSettings.hideReasoning,
