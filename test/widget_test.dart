@@ -147,6 +147,36 @@ void main() {
       final j = (UiPrefs()..syncProviderKeys = true).toJson();
       expect(UiPrefs.fromJson(j).syncProviderKeys, isTrue);
     });
+    test('UiPrefs.uiScale defaults to 1.0', () {
+      expect(UiPrefs().uiScale, 1.0);
+      expect(UiPrefs().clampedUiScale, 1.0);
+      // Default value is NOT written to JSON (keeps backups clean).
+      expect(UiPrefs().toJson().containsKey('uiScale'), isFalse);
+    });
+    test('UiPrefs.uiScale round-trips a custom value', () {
+      final j = (UiPrefs()..uiScale = 1.25).toJson();
+      expect(j['uiScale'], 1.25);
+      expect(UiPrefs.fromJson(j).uiScale, 1.25);
+      expect(UiPrefs.fromJson(j).clampedUiScale, 1.25);
+    });
+    test('UiPrefs.uiScale missing key loads as 1.0', () {
+      expect(UiPrefs.fromJson(const <String, dynamic>{}).uiScale, 1.0);
+      // Also tolerates a wrong-typed value → 1.0.
+      expect(
+        UiPrefs.fromJson(const {'uiScale': 'big'}).uiScale,
+        1.0,
+      );
+    });
+    test('UiPrefs.clampedUiScale clamps out-of-range stored values', () {
+      // Too large → clamped to the max.
+      final hi = UiPrefs.fromJson(const {'uiScale': 5.0});
+      expect(hi.uiScale, 5.0); // raw value preserved
+      expect(hi.clampedUiScale, UiPrefs.kUiScaleMax);
+      // Too small → clamped to the min.
+      final lo = UiPrefs.fromJson(const {'uiScale': 0.1});
+      expect(lo.uiScale, 0.1);
+      expect(lo.clampedUiScale, UiPrefs.kUiScaleMin);
+    });
   });
 
   group('buildChatUrl — URL versioning', () {

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../models/models.dart' show UiPrefs;
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../services/lan_client.dart';
@@ -64,6 +65,11 @@ class MoreScreen extends StatelessWidget {
             // can come back when there's actually more than one to
             // pick from.
           ]),
+          const SizedBox(height: 12),
+          // Pyre 1.1 (F5): global UI text-scale. Cross-platform (a phone
+          // user asked for bigger text), so it lives here in the main
+          // More list rather than the desktop-only Shortcuts screen.
+          const _DisplayCard(),
           const SizedBox(height: 12),
           // Wave CY.18.193: Presets + Long-term Memory moved INTO Chat
           // Settings (a hub). Wave CY.18.202: Lorebooks moved BACK out
@@ -379,6 +385,120 @@ class _MoreRow extends StatelessWidget {
             ],
             const Icon(Icons.chevron_right,
                 color: EmberColors.textDim, size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Pyre 1.1 (F5): "App text size" card — a global UI text-scale slider.
+///
+/// Lives in the cross-platform More list (a phone user reported the
+/// default text was too small to read). Range is
+/// [UiPrefs.kUiScaleMin]–[UiPrefs.kUiScaleMax]; the live value shows as a
+/// percentage, and a "Reset" affordance snaps back to 100%. The slider
+/// tracks a local value while dragging (so it stays smooth) and commits
+/// through [AppStore.setUiScale], which clamps + persists and triggers the
+/// whole-app rebuild that re-applies the scale.
+class _DisplayCard extends StatefulWidget {
+  const _DisplayCard();
+
+  @override
+  State<_DisplayCard> createState() => _DisplayCardState();
+}
+
+class _DisplayCardState extends State<_DisplayCard> {
+  // Local "in-flight" value while the thumb is being dragged. Null means
+  // "not dragging — read the live value straight from the store".
+  double? _dragValue;
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    final stored = store.uiPrefs.clampedUiScale;
+    final value = _dragValue ?? stored;
+    final pct = (value * 100).round();
+    final isDefault = (stored - 1.0).abs() < 0.001 && _dragValue == null;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 12, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'App text size',
+                    style: TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Text(
+                  '$pct%',
+                  style: const TextStyle(
+                      color: EmberColors.textMid,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600),
+                ),
+                // "Reset" only when the user has moved off 100%.
+                if (!isDefault)
+                  TextButton(
+                    onPressed: () {
+                      setState(() => _dragValue = null);
+                      store.setUiScale(1.0);
+                    },
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, 32),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Reset'),
+                  )
+                else
+                  const SizedBox(width: 8),
+              ],
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 2, bottom: 2),
+              child: Text(
+                'Make all text in the app larger or smaller. '
+                'This adds to your device font-size setting.',
+                style: TextStyle(
+                  color: EmberColors.textMid,
+                  fontSize: 12,
+                  height: 1.35,
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                const Text('A',
+                    style: TextStyle(
+                        fontSize: 13, color: EmberColors.textDim)),
+                Expanded(
+                  child: Slider(
+                    value: value,
+                    min: UiPrefs.kUiScaleMin,
+                    max: UiPrefs.kUiScaleMax,
+                    // 0.8 → 1.4 in 0.05 steps = 12 divisions.
+                    divisions: 12,
+                    label: '$pct%',
+                    onChanged: (v) => setState(() => _dragValue = v),
+                    onChangeEnd: (v) {
+                      store.setUiScale(v);
+                      setState(() => _dragValue = null);
+                    },
+                  ),
+                ),
+                const Text('A',
+                    style: TextStyle(
+                        fontSize: 22, color: EmberColors.textDim)),
+              ],
+            ),
           ],
         ),
       ),

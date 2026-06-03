@@ -2382,6 +2382,19 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
+  /// Pyre 1.1 (F5): global UI text-scale. Stored raw but clamped into
+  /// the supported [UiPrefs.kUiScaleMin, UiPrefs.kUiScaleMax] range here
+  /// so the slider can never persist (or live-apply) an out-of-range
+  /// value. Notifying listeners makes the MaterialApp root rebuild and
+  /// re-apply the scale immediately.
+  void setUiScale(double value) {
+    final clamped =
+        value.clamp(UiPrefs.kUiScaleMin, UiPrefs.kUiScaleMax);
+    if (uiPrefs.uiScale == clamped) return;
+    uiPrefs.uiScale = clamped;
+    _bump();
+  }
+
   /// Wave CY.18.90: persist a per-action shortcut binding override
   /// (or clear it back to the factory default when [bindingJson] is
   /// null). The binding is opaque to this setter — it's a JSON map

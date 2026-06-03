@@ -28,6 +28,7 @@ import 'services/single_instance.dart';
 import 'services/sync_engine.dart';
 import 'services/store_backend.dart';
 import 'services/update_check.dart';
+import 'models/models.dart' show UiPrefs;
 import 'state/app_store.dart';
 import 'theme.dart';
 import 'screens/chats_screen.dart';
@@ -566,15 +567,78 @@ class _PyreAppState extends State<PyreApp>
         // handles selection within its own bounds.
         builder: (context, child) {
           if (child == null) return const SizedBox.shrink();
+          // Pyre 1.1 (F5): apply the global UI text-scale ABOVE the
+          // whole navigation/screen tree so every screen inherits it,
+          // and rebuild whenever the user moves the slider. _UiScaleWrap
+          // reads `uiScale` reactively from the AppStore and composes it
+          // with the ambient (OS accessibility) text scale.
+          Widget content = _UiScaleWrap(child: child);
           if (_isDesktop) {
-            return SelectionArea(child: child);
+            content = SelectionArea(child: content);
           }
-          return child;
+          return content;
         },
         home: const RootShell(),
       ),
     );
   }
+}
+
+/// Pyre 1.1 (F5): applies the global UI text-scale to the whole app.
+///
+/// Sits ABOVE the navigation/screen tree (inside MaterialApp.builder), so
+/// every screen inherits the scaled MediaQuery. It watches `uiScale` from
+/// the AppStore reactively, so moving the slider live-updates the entire
+/// app. The user's choice is COMPOSED with — not allowed to discard — the
+/// OS accessibility text scale: we take whatever `textScaler` the ambient
+/// MediaQuery already provides (which already reflects the device's
+/// font-size setting), multiply it by `uiScale`, and clamp the final
+/// factor into the supported range. At `uiScale == 1.0` the factor is the
+/// ambient scaler unchanged, so rendering is byte-identical to before this
+/// feature existed.
+class _UiScaleWrap extends StatelessWidget {
+  final Widget child;
+  const _UiScaleWrap({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    // Reactive read: a notifyListeners() from setUiScale rebuilds this and
+    // re-applies the new factor across the whole subtree.
+    final scale = context.select<AppStore, double>(
+      (s) => s.uiPrefs.clampedUiScale,
+    );
+    final media = MediaQuery.of(context);
+    // At 1.0 we touch nothing — the ambient textScaler (already reflecting
+    // the OS font-size setting) passes through unchanged, so the default
+    // renders exactly as it did before F5. When the user moves the slider,
+    // multiply on top of the OS scaler and clamp the resulting factor.
+    if (scale == 1.0) return child;
+    final scaled = _MultipliedTextScaler(media.textScaler, scale).clamp(
+      minScaleFactor: UiPrefs.kUiScaleMin,
+      maxScaleFactor: UiPrefs.kUiScaleMax,
+    );
+    return MediaQuery(
+      data: media.copyWith(textScaler: scaled),
+      child: child,
+    );
+  }
+}
+
+/// Wraps an existing [TextScaler] and multiplies its result by [factor].
+/// Used to COMPOSE the user's UI-scale slider with the OS accessibility
+/// text scale instead of overwriting it (an OS large-text user keeps their
+/// bump and gets the app slider on top).
+class _MultipliedTextScaler extends TextScaler {
+  final TextScaler _base;
+  final double _factor;
+  const _MultipliedTextScaler(this._base, this._factor);
+
+  @override
+  double scale(double fontSize) => _base.scale(fontSize) * _factor;
+
+  @override
+  // ignore: deprecated_member_use
+  double get textScaleFactor => _base.textScaleFactor * _factor;
 }
 
 /// Wave CY.18.159: F11 fullscreen toggle (desktop). Best-effort — swallows

@@ -2228,6 +2228,31 @@ class UiPrefs {
   /// the LAN. OFF by default; the web view never receives provider keys.
   bool syncProviderKeys;
 
+  /// Pyre 1.1 (F5): global UI text-scale multiplier. `1.0` (default) =
+  /// the app's text renders exactly as before. The settings slider lets
+  /// users enlarge or shrink ALL text app-wide; reported by a user
+  /// whose phone made the default size hard to read. Applied at the
+  /// MaterialApp root by COMPOSING with the OS accessibility text scale
+  /// (multiply, never replace), then clamped to [kUiScaleMin,
+  /// kUiScaleMax]. Stored raw; read through [clampedUiScale] so a stale
+  /// out-of-range value can never blow up layout.
+  double uiScale;
+
+  /// Lower bound for [uiScale]. Below this, UI chrome (buttons, chips)
+  /// starts to read as broken rather than "small text".
+  static const double kUiScaleMin = 0.8;
+
+  /// Upper bound for [uiScale]. Above this, long text starts to overflow
+  /// fixed-height rows / bubbles badly enough to hurt usability.
+  static const double kUiScaleMax = 1.4;
+
+  /// [uiScale] clamped into the supported [kUiScaleMin, kUiScaleMax]
+  /// range. Always use this when applying the scale — the stored value
+  /// is kept raw (so a future build with a wider range still sees the
+  /// user's real choice), but everything that consumes it goes through
+  /// the clamp.
+  double get clampedUiScale => uiScale.clamp(kUiScaleMin, kUiScaleMax);
+
   UiPrefs({
     this.activeTab = 'characters',
     this.charactersSegment = 'characters',
@@ -2245,6 +2270,7 @@ class UiPrefs {
     Map<String, dynamic>? desktopShortcuts,
     this.askToSwitchOnFailure = true,
     this.syncProviderKeys = false,
+    this.uiScale = 1.0,
   }) : desktopShortcuts = desktopShortcuts ?? <String, dynamic>{};
 
   factory UiPrefs.fromJson(Map<String, dynamic> j) => UiPrefs(
@@ -2272,6 +2298,14 @@ class UiPrefs {
             (j['askToSwitchOnFailure'] as bool?) ?? true,
         // Wave CY.18.258: opt-in, default OFF.
         syncProviderKeys: (j['syncProviderKeys'] as bool?) ?? false,
+        // Pyre 1.1 (F5): missing key → 1.0 (unchanged). A bad / wrong
+        // -typed value also falls back to 1.0 (note `is num`, not a
+        // `as num?` cast, so a stored String can't throw); the value is
+        // consumed through [clampedUiScale], which keeps it inside the
+        // supported range no matter what was stored.
+        uiScale: j['uiScale'] is num
+            ? (j['uiScale'] as num).toDouble()
+            : 1.0,
       );
 
   // Wave CY.18.48: defensively decode the bounds list. JSON could
@@ -2324,6 +2358,9 @@ class UiPrefs {
         if (!askToSwitchOnFailure) 'askToSwitchOnFailure': false,
         // Wave CY.18.258: persist only the non-default `true` opt-in.
         if (syncProviderKeys) 'syncProviderKeys': true,
+        // Pyre 1.1 (F5): persist only when the user changed it away from
+        // 1.0 — keeps backups clean for the common (unchanged) case.
+        if (uiScale != 1.0) 'uiScale': uiScale,
       };
 }
 
