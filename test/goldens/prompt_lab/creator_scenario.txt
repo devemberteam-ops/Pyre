@@ -14,12 +14,14 @@ QUALITY RULES (apply to every value you write):
 a moody late-night cafe where the barista and the last customer are the only two left
 ----------------------------------------
 [user]
-The full character sheet has these sections (filled across several passes): Name, Narrator, Reading the Persona, Scene Setup, Tone, World, NPCs, First Message, Dialogue Examples, Tags, Post-History Instructions, Creator Notes, Tagline.
-RIGHT NOW you are filling ONLY: Name, Narrator, Reading the Persona, Scene Setup, Tone. The other sections WILL be filled separately — so keep each field strictly scoped to itself: do NOT cram another field's content here, and do NOT repeat what belongs in another section.
+The full character sheet has these sections (filled across several passes): Name, Narrator, Reading the Persona, Scene Setup, Tone, World, NPCs, Scenario, First Message, Dialogue Examples, Tags, Post-History Instructions, Creator Notes, Tagline.
+RIGHT NOW you are filling ONLY: Name, Scenario, Narrator, Reading the Persona, Scene Setup, Tone. The other sections WILL be filled separately — so keep each field strictly scoped to itself: do NOT cram another field's content here, and do NOT repeat what belongs in another section.
 
 Fill EXACTLY the following fields for the character defined above. For each field, write a rich, specific English value following the quality rules.
 
 "name" — Name: The scenario's TITLE only — the world / event / place name (e.g. "The Sunken Gate", "Nexus Fest"). A few words, no description, no punctuation-run-on. This becomes the card's display name.
+   JSON shape: a JSON string value.
+"scenario" — Scenario: A concise, present-tense summary of the opening situation {{user}} is dropped into — two to four sentences. This fills the card's top-level `scenario` field; it is the short framing, DISTINCT from the fuller <Scene Setup> section (do not just repeat it).
    JSON shape: a JSON string value.
 "narrator" — Narrator: Who the narrator is + the never-act-for-{{user}} rule.
    JSON shape: a JSON string value.
@@ -30,7 +32,7 @@ Fill EXACTLY the following fields for the character defined above. For each fiel
 "tone" — Tone: Genre, pacing, how escalation feels.
    JSON shape: a JSON string value.
 
-Respond with ONE JSON object whose keys are EXACTLY: name, narrator, readingThePersona, sceneSetup, tone. English values. No markdown fence, no text before or after the JSON object.
+Respond with ONE JSON object whose keys are EXACTLY: name, scenario, narrator, readingThePersona, sceneSetup, tone. English values. No markdown fence, no text before or after the JSON object.
 ----------------------------------------
 [render]
 <Narrator>

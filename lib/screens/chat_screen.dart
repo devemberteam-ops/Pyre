@@ -2473,25 +2473,24 @@ class _ChatScreenState extends State<ChatScreen> {
       {String? scenarioForOoc}) async {
     final store = context.read<AppStore>();
 
-    // Wave CY.11: stash the scenario as an OOC turn ABOVE the first
-    // message before we touch anything else. `_buildTurns` sends OOCs
-    // as `[OOC]: ...` system messages on every subsequent turn, so
-    // the scenario stays canon for the whole conversation instead of
-    // evaporating after the opener.
-    if (scenarioForOoc != null && scenarioForOoc.trim().isNotEmpty) {
-      final ooc = Message(
-        id: newId('msg'),
-        kind: MessageKind.ooc,
-        variants: ['Scenario: ${scenarioForOoc.trim()}'],
-      );
-      chat.messages.insert(0, ooc);
-      store.notifyAndPersist();
-    }
+    // Wave CY.11 / CY.18.269: the scenario rides as an OOC turn so
+    // `_buildTurns` re-sends it as `[OOC]: ...` every turn (it stays canon
+    // instead of evaporating after the opener). BUT it must be BRANCH-SCOPED:
+    // it belongs to the greeting variant this Fill-In creates. Inserting it at
+    // index 0 (the old behaviour) put it BEFORE the branch point, so switching
+    // to an alternate greeting left it behind — it leaked across every branch.
+    // Built here, inserted AFTER the greeting once the variant exists, so it
+    // lives in that variant's downstream tail and selectVariant owns it.
+    final oocMsg = (scenarioForOoc != null && scenarioForOoc.trim().isNotEmpty)
+        ? Message(
+            id: newId('msg'),
+            kind: MessageKind.ooc,
+            variants: ['Scenario: ${scenarioForOoc.trim()}'],
+          )
+        : null;
 
     String firstId;
     int vIdx;
-    // After the OOC insert above, the "first char message" is at index
-    // 1 if it existed, or doesn't exist yet. We look for it by kind.
     final firstCharIdx = chat.messages
         .indexWhere((m) => m.kind == MessageKind.char);
     if (firstCharIdx < 0) {
@@ -2504,11 +2503,20 @@ class _ChatScreenState extends State<ChatScreen> {
       store.addMessage(chat.id, m);
       firstId = m.id;
       vIdx = 0;
+      // Empty chat: place the OOC right after the freshly-added greeting.
+      if (oocMsg != null) {
+        final gi = chat.messages.indexWhere((x) => x.id == m.id);
+        if (gi >= 0) {
+          chat.messages.insert(gi + 1, oocMsg);
+          store.notifyAndPersist();
+        }
+      }
     } else {
       final firstChar = chat.messages[firstCharIdx];
       firstId = firstChar.id;
-      // Hide any existing tail under the current variant so the new
-      // streaming variant has a clean slate — same dance as regen.
+      // Hide any existing tail under the current variant so the new streaming
+      // variant has a clean slate — same dance as regen. The OOC isn't inserted
+      // yet, so the OLD variant's stashed tail never captures it.
       if (firstCharIdx < chat.messages.length - 1) {
         final tail = chat.messages.sublist(firstCharIdx + 1);
         firstChar.downstreamByVariant[firstChar.selectedVariant] =
@@ -2517,6 +2525,13 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       vIdx = store.addVariant(chat.id, firstId);
       if (vIdx < 0) return;
+      // New empty variant is now selected → the OOC becomes its first
+      // downstream message, so selectVariant's downstreamByVariant snapshot
+      // owns it and switching greetings no longer leaks it across branches.
+      if (oocMsg != null) {
+        chat.messages.insert(firstCharIdx + 1, oocMsg);
+        store.notifyAndPersist();
+      }
     }
     _streamMessageId = firstId;
     _streamVariantIndex = vIdx;

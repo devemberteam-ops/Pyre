@@ -519,6 +519,23 @@ const List<CardField> _scenarioSections = <CardField>[
       guidance: 'Named NPCs, each with a defining trait + agenda.'),
 ];
 
+// Wave CY.18.269: the chara_card_v2 top-level `scenario` field for scenario
+// cards. PREVIOUSLY MISSING from the scenario schema entirely — so the build
+// never requested, mapped, or checked it, and the `scenario` Sheet slot always
+// came back blank (the user had to hand-fill it). topLevel so renderCard's
+// passthrough surfaces it as out['scenario']; required so missingRequired
+// flags it and the per-field re-request gives it a second chance.
+const CardField _scenario = CardField(
+    key: 'scenario',
+    label: 'Scenario',
+    kind: CardFieldKind.topLevel,
+    required: true,
+    guidance:
+        'A concise, present-tense summary of the opening situation {{user}} is '
+        'dropped into — two to four sentences. This fills the card\'s top-level '
+        '`scenario` field; it is the short framing, DISTINCT from the fuller '
+        '<Scene Setup> section (do not just repeat it).');
+
 // ── Per-mode ordered schemas ──────────────────────────────────────────────
 
 /// Ordered field set for [mode]. The Description sections come first (in
@@ -548,6 +565,7 @@ List<CardField> schemaFor(CreatorMode mode) {
       return <CardField>[
         _scenarioName,
         ..._scenarioSections,
+        _scenario,
         _firstMes,
         _dialogueExamples,
         _tags,
@@ -711,10 +729,11 @@ List<List<String>> batchesFor(CreatorMode mode) {
       ];
     case CreatorMode.scenario:
       return const <List<String>>[
-        // 1. name (the scenario title) + narrator + readingThePersona +
-        //    sceneSetup + tone.
+        // 1. name (the scenario title) + scenario (short framing) + narrator +
+        //    readingThePersona + sceneSetup + tone.
         [
           'name',
+          'scenario',
           'narrator',
           'readingThePersona',
           'sceneSetup',

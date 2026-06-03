@@ -268,16 +268,29 @@ String _buildBatchRequest(
     }
     if (lines.isNotEmpty) {
       buf.writeln();
-      buf.writeln('THIS IS AN EDIT. The current values of these fields are:');
+      buf.writeln(
+          'THIS IS AN EDIT — a TARGETED change, NOT a rewrite. Current values '
+          'of these fields:');
       for (final line in lines) {
         buf.writeln(line);
       }
       buf.writeln();
+      // Wave CY.18.269: the model kept rewriting the WHOLE card (and dropping
+      // fields) when the user only asked for one small change. Make the
+      // verbatim-copy rule a hard, numbered contract — the apply layer renders
+      // exactly what you emit, so anything you rephrase here changes the card.
       buf.writeln(
-          'Apply ONLY the change(s) the user asked for in the conversation '
-          'above. For every field NOT affected by their request, return its '
-          'current value UNCHANGED (copy it verbatim). Do not rewrite, '
-          're-style, or "improve" fields the user did not mention.');
+          'RULES — follow exactly:\n'
+          '1. Apply ONLY the specific change(s) the user asked for in the '
+          'conversation above. Nothing else.\n'
+          '2. For EVERY field the user did NOT explicitly ask to change, return '
+          'its current value above copied CHARACTER-FOR-CHARACTER. Do not '
+          'rephrase, reorder, shorten, expand, "improve", or re-style it.\n'
+          '3. NEVER return an empty value for a field that currently has '
+          'content — if you are not changing it, echo the current value '
+          'verbatim.\n'
+          '4. Output every requested key, including the unchanged ones (with '
+          'their verbatim current value).');
     }
   }
 

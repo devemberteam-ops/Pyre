@@ -849,8 +849,22 @@ class _CharacterAssistantScreenState
       // user-typed name or an attached avatar).
       final rendered = renderCard(fields, mode);
       final canvas = Map<String, dynamic>.from(_sessionCanvas(store));
+      final editing = _isEditSession(session);
       rendered.forEach((k, v) {
-        if (v != null) canvas[k] = v;
+        if (v == null) return;
+        // Wave CY.18.269: in EDIT mode, never let a rebuilt field BLANK a field
+        // that already had content. A model that "only adds one thing" but
+        // drops/empties another field must not wipe the user's existing data —
+        // keep the original when the rebuild came back empty.
+        if (editing) {
+          final newEmpty =
+              (v is String && v.trim().isEmpty) || (v is List && v.isEmpty);
+          final orig = canvas[k];
+          final hadContent = (orig is String && orig.trim().isNotEmpty) ||
+              (orig is List && orig.isNotEmpty);
+          if (newEmpty && hadContent) return;
+        }
+        canvas[k] = v;
       });
       // FIX (foreign card): the imported Description couldn't be decomposed, so
       // the rebuilt one would be re-invented prose — restore the raw original
