@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../services/chat_api.dart';
 import '../services/model_metadata.dart';
+import '../services/prompt_post_processing.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import 'model_picker_sheet.dart';
@@ -518,6 +519,10 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
   // Wave CY.18.120: preload-on-launch toggle (localhost only). Mutated via
   // setState alongside `kind`, persisted onto the saved ApiProvider below.
   bool warmUp = existing?.warmUpOnLaunch ?? true;
+  // Wave CY.18.267: SillyTavern-style outgoing-message reshaping. Default
+  // none = today's behaviour. Persisted onto the saved ApiProvider below.
+  PromptPostProcessing postProcessing =
+      existing?.promptPostProcessing ?? PromptPostProcessing.none;
   String? extraParamsError;
 
   await showDialog<void>(
@@ -870,6 +875,72 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                         fontSize: 10,
                         height: 1.4),
                   ),
+                  // Wave CY.18.267 (Pyre 1.1): SillyTavern-style prompt
+                  // post-processing. Reshapes the outgoing message array to
+                  // match strict OpenAI-compatible models. Default None =
+                  // standard OpenAI format (no change).
+                  const SizedBox(height: 16),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: EdgeInsets.only(bottom: 6),
+                      child: Text(
+                        'Prompt post-processing',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: EmberColors.textMid,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                  DropdownButtonFormField<PromptPostProcessing>(
+                    initialValue: postProcessing,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: PromptPostProcessing.none,
+                        child: Text('None (default)'),
+                      ),
+                      DropdownMenuItem(
+                        value: PromptPostProcessing.mergeConsecutive,
+                        child: Text('Merge consecutive'),
+                      ),
+                      DropdownMenuItem(
+                        value: PromptPostProcessing.semiStrict,
+                        child: Text('Semi-strict'),
+                      ),
+                      DropdownMenuItem(
+                        value: PromptPostProcessing.strict,
+                        child: Text('Strict'),
+                      ),
+                      DropdownMenuItem(
+                        value: PromptPostProcessing.singleUser,
+                        child: Text('Single user message'),
+                      ),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) {
+                        setState(() => postProcessing = v);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Reshapes the message list to match strict model '
+                    'requirements. Try Strict or Single user message if a '
+                    'model (DeepSeek, GLM, Mistral…) ignores instructions. '
+                    'Default None = standard OpenAI format.',
+                    style: TextStyle(
+                        color: EmberColors.textDim,
+                        fontSize: 11,
+                        height: 1.4),
+                  ),
                 ],
               ),
               ],
@@ -966,9 +1037,15 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                 // value diverges from the default-true (or extras/ctx are set)
                 // to avoid a redundant store bump on the common case.
                 p.warmUpOnLaunch = warmUp;
-                if (extras.isNotEmpty || ctxWindow != null || !warmUp) {
+                // Wave CY.18.267: also force the second write when a non-default
+                // post-processing mode was picked, so it persists immediately.
+                if (extras.isNotEmpty ||
+                    ctxWindow != null ||
+                    !warmUp ||
+                    postProcessing != PromptPostProcessing.none) {
                   p.extraParams = extras;
                   p.contextWindow = ctxWindow;
+                  p.promptPostProcessing = postProcessing;
                   store.updateProvider(p);
                 }
                 savedProvider = p;
@@ -981,7 +1058,9 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                   ..kind = kind
                   ..extraParams = extras
                   ..contextWindow = ctxWindow
-                  ..warmUpOnLaunch = warmUp;
+                  ..warmUpOnLaunch = warmUp
+                  // Wave CY.18.267: persist the post-processing mode.
+                  ..promptPostProcessing = postProcessing;
                 store.updateProvider(existing);
                 savedProvider = existing;
               }

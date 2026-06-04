@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../services/card_assist_prompts.dart';
 import '../services/creator_schema.dart' show CreatorDescriptionSize;
 import '../services/key_crypto.dart';
+import '../services/prompt_post_processing.dart';
 
 const _uuid = Uuid();
 
@@ -107,6 +108,17 @@ class ApiProvider {
   /// merged in as-is and forwarded to the provider.
   Map<String, dynamic> extraParams;
 
+  /// Wave CY.18.267 (Pyre 1.1): SillyTavern-style outgoing-message reshaping,
+  /// applied right before the request body is serialised. Default
+  /// [PromptPostProcessing.none] = identity = today's exact behaviour (the
+  /// request body stays byte-identical for existing users). Higher modes
+  /// (mergeConsecutive / semiStrict / strict / singleUser) fold the message
+  /// array into the shape that strict OpenAI-compatible models (DeepSeek, GLM,
+  /// Mistral, Claude, many open weights) want: one system message, no
+  /// consecutive same-role turns, user-first alternation. See
+  /// lib/services/prompt_post_processing.dart.
+  PromptPostProcessing promptPostProcessing;
+
   /// Wave CY.18.100: optional manual context-window size (tokens). When
   /// set, it OVERRIDES the auto-detected value from `/models` — the
   /// universal escape hatch for providers that don't expose a
@@ -142,6 +154,7 @@ class ApiProvider {
     this.model = '',
     Map<String, String>? headers,
     Map<String, dynamic>? extraParams,
+    this.promptPostProcessing = PromptPostProcessing.none,
     this.contextWindow,
     this.warmUpOnLaunch = true,
     this.mtime = 0,
@@ -162,6 +175,9 @@ class ApiProvider {
       model: (j['model'] as String?) ?? '',
       headers: (j['headers'] as Map?)?.cast<String, String>() ?? {},
       extraParams: (j['extraParams'] as Map?)?.cast<String, dynamic>() ?? {},
+      // Wave CY.18.267: missing / unknown value → none (today's behaviour).
+      promptPostProcessing:
+          promptPostProcessingFromString(j['promptPostProcessing'] as String?),
       contextWindow: (j['contextWindow'] as num?)?.toInt(),
       // Wave CY.18.120: default true so pre-Wave backups (no field) opt
       // every localhost provider into warm-up automatically.
@@ -195,6 +211,11 @@ class ApiProvider {
         'model': model,
         'headers': headers,
         if (extraParams.isNotEmpty) 'extraParams': extraParams,
+        // Wave CY.18.267: only emit when set away from the default so a
+        // default provider's JSON stays byte-identical to pre-Wave backups.
+        if (promptPostProcessing != PromptPostProcessing.none)
+          'promptPostProcessing':
+              promptPostProcessingToString(promptPostProcessing),
         if (contextWindow != null) 'contextWindow': contextWindow,
         // Wave CY.18.120: always persisted (cheap bool) so the user's
         // explicit on/off choice round-trips through backups.

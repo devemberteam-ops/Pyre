@@ -21,6 +21,7 @@ import 'package:http/http.dart' as http;
 import '../models/models.dart';
 import 'lan_client.dart';
 import 'llm_debug_log.dart';
+import 'prompt_post_processing.dart';
 
 typedef ChatRole = String; // 'system' | 'user' | 'assistant'
 
@@ -49,6 +50,43 @@ class ChatTurn {
       ],
     };
   }
+}
+
+/// Wave CY.18.267 (Pyre 1.1): adapt [ChatTurn]s through the SillyTavern-style
+/// [PromptPostProcessing] reshaper, then hand back [ChatTurn]s ready to
+/// serialise. This is the single thin bridge between chat_api's message type
+/// and the pure, Flutter-free engine in prompt_post_processing.dart.
+///
+/// Applied at the request-body chokepoint shared by BOTH [streamChatCompletion]
+/// (via [buildRequestBody]) and [completeChat], so EVERY call type (chat,
+/// creator, LTM, vision, scene) to a provider respects its configured format
+/// requirement — a model that needs a strict array needs it everywhere.
+///
+/// Two short-circuits keep [PromptPostProcessing.none] (the default) and the
+/// existing request body byte-identical:
+///  1. [PromptPostProcessing.none] returns the SAME list reference untouched.
+///  2. If ANY turn carries image attachments, the list is returned untouched.
+///     Reshaping (merging / collapsing) is a TEXT operation; folding an
+///     image-bearing turn into another would drop the image. The strict
+///     models this targets (DeepSeek, GLM, Mistral, Claude text routes, many
+///     open weights) are text-only, so this guard costs nothing in practice
+///     and never silently loses a picture.
+List<ChatTurn> applyPromptPostProcessing(
+  List<ChatTurn> messages,
+  PromptPostProcessing mode,
+) {
+  if (mode == PromptPostProcessing.none) return messages;
+  // Don't reshape arrays that contain vision attachments (see doc above).
+  final hasImages = messages.any(
+    (m) => m.imageDataUrls != null && m.imageDataUrls!.isNotEmpty,
+  );
+  if (hasImages) return messages;
+
+  final pp = [for (final m in messages) PpMessage(m.role, m.content)];
+  final out = applyPromptPostProcessingRoles(pp, mode);
+  // `none`/no-op paths in the engine can hand back the same reference; either
+  // way the round-trip back to ChatTurn is cheap and lossless for text.
+  return [for (final m in out) ChatTurn(m.role, m.content)];
 }
 
 /// Wave CY.18.45: classify failure modes so the UI can pick the right
@@ -249,6 +287,11 @@ Map<String, dynamic> buildRequestBody({
   required bool stream,
   Map<String, dynamic>? extraBody,
 }) {
+  // Wave CY.18.267: reshape the assembled message array to this provider's
+  // configured format right before serialising. `none` (default) returns the
+  // same list reference, so the body stays byte-identical for existing users.
+  final processed =
+      applyPromptPostProcessing(messages, provider.promptPostProcessing);
   return <String, dynamic>{
     // Per-provider extra params come FIRST so Pyre-managed fields
     // (model, messages, stream, sampling) win on any conflict. The
@@ -256,7 +299,7 @@ Map<String, dynamic> buildRequestBody({
     // safety_filter, etc.) without breaking the core request shape.
     ...provider.extraParams,
     'model': provider.model,
-    'messages': messages.map((m) => m.toJson()).toList(),
+    'messages': processed.map((m) => m.toJson()).toList(),
     ..._samplingPayload(settings, preset),
     if (stop != null && stop.isNotEmpty) 'stop': stop,
     'stream': stream,
@@ -718,10 +761,15 @@ Future<String> completeChat({
   // the exact request (key-free). Guard so it's a strict no-op when off.
   final bool shouldLog = debugTag != null && LlmDebugLog.instance.enabled;
   final Stopwatch? logSw = shouldLog ? (Stopwatch()..start()) : null;
+  // Wave CY.18.267: same reshape as the streaming path (buildRequestBody), so
+  // the one-shot transport honours the provider's format too. `none` (default)
+  // is a no-op → byte-identical body.
+  final processed =
+      applyPromptPostProcessing(messages, provider.promptPostProcessing);
   final reqBody = <String, dynamic>{
     ...provider.extraParams,
     'model': provider.model,
-    'messages': messages.map((m) => m.toJson()).toList(),
+    'messages': processed.map((m) => m.toJson()).toList(),
     ..._samplingPayload(settings, preset),
     if (stop != null && stop.isNotEmpty) 'stop': stop,
     'stream': false,
