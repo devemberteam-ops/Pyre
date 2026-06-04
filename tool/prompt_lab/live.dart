@@ -152,10 +152,15 @@ ApiProvider providerFromConfig(LiveConfig cfg) => ApiProvider(
       extraParams: Map<String, dynamic>.from(cfg.extraParams),
     );
 
-/// Default sampling for live calls. Uses the app defaults; a real reply doesn't
-/// need a special profile here (the harness is observing assembly + parsing,
-/// not tuning output). Kept tiny + explicit so the request is reproducible.
-ModelSettings settingsFromConfig(LiveConfig cfg) => ModelSettings();
+/// Default sampling for live calls. The harness observes assembly + parsing,
+/// not output tuning — but the app default `maxTokens` (1024) is too tight for
+/// REASONING models (Qwen 3.x, etc.): they spend the whole budget in the
+/// reasoning channel and return 0 chars of prose with finish_reason=length.
+/// We give a generous headroom so reasoning can finish AND a real reply lands,
+/// which is what the live test needs to observe. (Test-harness only — never
+/// ships; the app uses the user's own preset/settings token limits.)
+ModelSettings settingsFromConfig(LiveConfig cfg) =>
+    ModelSettings(maxTokens: 4000);
 
 // ---------------------------------------------------------------------------
 // Feature classification + parse outcome (PURE — the unit-tested core)
