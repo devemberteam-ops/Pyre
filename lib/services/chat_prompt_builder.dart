@@ -33,6 +33,7 @@ import 'image_describe.dart' show encodeImageDataUrl;
 import 'live_sheet.dart' as lsheet;
 import 'lorebook_inject.dart';
 import 'memory.dart' as ltm;
+import 'preset_assembly.dart';
 import 'regex_rules.dart';
 import 'story_roadmap.dart' as roadmap;
 
@@ -146,6 +147,14 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   final preset = inputs.preset;
   final segments = <PromptSegment>[];
 
+  // Pyre 1.1 (Prompt Manager): resolve the preset's system / post-history text
+  // ONCE. For a FLAT preset (no blocks — every preset today) `assemblePreset`
+  // returns `preset.mainPrompt` / `preset.postHistoryInstructions` verbatim, so
+  // the rest of the builder behaves byte-identically. A MODULAR preset assembles
+  // its enabled blocks into the same two slots. Null preset → handled inline at
+  // each use (guarded exactly as before).
+  final asm = preset == null ? null : assemblePreset(preset);
+
   // Pyre 1.1 (F1): the LTM recap can be placed anywhere via the {{summary}}
   // macro. We resolve it ONCE here and let `fill()` substitute it; if the
   // macro fires we suppress the hardcoded recap block below (no double inject).
@@ -156,9 +165,11 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // (so the flag would already be set), but post-history is filled AFTER it —
   // pre-scanning catches a macro placed only in post-history too.
   final summaryMacroRegex = RegExp(r'\{\{summary\}\}', caseSensitive: false);
-  var summaryMacroUsed = preset != null &&
-      (summaryMacroRegex.hasMatch(preset.mainPrompt) ||
-          summaryMacroRegex.hasMatch(preset.postHistoryInstructions));
+  // Pre-scan the ASSEMBLED preset text (flat → identical to the raw fields;
+  // modular → catches a {{summary}} living inside a block's content).
+  var summaryMacroUsed = asm != null &&
+      (summaryMacroRegex.hasMatch(asm.systemPrompt) ||
+          summaryMacroRegex.hasMatch(asm.postHistory));
 
   // Wave CB: lorebook gathering + scanning is a pair of pure functions in
   // `services/lorebook_inject.dart`.
@@ -241,11 +252,12 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     return out;
   }
 
-  // Build the system prompt — prefer preset.mainPrompt if set, else fall
-  // back to the character-only builder.
+  // Build the system prompt — prefer the preset's (assembled) system text if
+  // set, else fall back to the character-only builder. `asm.systemPrompt` is
+  // byte-identical to `preset.mainPrompt` for a flat preset (no blocks).
   final buffer = StringBuffer();
-  if (preset != null && preset.mainPrompt.trim().isNotEmpty) {
-    final filled = fill(preset.mainPrompt).trim();
+  if (asm != null && asm.systemPrompt.trim().isNotEmpty) {
+    final filled = fill(asm.systemPrompt).trim();
     buffer.writeln(filled);
     segments.add(PromptSegment(PromptSegmentKind.systemPrompt, filled,
         note: 'preset.mainPrompt'));
@@ -409,8 +421,10 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   }
 
   // Post-history instructions — final system message AFTER the chat turns.
-  if (preset != null && preset.postHistoryInstructions.trim().isNotEmpty) {
-    final filled = fill(preset.postHistoryInstructions).trim();
+  // `asm.postHistory` is byte-identical to `preset.postHistoryInstructions`
+  // for a flat preset (no blocks).
+  if (asm != null && asm.postHistory.trim().isNotEmpty) {
+    final filled = fill(asm.postHistory).trim();
     turns.add(ChatTurn('system', filled));
     segments.add(PromptSegment(PromptSegmentKind.postHistory, filled,
         note: 'preset.postHistoryInstructions'));

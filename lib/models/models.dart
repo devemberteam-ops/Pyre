@@ -1041,6 +1041,87 @@ class Chat {
 }
 
 // ---------------------------------------------------------------------------
+// Prompt Manager (Pyre 1.1) — composable prompt blocks
+//
+// A flat Preset (`mainPrompt` + `postHistoryInstructions`) can optionally
+// become a LIST of toggleable [PromptBlock]s (SillyTavern / Tavo style). This
+// model is 100% ADDITIVE: a Preset with no blocks behaves EXACTLY as before
+// (see `assemblePreset` in services/preset_assembly.dart). UI + ST-import
+// mapping are separate later tasks — this is just the data model.
+
+/// Where a [PromptBlock] sits relative to the chat history when assembled.
+enum PromptBlockPosition {
+  /// Block content joins the system prompt sent BEFORE the chat history.
+  beforeHistory,
+
+  /// Block content joins the post-history instructions sent AFTER the chat
+  /// history (jailbreak / reminder / prefill slot).
+  afterHistory,
+}
+
+/// Tolerant string codec for [PromptBlockPosition]. Unknown / missing values
+/// default to [PromptBlockPosition.beforeHistory].
+PromptBlockPosition promptBlockPositionFromString(String? s) {
+  switch (s) {
+    case 'afterHistory':
+      return PromptBlockPosition.afterHistory;
+    case 'beforeHistory':
+      return PromptBlockPosition.beforeHistory;
+    default:
+      return PromptBlockPosition.beforeHistory;
+  }
+}
+
+/// Stable name for a [PromptBlockPosition] (round-trips with
+/// [promptBlockPositionFromString]).
+String promptBlockPositionToString(PromptBlockPosition p) => p.name;
+
+/// One toggleable module of a modular [Preset]. Imported ST presets become a
+/// list of these (name + content + on/off), but the MVP assembly only uses
+/// `content` / `enabled` / `position`; `role` is preserved for import fidelity
+/// and future use (it does NOT yet split blocks into separate chat turns).
+class PromptBlock {
+  String id;
+  String name;
+  String content;
+  bool enabled;
+
+  /// One of `'system' | 'user' | 'assistant'`. Preserved for fidelity /
+  /// display; the MVP assembles content as TEXT and does NOT inject
+  /// user/assistant-role blocks as separate chat turns (documented future
+  /// enhancement — see services/preset_assembly.dart).
+  String role;
+  PromptBlockPosition position;
+
+  PromptBlock({
+    required this.id,
+    required this.name,
+    this.content = '',
+    this.enabled = true,
+    this.role = 'system',
+    this.position = PromptBlockPosition.beforeHistory,
+  });
+
+  factory PromptBlock.fromJson(Map<String, dynamic> j) => PromptBlock(
+        id: (j['id'] as String?) ?? '',
+        name: (j['name'] as String?) ?? '',
+        content: (j['content'] as String?) ?? '',
+        enabled: (j['enabled'] as bool?) ?? true,
+        role: (j['role'] as String?) ?? 'system',
+        position: promptBlockPositionFromString(j['position'] as String?),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'content': content,
+        'enabled': enabled,
+        'role': role,
+        'position': promptBlockPositionToString(position),
+      };
+}
+
+// ---------------------------------------------------------------------------
 // Preset
 //
 // The JS prototype supports a sophisticated SillyTavern-style preset DSL.
@@ -1072,6 +1153,13 @@ class Preset {
   double? topA;
   double? repetitionPenalty;
   bool locked;
+  /// Pyre 1.1 (Prompt Manager): optional modular prompt blocks. When EMPTY
+  /// (every preset today) the preset is FLAT and assembles to
+  /// `mainPrompt`/`postHistoryInstructions` byte-identically. When non-empty
+  /// the enabled blocks are assembled instead (see
+  /// services/preset_assembly.dart). `toJson` OMITS this key when empty so
+  /// existing preset blobs / backups / sync payloads stay byte-identical.
+  List<PromptBlock> promptBlocks;
   /// `'sillytavern' | 'emberchat' | null` — purely informational.
   String? source;
   int createdAt;
@@ -1096,6 +1184,7 @@ class Preset {
     this.topA,
     this.repetitionPenalty,
     this.locked = false,
+    this.promptBlocks = const [],
     this.source,
     int? createdAt,
     this.mtime = 0,
@@ -1123,6 +1212,12 @@ class Preset {
         topA: (j['topA'] as num?)?.toDouble(),
         repetitionPenalty: (j['repetitionPenalty'] as num?)?.toDouble(),
         locked: (j['locked'] as bool?) ?? false,
+        // Pyre 1.1: missing key (every legacy preset) → flat (no blocks).
+        promptBlocks: (j['promptBlocks'] as List?)
+                ?.whereType<Map>()
+                .map((e) => PromptBlock.fromJson(Map<String, dynamic>.from(e)))
+                .toList() ??
+            const [],
         source: j['source'] as String?,
         createdAt: _jInt(j['createdAt']),
         mtime: _jInt(j['mtime']) ?? 0,
@@ -1146,6 +1241,10 @@ class Preset {
         'topA': topA,
         'repetitionPenalty': repetitionPenalty,
         'locked': locked,
+        // Pyre 1.1: OMIT when empty so existing (flat) preset blobs / backups /
+        // sync payloads stay byte-identical to pre-1.1.
+        if (promptBlocks.isNotEmpty)
+          'promptBlocks': promptBlocks.map((b) => b.toJson()).toList(),
         'source': source,
         'createdAt': createdAt,
         'mtime': mtime,
