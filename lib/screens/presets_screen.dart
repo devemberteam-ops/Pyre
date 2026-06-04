@@ -421,6 +421,20 @@ Future<void> _openPresetKebab(BuildContext context, Preset p) async {
                 minP: p.minP,
                 topA: p.topA,
                 repetitionPenalty: p.repetitionPenalty,
+                // Pyre 1.1: a modular preset must clone its toggleable blocks
+                // too (deep copy — each block is a mutable object), or the
+                // copy would silently flatten to mainPrompt.
+                promptBlocks: [
+                  for (final b in p.promptBlocks)
+                    PromptBlock(
+                      id: newId('block'),
+                      name: b.name,
+                      content: b.content,
+                      enabled: b.enabled,
+                      role: b.role,
+                      position: b.position,
+                    ),
+                ],
               );
               store.addPreset(clone);
               messenger.showSnackBar(
@@ -564,6 +578,85 @@ class _PresetDetailsScreen extends StatelessWidget {
     return _section('Sampling overrides', lines);
   }
 
+  /// Read-only render of a modular preset's prompt blocks: one labelled row per
+  /// block (name + on/off + position) above its content. Mirrors `_section`'s
+  /// look; no switches/edit (this is the details viewer, not the editor).
+  Widget _blocksSection(Preset p) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'PROMPT BLOCKS',
+            style: TextStyle(
+              color: EmberColors.primary,
+              fontWeight: FontWeight.w700,
+              fontSize: 11,
+              letterSpacing: 1.1,
+            ),
+          ),
+          const SizedBox(height: 6),
+          for (final b in p.promptBlocks)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: EmberColors.bgElevated,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: EmberColors.stroke, width: 1),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        b.enabled
+                            ? Icons.check_circle
+                            : Icons.radio_button_unchecked,
+                        size: 16,
+                        color: b.enabled
+                            ? EmberColors.success
+                            : EmberColors.textDim,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          b.name.trim().isEmpty ? '(unnamed block)' : b.name,
+                          style: TextStyle(
+                            color: b.enabled
+                                ? EmberColors.textHigh
+                                : EmberColors.textDim,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                      if (b.position == PromptBlockPosition.afterHistory)
+                        const _PositionChip(),
+                    ],
+                  ),
+                  if (b.content.trim().isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      b.content,
+                      style: const TextStyle(
+                        color: EmberColors.textMid,
+                        fontSize: 12,
+                        height: 1.45,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AppStore>();
@@ -644,7 +737,12 @@ class _PresetDetailsScreen extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 18),
-          _section('Main prompt', live.mainPrompt),
+          // Pyre 1.1: a modular preset shows its toggleable blocks (read-only)
+          // instead of the flat Main prompt; a flat preset shows Main as before.
+          if (live.promptBlocks.isNotEmpty)
+            _blocksSection(live)
+          else
+            _section('Main prompt', live.mainPrompt),
           _section('Post-history instructions',
               live.postHistoryInstructions),
           _section('Impersonate prompt', live.impersonationPrompt),
@@ -729,6 +827,24 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
   final repCtl =
       TextEditingController(text: fmt(existing?.repetitionPenalty));
 
+  // Pyre 1.1 (Prompt Manager): a working DRAFT copy of the preset's modular
+  // prompt blocks. We deep-copy so toggles/edits/reorders are only committed
+  // when the user taps Save (mirrors how the text controllers stay uncommitted
+  // until Save). A preset with an empty list is FLAT — the block UI never
+  // shows and this list stays empty, so the flat editor is unchanged.
+  final blocks = <PromptBlock>[
+    for (final b in (existing?.promptBlocks ?? const <PromptBlock>[]))
+      PromptBlock(
+        id: b.id,
+        name: b.name,
+        content: b.content,
+        enabled: b.enabled,
+        role: b.role,
+        position: b.position,
+      ),
+  ];
+  final isModular = blocks.isNotEmpty;
+
   Widget sectionHeader(String text) => Padding(
         padding: const EdgeInsets.only(top: 18, bottom: 6),
         child: Text(
@@ -774,7 +890,13 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
       content: SizedBox(
         width: 460,
         child: SingleChildScrollView(
-          child: Column(
+          // StatefulBuilder gives the block list a local setState so toggling /
+          // reordering / adding / deleting a block rebuilds only this dialog
+          // body. The `blocks` draft + the text controllers live in the
+          // enclosing closure; Save reads both. Flat presets never hit the
+          // block branch, so their editor is byte-for-byte unchanged.
+          child: StatefulBuilder(
+            builder: (ctx, setLocal) => Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -783,28 +905,35 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
                 controller: nameCtl,
                 decoration: const InputDecoration(labelText: 'Name'),
               ),
-              sectionHeader('Prompts'),
-              hint('Main prompt — sent BEFORE the chat history.'),
-              TextField(
-                controller: mainCtl,
-                maxLines: 8,
-                minLines: 4,
-                decoration: const InputDecoration(
-                  hintText:
-                      'Supports {{char}}, {{user}}, {{description}}, {{personality}}, {{scenario}}, {{persona}}, {{mesExample}}, {{wiBefore}}, {{wiAfter}}.',
+              // MODULAR preset → show the toggleable "Prompt blocks" list in
+              // place of the flat Main/Post text fields. FLAT preset → keep the
+              // existing Main prompt + Post-history fields exactly as before.
+              if (isModular)
+                _PromptBlocksSection(blocks: blocks, setLocal: setLocal)
+              else ...[
+                sectionHeader('Prompts'),
+                hint('Main prompt — sent BEFORE the chat history.'),
+                TextField(
+                  controller: mainCtl,
+                  maxLines: 8,
+                  minLines: 4,
+                  decoration: const InputDecoration(
+                    hintText:
+                        'Supports {{char}}, {{user}}, {{description}}, {{personality}}, {{scenario}}, {{persona}}, {{mesExample}}, {{wiBefore}}, {{wiAfter}}.',
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              hint(
-                  'Post-history — appended AFTER the chat as a final reminder (jailbreak / prefill).'),
-              TextField(
-                controller: postCtl,
-                maxLines: 5,
-                minLines: 2,
-                decoration: const InputDecoration(
-                  hintText: 'Optional. Same template tokens as Main.',
+                const SizedBox(height: 12),
+                hint(
+                    'Post-history — appended AFTER the chat as a final reminder (jailbreak / prefill).'),
+                TextField(
+                  controller: postCtl,
+                  maxLines: 5,
+                  minLines: 2,
+                  decoration: const InputDecoration(
+                    hintText: 'Optional. Same template tokens as Main.',
+                  ),
                 ),
-              ),
+              ],
               const SizedBox(height: 12),
               hint(
                   'Impersonate prompt — used by the "Impersonate me" action to draft the next user message.'),
@@ -875,6 +1004,7 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
               numField(repCtl,
                   label: 'Repetition penalty', hint: '1.0 – 1.5 typical'),
             ],
+            ),
           ),
         ),
       ),
@@ -939,11 +1069,337 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
                 ..minP = d(minPCtl)
                 ..topA = d(topACtl)
                 ..repetitionPenalty = d(repCtl);
+              // MODULAR preset → commit the working block draft (toggles /
+              // edits / reorders / adds / deletes). Empty content + name fields
+              // weren't shown for a modular preset (the blocks ARE the prompt),
+              // so `mainCtl`/`postCtl` carry the original values through as the
+              // assembly-ignored import fallback. Flat presets keep `blocks`
+              // empty here, so this assigns the same empty list (no-op).
+              existing.promptBlocks = blocks;
               store.updatePreset(existing);
             }
             Navigator.pop(ctx);
           },
           child: Text(existing == null ? 'Create' : 'Save'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// Pyre 1.1 (Prompt Manager) — the modular block list inside the preset editor.
+///
+/// Renders the editor's `blocks` DRAFT as a reorderable list of rows
+/// (name + "after history" hint chip + on/off Switch), with per-row edit +
+/// delete and an "Add block" button. Mutations are made on the SHARED draft
+/// list passed in by [blocks] and committed only when the user taps the
+/// editor's Save (which assigns `existing.promptBlocks = blocks`). [setLocal]
+/// is the enclosing StatefulBuilder's setState so the list re-renders after a
+/// toggle / reorder / add / delete / edit.
+///
+/// Only built for MODULAR presets — flat presets never reach this widget, so
+/// their editor is unchanged.
+class _PromptBlocksSection extends StatelessWidget {
+  final List<PromptBlock> blocks;
+  final StateSetter setLocal;
+  const _PromptBlocksSection({required this.blocks, required this.setLocal});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.only(top: 18, bottom: 6),
+          child: Text(
+            'PROMPT BLOCKS',
+            style: TextStyle(
+              color: EmberColors.primary,
+              fontWeight: FontWeight.w700,
+              fontSize: 11,
+              letterSpacing: 1.2,
+            ),
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.only(top: 2, bottom: 8),
+          child: Text(
+            'Toggle which modules are active. Drag to reorder; tap a block to '
+            'edit its text. Enabled blocks are assembled in this order.',
+            style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+          ),
+        ),
+        if (blocks.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Text(
+              'No blocks yet. Add one below.',
+              style: TextStyle(color: EmberColors.textDim, fontSize: 12),
+            ),
+          )
+        else
+          // ReorderableListView inside a SingleChildScrollView needs bounded
+          // height + its own non-scrolling physics, so it lays out its rows
+          // without fighting the outer scroll view for gestures.
+          ReorderableListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            buildDefaultDragHandles: false,
+            itemCount: blocks.length,
+            // onReorder's classic (oldIndex,newIndex) contract — we apply the
+            // standard newIndex-- adjustment ourselves (mirrors the pattern in
+            // api_connections_screen.dart). onReorderItem would pre-adjust.
+            // ignore: deprecated_member_use
+            onReorder: (oldIndex, newIndex) {
+              setLocal(() {
+                if (newIndex > oldIndex) newIndex -= 1;
+                final moved = blocks.removeAt(oldIndex);
+                blocks.insert(newIndex, moved);
+              });
+            },
+            itemBuilder: (ctx, index) {
+              final b = blocks[index];
+              return _BlockRow(
+                key: ValueKey(b.id.isEmpty ? 'block-$index' : b.id),
+                block: b,
+                index: index,
+                onToggle: (v) => setLocal(() => b.enabled = v),
+                onEdit: () => _showBlockEditor(context, b, setLocal),
+                onDelete: () => setLocal(() => blocks.removeAt(index)),
+              );
+            },
+          ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => setLocal(() {
+              blocks.add(PromptBlock(
+                id: newId('block'),
+                name: 'New block',
+                content: '',
+                enabled: true,
+                role: 'system',
+                position: PromptBlockPosition.beforeHistory,
+              ));
+            }),
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('Add block'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One row in the prompt-block list: drag handle + name + "after history" hint
+/// chip + edit + delete + the on/off Switch. Tapping the body (or the pencil)
+/// opens the block editor.
+class _BlockRow extends StatelessWidget {
+  final PromptBlock block;
+  final int index;
+  final ValueChanged<bool> onToggle;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+  const _BlockRow({
+    super.key,
+    required this.block,
+    required this.index,
+    required this.onToggle,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final name = block.name.trim().isEmpty ? '(unnamed block)' : block.name;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: EmberColors.bgElevated,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: EmberColors.stroke, width: 1),
+      ),
+      child: Row(
+        children: [
+          ReorderableDragStartListener(
+            index: index,
+            child: const Padding(
+              padding: EdgeInsets.fromLTRB(8, 12, 4, 12),
+              child: Icon(Icons.drag_indicator,
+                  size: 20, color: EmberColors.textDim),
+            ),
+          ),
+          Expanded(
+            child: InkWell(
+              onTap: onEdit,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: block.enabled
+                              ? EmberColors.textHigh
+                              : EmberColors.textDim,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    if (block.position == PromptBlockPosition.afterHistory)
+                      const _PositionChip(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            color: EmberColors.textMid,
+            tooltip: 'Edit block',
+            visualDensity: VisualDensity.compact,
+            onPressed: onEdit,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, size: 18),
+            color: EmberColors.danger,
+            tooltip: 'Delete block',
+            visualDensity: VisualDensity.compact,
+            onPressed: onDelete,
+          ),
+          Switch(
+            value: block.enabled,
+            onChanged: onToggle,
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+    );
+  }
+}
+
+/// Small "after history" hint chip on blocks whose content is appended AFTER
+/// the chat history (jailbreak / reminder / prefill slot).
+class _PositionChip extends StatelessWidget {
+  const _PositionChip();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(left: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: EmberColors.bgPanel,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: EmberColors.stroke),
+      ),
+      child: const Text(
+        'after history',
+        style: TextStyle(
+          color: EmberColors.textMid,
+          fontSize: 9,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.4,
+        ),
+      ),
+    );
+  }
+}
+
+/// Edit one block's name + content + position. Mutates [block] in place on
+/// Save (it's already part of the editor's working draft) and calls
+/// [setLocal] so the parent list re-renders the updated name / position chip.
+Future<void> _showBlockEditor(
+  BuildContext context,
+  PromptBlock block,
+  StateSetter setLocal,
+) async {
+  final nameCtl = TextEditingController(text: block.name);
+  final contentCtl = TextEditingController(text: block.content);
+  var position = block.position;
+
+  await showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: EmberColors.bgPanel,
+      title: const Text('Edit block'),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: StatefulBuilder(
+            builder: (ctx, setDialog) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: nameCtl,
+                  decoration: const InputDecoration(labelText: 'Block name'),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: contentCtl,
+                  maxLines: 10,
+                  minLines: 5,
+                  decoration: const InputDecoration(
+                    labelText: 'Content',
+                    hintText:
+                        'The text this module contributes. Same template '
+                        'tokens as a main prompt.',
+                    alignLabelWithHint: true,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'POSITION',
+                  style: TextStyle(
+                    color: EmberColors.primary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SegmentedButton<PromptBlockPosition>(
+                  segments: const [
+                    ButtonSegment(
+                      value: PromptBlockPosition.beforeHistory,
+                      label: Text('Before history'),
+                    ),
+                    ButtonSegment(
+                      value: PromptBlockPosition.afterHistory,
+                      label: Text('After history'),
+                    ),
+                  ],
+                  selected: {position},
+                  onSelectionChanged: (s) =>
+                      setDialog(() => position = s.first),
+                  showSelectedIcon: false,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            setLocal(() {
+              block.name = nameCtl.text.trim();
+              block.content = contentCtl.text;
+              block.position = position;
+            });
+            Navigator.pop(ctx);
+          },
+          child: const Text('Save'),
         ),
       ],
     ),

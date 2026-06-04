@@ -28,6 +28,7 @@ import 'package:provider/provider.dart';
 
 import 'package:pyre/models/models.dart';
 import 'package:pyre/screens/lorebooks_screen.dart';
+import 'package:pyre/screens/presets_screen.dart';
 import 'package:pyre/screens/regex_rules_screen.dart';
 import 'package:pyre/services/regex_rules.dart';
 import 'package:pyre/services/store_backend.dart';
@@ -233,6 +234,111 @@ void main() {
       // probability defaults to 100 and we didn't move the slider, so it stays
       // 100 — but the toggle (useProbability) is the wired bit we assert.
       expect(e.probability, 100);
+
+      await store.flushPersist();
+    });
+  });
+
+  // ===========================================================================
+  // 3) Preset editor — modular "Prompt blocks" list (Pyre 1.1 Prompt Manager).
+  //    Open the editor for a MODULAR preset via the kebab → Edit, flip a
+  //    block's Switch, tap Save, and assert the underlying PromptBlock.enabled
+  //    flipped on the store's preset (i.e. the toggle persisted through the
+  //    same save path mainPrompt uses).
+  // ===========================================================================
+  group('Preset editor — modular block list wires to Preset.promptBlocks', () {
+    testWidgets(
+        'toggling a block\'s switch + Save flips PromptBlock.enabled on the '
+        'stored preset', (tester) async {
+      _useRoomyView(tester);
+      final store = AppStore(storage: _NoopBackend());
+      // Seed a MODULAR preset: two blocks, both enabled. Added directly so it's
+      // the only row in the list (the locked default is built in load(), which
+      // we don't run here — addPreset just appends).
+      final preset = Preset(
+        id: 'preset-modular',
+        name: 'Frankenstein',
+        promptBlocks: [
+          PromptBlock(id: 'b1', name: 'README', content: 'readme text'),
+          PromptBlock(id: 'b2', name: 'OMNI PROTOCOL', content: 'omni text'),
+        ],
+      );
+      store.addPreset(preset);
+
+      await tester.pumpWidget(_host(store, const PresetsScreen()));
+      await tester.pumpAndSettle();
+
+      // Open the preset's kebab, then Edit.
+      await tester.tap(find.byTooltip('Preset actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ListTile, 'Edit'));
+      await tester.pumpAndSettle();
+
+      // The modular editor shows the "Prompt blocks" section with both names
+      // and a Switch per block (no flat Main prompt field — the blocks are it).
+      expect(find.text('PROMPT BLOCKS'), findsOneWidget);
+      expect(find.text('README'), findsOneWidget);
+      expect(find.text('OMNI PROTOCOL'), findsOneWidget);
+      final switches = find.byType(Switch);
+      expect(switches, findsNWidgets(2),
+          reason: 'one on/off switch per block');
+
+      // Both start enabled.
+      expect(tester.widget<Switch>(switches.first).value, isTrue);
+
+      // Flip the first block (README) OFF.
+      await tester.tap(switches.first);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Switch>(find.byType(Switch).first).value, isFalse,
+          reason: 'the switch reflects the local draft immediately');
+
+      // Save commits the draft via store.updatePreset (the same path used for
+      // mainPrompt). The dialog passes through "Save".
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Save'));
+      await tester.pumpAndSettle();
+
+      // The stored preset's first block is now disabled; the second untouched.
+      final saved =
+          store.presets.firstWhere((p) => p.id == 'preset-modular');
+      expect(saved.promptBlocks.length, 2);
+      expect(saved.promptBlocks[0].name, 'README');
+      expect(saved.promptBlocks[0].enabled, isFalse);
+      expect(saved.promptBlocks[1].enabled, isTrue);
+
+      await store.flushPersist();
+    });
+
+    testWidgets(
+        'a FLAT preset shows the Main prompt field and NO block list',
+        (tester) async {
+      _useRoomyView(tester);
+      final store = AppStore(storage: _NoopBackend());
+      // Flat preset: no promptBlocks.
+      store.addPreset(Preset(
+        id: 'preset-flat',
+        name: 'Simple',
+        mainPrompt: 'You are a helpful assistant.',
+      ));
+
+      await tester.pumpWidget(_host(store, const PresetsScreen()));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Preset actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ListTile, 'Edit'));
+      await tester.pumpAndSettle();
+
+      // Flat editor: the existing Main prompt TextField is present, the block
+      // section is NOT (the flat UX is unchanged). The prompt text also shows
+      // in the list row's subtitle behind the dialog, so scope the assertion
+      // to the editable TextField holding the value.
+      expect(find.text('PROMPT BLOCKS'), findsNothing);
+      expect(find.byType(Switch), findsNothing);
+      expect(
+        find.widgetWithText(TextField, 'You are a helpful assistant.'),
+        findsOneWidget,
+        reason: 'the flat Main prompt TextField still renders its text',
+      );
 
       await store.flushPersist();
     });
