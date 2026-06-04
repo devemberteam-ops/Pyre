@@ -114,8 +114,9 @@ void main() {
   // Wave CY.18.233: the old marker-cascade edit + review-pass scenarios were
   // removed when the structured-JSON build replaced them.
   // Pyre 1.1: 6 prompt-feature scenarios added (F1 {{summary}}, F3 selective
-  // lore on/off, F4 regex, F6 preset A/B) → 12 total.
-  test('all 12 scenarios are covered', () {
+  // lore on/off, F4 regex, F6 preset A/B) → 12 total. Then the Prompt Manager
+  // modular-preset pair (on/off) brought it to 14.
+  test('all 14 scenarios are covered', () {
     final ids = entries.map((e) => e.key).toSet();
     expect(ids, {
       'chat_single',
@@ -127,11 +128,14 @@ void main() {
       'chat_regex', // F4
       'chat_preset_a', // F6
       'chat_preset_b', // F6
+      // Pyre 1.1 Prompt Manager — modular preset (toggle a block off).
+      'chat_modular_preset_on',
+      'chat_modular_preset_off',
       'creator_character',
       'creator_scenario',
       'creator_persona',
       'creator_vision',
     });
-    expect(entries.length, 12);
+    expect(entries.length, 14);
   });
 }

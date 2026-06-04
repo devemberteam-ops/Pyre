@@ -624,6 +624,112 @@ ChatScenario buildChatPresetB(ExampleCards ex) => _buildPresetScenario(
     );
 
 // ---------------------------------------------------------------------------
+// Pyre 1.1 Prompt Manager — MODULAR preset scenarios (toggle a block off)
+// ---------------------------------------------------------------------------
+//
+// Where chat_preset_a/b swap a whole FLAT preset, this pair proves the MODULAR
+// path: ONE preset built from three toggleable `beforeHistory` system blocks.
+// `chat_modular_preset_on` has all three enabled; `chat_modular_preset_off` is
+// the SAME preset with the middle "Lush prose module" block disabled. The
+// inspect dumps differ ONLY in whether LUSH-SENTINEL appears in the system
+// prompt, isolating exactly what toggling a block changes in the outgoing
+// prompt. Assembly flows through `assemblePreset` inside `buildChatPrompt`.
+
+/// The three modular system blocks. [lushEnabled] flips the middle block so the
+/// ON / OFF scenarios share one definition (everything else stays identical).
+List<PromptBlock> _modularBlocks({required bool lushEnabled}) => [
+      PromptBlock(
+        id: 'pl-mb-core',
+        name: 'Core',
+        content: 'CORE-SENTINEL. You are Vesna, a terse wolfkin delver.',
+        // enabled defaults true.
+      ),
+      PromptBlock(
+        id: 'pl-mb-lush',
+        name: 'Lush prose module',
+        content: 'LUSH-SENTINEL. Write lush, sensory, romantic prose.',
+        enabled: lushEnabled,
+      ),
+      PromptBlock(
+        id: 'pl-mb-pov',
+        name: 'POV',
+        content: 'POV-SENTINEL. Always write in second person.',
+      ),
+    ];
+
+/// Shared chat shape for the modular-preset pair — same messages + character,
+/// only the preset's block toggles differ.
+ChatScenario _buildModularPresetScenario(
+  ExampleCards ex,
+  String id,
+  String description, {
+  required bool lushEnabled,
+}) {
+  final preset = Preset(
+    id: 'pl-preset-$id',
+    name: 'Prompt Lab — Modular ${lushEnabled ? 'ON' : 'OFF'}',
+    // A flattened fallback string for any flat-path consumer; the BLOCKS are
+    // what assemble (promptBlocks non-empty → modular path in assemblePreset).
+    mainPrompt: 'MODULAR-FALLBACK-SENTINEL. You are {{char}}.',
+    promptBlocks: _modularBlocks(lushEnabled: lushEnabled),
+    createdAt: 0,
+  );
+  final messages = <Message>[
+    _msg('pl-mp-m1', MessageKind.user, 'Say something in character.'),
+    _msg('pl-mp-m2', MessageKind.char,
+        '*Vesna grunts.* "We don\'t have time for chatter."'),
+  ];
+  final chat = Chat(
+    id: 'pl-chat-$id',
+    characterIds: [ex.vesna.id],
+    characterSnapshots: {ex.vesna.id: ex.vesna},
+    presetId: preset.id,
+    messages: messages,
+    createdAt: 0,
+    updatedAt: 0,
+  );
+  final inputs = ChatPromptInputs(
+    chat: chat,
+    character: ex.vesna,
+    persona: null,
+    preset: preset,
+    responderId: ex.vesna.id,
+    beatsCap: 3,
+    lookupCharacter: _charLookup([ex.vesna, ex.ren]),
+    lookupBook: _bookLookup([ex.world]),
+    inFlightMessageId: null,
+  );
+  return ChatScenario(id, description, inputs);
+}
+
+/// **chat_modular_preset_on** — a MODULAR preset with all three system blocks
+/// (Core / Lush prose module / POV) ENABLED. Goal: the assembled system prompt
+/// contains CORE-SENTINEL + LUSH-SENTINEL + POV-SENTINEL.
+ChatScenario buildChatModularPresetOn(ExampleCards ex) =>
+    _buildModularPresetScenario(
+      ex,
+      'chat_modular_preset_on',
+      'Prompt Manager modular preset (all 3 blocks enabled): the system prompt '
+          'assembles Core + Lush prose module + POV. Compare against '
+          'chat_modular_preset_off — same preset, "Lush prose module" toggled '
+          'off.',
+      lushEnabled: true,
+    );
+
+/// **chat_modular_preset_off** — the SAME preset with the "Lush prose module"
+/// block DISABLED. Goal: the system prompt contains CORE-SENTINEL + POV-SENTINEL
+/// but NOT LUSH-SENTINEL, proving a block toggle changes the outgoing prompt.
+ChatScenario buildChatModularPresetOff(ExampleCards ex) =>
+    _buildModularPresetScenario(
+      ex,
+      'chat_modular_preset_off',
+      'Prompt Manager modular preset ("Lush prose module" disabled): the system '
+          'prompt assembles Core + POV only (no LUSH-SENTINEL). Compare against '
+          'chat_modular_preset_on.',
+      lushEnabled: false,
+    );
+
+// ---------------------------------------------------------------------------
 // CREATOR scenarios
 // ---------------------------------------------------------------------------
 
@@ -811,6 +917,9 @@ List<ChatScenario> buildChatScenarios(ExampleCards ex) => [
       buildChatRegex(ex), // F4
       buildChatPresetA(ex), // F6 (A)
       buildChatPresetB(ex), // F6 (B)
+      // Pyre 1.1 Prompt Manager — modular preset (toggle a block off).
+      buildChatModularPresetOn(ex), // all 3 blocks enabled
+      buildChatModularPresetOff(ex), // "Lush prose module" disabled
     ];
 
 /// All Creator scenarios: the structured-build first batch for each mode
