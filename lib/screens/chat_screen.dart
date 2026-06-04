@@ -38,6 +38,7 @@ import 'customize_chat_sheet.dart';
 import 'group_lorebooks_sheet.dart';
 import 'live_sheet_screen.dart';
 import 'memory_screen.dart';
+import 'presets_screen.dart';
 import 'script_screen.dart';
 
 /// Wave CY.18.50: true on Windows / Linux / macOS desktop builds. Used
@@ -344,6 +345,270 @@ class _ChatScreenState extends State<ChatScreen> {
     } else {
       store.setChatPersona(chat.id, picked);
     }
+  }
+
+  /// Wave 1.1 (F6): in-chat preset switcher. Lets the user see and swap the
+  /// active preset (the system/main-prompt + sampling bundle) without leaving
+  /// the conversation. The active preset is GLOBAL state — selecting a row
+  /// drives `store.setActivePreset(id)`, the exact same method the full
+  /// Presets screen uses — so the change takes effect on the NEXT message in
+  /// every chat (no per-chat override). The locked "Pyre Default" appears and
+  /// is selectable but its prompt text is never rendered (Waves 44/45/CY.18.10).
+  Future<void> _showPresetSwitcher() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    // Local controller for the optional quick-edit field; only touched when
+    // the active preset is unlocked. Disposed when the sheet closes.
+    final quickEditCtl = TextEditingController();
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: EmberColors.bgPanel,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheet) {
+        // StatefulBuilder so the radio check moves live and the quick-edit
+        // expander can toggle without rebuilding the whole chat screen.
+        bool quickEditOpen = false;
+        return StatefulBuilder(
+          builder: (sheetCtx, setSheetState) {
+            // Read live from the store on every rebuild so an external change
+            // (e.g. a backup restore) doesn't show a stale active marker.
+            final liveStore = sheetCtx.watch<AppStore>();
+            final presets = liveStore.visiblePresets;
+            final activeId = liveStore.activePresetId;
+            final active = liveStore.activePreset;
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(sheetCtx).viewInsets.bottom,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.only(top: 8, bottom: 12),
+                          child: SizedBox(
+                            width: 40,
+                            height: 4,
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: EmberColors.stroke,
+                                borderRadius:
+                                    BorderRadius.all(Radius.circular(2)),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(20, 0, 20, 2),
+                        child: Text(
+                          'Preset',
+                          style: TextStyle(
+                              fontSize: 17, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+                        child: Text(
+                          'The system prompt + sampling bundle for this chat. '
+                          'Takes effect on your next message.',
+                          style: TextStyle(
+                              color: EmberColors.textMid, fontSize: 12),
+                        ),
+                      ),
+                      // Wave 1.1: RadioGroup ancestor + leading Radio rows —
+                      // the non-deprecated pattern used elsewhere (e.g. the
+                      // background-source picker in customize_chat_sheet.dart).
+                      // Selecting a row drives `setActivePreset`, the SAME
+                      // method the full Presets screen uses.
+                      RadioGroup<String>(
+                        groupValue: activeId,
+                        onChanged: (id) {
+                          if (id == null) return;
+                          liveStore.setActivePreset(id);
+                          final name = liveStore.activePreset?.name ?? '';
+                          Navigator.pop(sheet);
+                          messenger.showSnackBar(
+                            SnackBar(content: Text('Switched to $name')),
+                          );
+                        },
+                        child: Column(
+                          children: [
+                            for (final p in presets)
+                              ListTile(
+                                leading: Radio<String>(
+                                  value: p.id,
+                                  activeColor: EmberColors.primary,
+                                ),
+                                title: Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        p.name,
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.w600),
+                                      ),
+                                    ),
+                                    if (p.locked) ...[
+                                      const SizedBox(width: 6),
+                                      _PresetTag(label: 'DEFAULT'),
+                                    ],
+                                  ],
+                                ),
+                                // Respect the locked preset: never render its
+                                // prompt text. Others get a one-line preview.
+                                subtitle: Text(
+                                  p.locked
+                                      ? 'Built-in preset · tuned for creative roleplay'
+                                      : _presetPreviewLine(p),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      color: EmberColors.textMid,
+                                      fontSize: 12),
+                                ),
+                                onTap: () {
+                                  liveStore.setActivePreset(p.id);
+                                  final name =
+                                      liveStore.activePreset?.name ?? p.name;
+                                  Navigator.pop(sheet);
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                        content: Text('Switched to $name')),
+                                  );
+                                },
+                              ),
+                          ],
+                        ),
+                      ),
+                      // OPTIONAL quick main-prompt tweak — only when the active
+                      // preset is UNLOCKED. The locked default is never editable.
+                      if (active != null && !active.locked) ...[
+                        const Divider(color: EmberColors.stroke, height: 8),
+                        ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.edit_note,
+                              color: EmberColors.textMid),
+                          title: Text(
+                            'Quick edit system prompt',
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: EmberColors.textHigh,
+                                fontWeight: FontWeight.w500),
+                          ),
+                          subtitle: Text(
+                            'Edit "${active.name}" main prompt',
+                            style: const TextStyle(
+                                color: EmberColors.textMid, fontSize: 11),
+                          ),
+                          trailing: Icon(
+                            quickEditOpen
+                                ? Icons.expand_less
+                                : Icons.expand_more,
+                            color: EmberColors.textMid,
+                          ),
+                          onTap: () {
+                            setSheetState(() {
+                              quickEditOpen = !quickEditOpen;
+                              if (quickEditOpen) {
+                                quickEditCtl.text = active.mainPrompt;
+                              }
+                            });
+                          },
+                        ),
+                        if (quickEditOpen)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                TextField(
+                                  controller: quickEditCtl,
+                                  maxLines: 8,
+                                  minLines: 4,
+                                  style: const TextStyle(fontSize: 13),
+                                  decoration: const InputDecoration(
+                                    isDense: true,
+                                    hintText: 'Main prompt sent before the '
+                                        'chat history.',
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: ElevatedButton.icon(
+                                    icon: const Icon(Icons.save_outlined,
+                                        size: 16),
+                                    label: const Text('Save'),
+                                    onPressed: () {
+                                      // Re-resolve the live preset by id in
+                                      // case it changed while the field was
+                                      // open; bail if it vanished or locked.
+                                      final target = liveStore.activePreset;
+                                      if (target == null || target.locked) {
+                                        Navigator.pop(sheet);
+                                        return;
+                                      }
+                                      target.mainPrompt =
+                                          quickEditCtl.text.trim();
+                                      liveStore.updatePreset(target);
+                                      Navigator.pop(sheet);
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                              'Saved "${target.name}".'),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                      const Divider(color: EmberColors.stroke, height: 8),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.tune, size: 16),
+                          label: const Text('Manage presets'),
+                          onPressed: () {
+                            Navigator.pop(sheet);
+                            navigator.push(MaterialPageRoute(
+                              builder: (_) => const PresetsScreen(),
+                            ));
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+    quickEditCtl.dispose();
+  }
+
+  /// One-line flattened preview of a preset's main prompt for the switcher.
+  /// NEVER called for a locked preset (its prompt stays sealed) — the caller
+  /// gates on `p.locked` first.
+  String _presetPreviewLine(Preset p) {
+    final src = p.mainPrompt.trim();
+    if (src.isEmpty) return '(no system prompt)';
+    final flat = src.replaceAll(RegExp(r'\s+'), ' ');
+    if (p.source == 'sillytavern') return 'ST preset · $flat';
+    return flat;
   }
 
   /// Wave CX: per-chat persona resolver. Each Chat snapshots its
@@ -1565,6 +1830,22 @@ class _ChatScreenState extends State<ChatScreen> {
                     onTap: () {
                       Navigator.pop(sheet);
                       _showChatPersonaPicker(chat);
+                    },
+                  ),
+                  // Wave 1.1 (F6): quick preset switch without leaving the
+                  // chat. The active preset is GLOBAL state (store.activePresetId),
+                  // so the subtitle reflects whatever's active right now.
+                  ListTile(
+                    leading: const Icon(Icons.layers_outlined),
+                    title: const Text('Preset'),
+                    subtitle: Text(
+                      'Preset · ${store.activePreset?.name ?? "None"}',
+                      style: const TextStyle(
+                          color: EmberColors.textMid, fontSize: 12),
+                    ),
+                    onTap: () {
+                      Navigator.pop(sheet);
+                      _showPresetSwitcher();
                     },
                   ),
                   if (primary != null)
@@ -4032,6 +4313,35 @@ class _InlineMessageEditorState extends State<_InlineMessageEditor> {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// Wave 1.1 (F6): tiny primary-tinted pill used in the in-chat preset
+/// switcher to flag the locked "Pyre Default" preset. Mirrors the `_Pill`
+/// style on the full Presets screen so the two surfaces read consistently.
+class _PresetTag extends StatelessWidget {
+  final String label;
+  const _PresetTag({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: EmberColors.primary.withValues(alpha: 0.22),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: EmberColors.primary.withValues(alpha: 0.5)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: EmberColors.primary,
+          fontSize: 9,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+        ),
+      ),
     );
   }
 }
