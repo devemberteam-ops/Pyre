@@ -442,4 +442,133 @@ void main() {
       expect(parseStRegexScripts(null), isEmpty);
     });
   });
+
+  group('compiled-RegExp cache (perf-at-scale #4)', () {
+    setUp(debugClearRegexCache);
+
+    test('repeated apply of the same rule compiles the pattern once', () {
+      final r = rule(pattern: r'\bcat\b', flags: 'gi', replacement: 'dog');
+      expect(debugRegexCacheSize, 0);
+      // Simulate many bubbles/frames re-applying the same rule.
+      for (var i = 0; i < 50; i++) {
+        apply('the cat sat', [r]);
+      }
+      // Only ONE distinct (pattern,flags) compiled, despite 50 applies.
+      expect(debugRegexCacheSize, 1);
+    });
+
+    test('distinct patterns/flags get distinct cache entries', () {
+      apply('a', [rule(pattern: 'a', replacement: 'b')]);
+      apply('a', [rule(pattern: 'a', flags: 'i', replacement: 'b')]);
+      apply('a', [rule(pattern: 'c', replacement: 'd')]);
+      expect(debugRegexCacheSize, 3);
+    });
+
+    test('an invalid pattern is cached as a no-op (does not recompile)', () {
+      final bad = rule(pattern: '(', replacement: 'x'); // unbalanced group
+      expect(apply('hello', [bad]), 'hello'); // no-op, never throws
+      expect(debugRegexCacheSize, 1); // the bad pattern is cached (as null)
+      expect(apply('hello', [bad]), 'hello');
+      expect(debugRegexCacheSize, 1); // still one entry — not recompiled
+    });
+
+    test('caching does not change results (case-insensitive global)', () {
+      final r = rule(pattern: 'cat', flags: 'gi', replacement: 'X');
+      expect(apply('Cat cat CAT', [r]), 'X X X');
+      // Run again from cache — identical output.
+      expect(apply('Cat cat CAT', [r]), 'X X X');
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Bundled DEFAULT formatting rule (seeded on first run).
+  //
+  // Pyre ships ONE conservative fix out of the box: models very often wrap a
+  // whole line of spoken dialogue in italics (`*"Hello there."*`), which the
+  // chat renderer styles as faint, muted narration instead of prominent
+  // dialogue. The default rule strips the italic asterisks that DIRECTLY hug
+  // a quoted span. Modeled on SillyTavern WeatherPack's "remove asterisks
+  // around quotation marks". Must be SAFE: never touch `**bold**`, plain
+  // narration, or a quote with no asterisks.
+  group('buildDefaultRegexRules — the bundled formatting fix', () {
+    // Apply the whole default bundle exactly as the chat does for AI bubbles.
+    String fix(String text) => applyRegexRules(
+          text,
+          buildDefaultRegexRules(),
+          stream: RegexStream.aiOutput,
+          stage: RegexStage.display,
+        );
+
+    test('unwraps italics that hug a quoted line of dialogue', () {
+      expect(fix('*"Hello there."*'), '"Hello there."');
+    });
+
+    test('unwraps with narration text around the dialogue intact', () {
+      expect(
+        fix('He turns slowly. *"Get out,"* she snaps.'),
+        'He turns slowly. "Get out," she snaps.',
+      );
+    });
+
+    test('unwraps multiple dialogue lines in one message (global)', () {
+      expect(fix('*"Yes."* she said. *"No."* he replied.'),
+          '"Yes." she said. "No." he replied.');
+    });
+
+    test('handles multiple asterisks hugging the quote', () {
+      expect(fix('**"Hi"**'), '"Hi"');
+      expect(fix('***"Hi"***'), '"Hi"');
+    });
+
+    test('leaves **bold** untouched (no quote → never matches)', () {
+      expect(fix('say **bold** now'), 'say **bold** now');
+    });
+
+    test('leaves plain narration italics untouched (no quote)', () {
+      expect(fix('*she smiles warmly*'), '*she smiles warmly*');
+    });
+
+    test('leaves a quote with no surrounding asterisks untouched', () {
+      expect(fix('"Hello there."'), '"Hello there."');
+    });
+
+    test('does NOT unwrap when asterisks do not hug the quote', () {
+      // The leading `*` is followed by narration text, not the quote, so a
+      // whole italic narration span that merely CONTAINS a quote is left as
+      // narration (conservative — we only unwrap when `*` directly hugs `"`).
+      expect(fix('*She said "hi" to no one*'), '*She said "hi" to no one*');
+    });
+
+    test('preserves emphasis asterisks INSIDE the quote', () {
+      // Only the outer wrap is removed; an emphasized word inside the quote
+      // stays as-is.
+      expect(fix('*"You *absolute* fool!"*'), '"You *absolute* fool!"');
+    });
+
+    test('the bundle carries the stable default-rule id, enabled', () {
+      final rules = buildDefaultRegexRules();
+      expect(rules, isNotEmpty);
+      final r = rules.firstWhere((x) => x.id == kDefaultUnwrapQuoteItalicsRuleId);
+      expect(r.enabled, isTrue);
+      expect(r.streams, [RegexStream.aiOutput]);
+      expect(r.affectsDisplay, isTrue);
+      expect(r.affectsPrompt, isFalse);
+    });
+
+    test('does nothing to the user\'s own input (aiOutput-only)', () {
+      expect(
+        applyRegexRules('*"my typed line"*', buildDefaultRegexRules(),
+            stream: RegexStream.userInput, stage: RegexStage.display),
+        '*"my typed line"*',
+      );
+    });
+
+    test('does nothing at the prompt stage (display-only — model sees raw)', () {
+      expect(
+        applyRegexRules('*"Hello"*', buildDefaultRegexRules(),
+            stream: RegexStream.aiOutput, stage: RegexStage.prompt),
+        '*"Hello"*',
+      );
+    });
+  });
 }

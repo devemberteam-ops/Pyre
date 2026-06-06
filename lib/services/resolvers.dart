@@ -17,15 +17,33 @@
 
 import 'dart:typed_data';
 
+/// What a resolved URL actually downloads. The vast majority of community
+/// links resolve to a CHARACTER (chara_card_v2 PNG / JSON). BotBooru also
+/// publishes standalone LOREBOOKs (`/lorebook/{id}` → a bare
+/// `character_book` JSON), which take a completely different import path —
+/// `tryParseLorebookJson` + `store.addLorebook`, not the PNG/card parser.
+/// The discriminator lets a single resolver feed both flows; everything
+/// existing keeps the `character` default so the PNG path is untouched.
+enum ResolvedKind { character, lorebook }
+
 class ResolvedCard {
-  /// The URL to GET for the PNG bytes.
+  /// The URL to GET for the bytes (PNG card, or lorebook JSON).
   final Uri pngUrl;
   final String source; // 'botbooru' | 'chub' | 'risurealm' | 'direct'
+  /// Whether [pngUrl] downloads a character card or a standalone lorebook.
+  /// Defaults to [ResolvedKind.character] so every existing call site (and
+  /// the PNG flow) behaves exactly as before.
+  final ResolvedKind kind;
   /// Optional pre-fetched PNG bytes — used when the resolver had to
   /// fetch the data itself (currently unused; reserved for future
   /// endpoints that require POST/auth).
   final Uint8List? bytes;
-  ResolvedCard(this.pngUrl, this.source, {this.bytes});
+  ResolvedCard(
+    this.pngUrl,
+    this.source, {
+    this.kind = ResolvedKind.character,
+    this.bytes,
+  });
 }
 
 /// File-hosting services people routinely use to share a bare
@@ -47,11 +65,55 @@ const Set<String> kCardFileHostAllowlist = {
   'api.pixeldrain.com',
 };
 
+/// Exact-host set for BotBooru. Used both by [resolveCommunityUrl] and by
+/// [isBotbooruLorebookUrl] so a lookalike (`evilbotbooru.com`,
+/// `botbooru.com.attacker.io`) is never treated as BotBooru.
+const Set<String> _botbooruHosts = {'botbooru.com', 'www.botbooru.com'};
+
+/// Frontend-only lorebook rework: detect a BotBooru LOREBOOK URL so the
+/// paste-by-URL import path can REFUSE to fetch it from the app and instead
+/// tell the user to open it in Discover and tap "Download JSON".
+///
+/// The owner's hard rule is that the app must NOT call BotBooru's API
+/// directly — and the lorebook download endpoint
+/// (`/api/lorebooks/{id}/download.json`) is bot-gated (403 to the app's
+/// cookie-less client), so it only works inside the logged-in webview. This
+/// gate catches BOTH the human-facing `/lorebook/{id}` page and the raw
+/// `/api/lorebooks/{id}/download.json` API URL on an EXACT BotBooru host (a
+/// lookalike returns false). Pure, no I/O.
+bool isBotbooruLorebookUrl(String input) {
+  final cleaned = input.trim();
+  if (cleaned.isEmpty) return false;
+  final uri = Uri.tryParse(cleaned);
+  if (uri == null) return false;
+  if (!_botbooruHosts.contains(uri.host.toLowerCase())) return false;
+  final segments = uri.pathSegments;
+  // `/lorebook/{id}` page.
+  if (segments.length >= 2 && segments[0] == 'lorebook') return true;
+  // `/api/lorebooks/{id}/download.json` API URL.
+  if (segments.length >= 4 &&
+      segments[0] == 'api' &&
+      segments[1] == 'lorebooks' &&
+      segments[3] == 'download.json') {
+    return true;
+  }
+  return false;
+}
+
 Future<ResolvedCard?> resolveCommunityUrl(String input) async {
   final cleaned = input.trim();
   if (cleaned.isEmpty) return null;
   final uri = Uri.tryParse(cleaned);
   if (uri == null) return null;
+
+  // Frontend-only lorebook rework: BotBooru LOREBOOK page URLs are NO LONGER
+  // mapped to an `/api/lorebooks/.../download.json` fetch target. The app must
+  // never call BotBooru's API; the lorebook bytes are captured by the embedded
+  // webview's authenticated JS hook (which posts the JSON TEXT to native), so
+  // the resolver/fetch path is not involved for lorebooks at all. A pasted
+  // `/lorebook/{id}` page therefore resolves to null here, and Discover's
+  // paste-URL handler detects it via [isBotbooruLorebookUrl] and shows a hint.
+  const botbooruHosts = _botbooruHosts;
 
   // Already a direct card link — a .png (chara_card_v2 embedded in PNG
   // metadata) OR a .json (raw chara_card JSON, the form catbox/pixeldrain
@@ -67,7 +129,7 @@ Future<ResolvedCard?> resolveCommunityUrl(String input) async {
   // Wave CY: was `host.contains('botbooru')` which lets
   // `evilbotbooru.com` and `botbooru.com.attacker.io` through. Use an
   // exact-host set so a hostile lookalike can't drive the resolver.
-  const botbooruHosts = {'botbooru.com', 'www.botbooru.com'};
+  // (Reuses the `botbooruHosts` set declared for the lorebook branch above.)
   if (botbooruHosts.contains(uri.host.toLowerCase())) {
     final segments = uri.pathSegments;
     // Wave CY.18.149: the URL is ALREADY a direct download link
@@ -225,6 +287,43 @@ bool isPublicHost(String host) {
 
   // A normal DNS hostname — treated as public.
   return true;
+}
+
+/// Mega-audit 2026-06-05 (H-7): SSRF gate for provider Browse / Test /
+/// warm-up requests.
+///
+/// Unlike the import paths, the provider endpoints (`/v1/models` Browse,
+/// "Test connection", the launch-time warm-up POST) issue a raw HTTP
+/// request straight to `provider.baseUrl`. A SYNCED or IMPORTED provider
+/// record could point that URL at an internal host — and the launch-time
+/// warm-up fires UNATTENDED — so a malicious peer/record could make the
+/// app probe `http://192.168.x.x/…`, a cloud metadata endpoint, etc.
+///
+/// Pure decision: should we be allowed to issue an outbound request to the
+/// host of [baseUrl]?
+///   * [isLocalhostKind] = true  → the EXPLICIT localhost provider kind
+///     (LM Studio / Ollama). The user deliberately created it to talk to a
+///     local server, so loopback/private targets are EXPECTED and allowed.
+///   * Otherwise (External / proxy kind) the host must be public:
+///     a private/loopback/link-local target is refused (returns false).
+///
+/// Reuses [isPublicHost] (literal-IP + non-routable-name check, no DNS) so
+/// there is exactly ONE SSRF classifier in the codebase. An unparseable /
+/// empty URL is refused (returns false) for the non-localhost kind.
+bool isProviderHostAllowed(String baseUrl, {required bool isLocalhostKind}) {
+  // The explicit localhost kind is allowed to reach private/loopback
+  // targets — that's its whole purpose (LM Studio/Ollama on this machine
+  // or the LAN). We don't second-guess a kind the user picked themselves.
+  if (isLocalhostKind) return true;
+  Uri u;
+  try {
+    u = Uri.parse(baseUrl.trim());
+  } catch (_) {
+    return false;
+  }
+  final host = u.host;
+  if (host.isEmpty) return false;
+  return isPublicHost(host);
 }
 
 /// Parse a dotted-quad IPv4 literal into its four octets, or null if [s]

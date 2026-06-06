@@ -13,15 +13,16 @@
 // Wave CY.18.203 will add a background-fit picker here — there is room
 // inside the "Chat background" card for it.
 
-import 'dart:convert';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../services/attachment_store.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
+import '../widgets/how_it_works_card.dart';
+import '../widgets/lightbox.dart';
 
 class ChatAppearanceScreen extends StatefulWidget {
   const ChatAppearanceScreen({super.key});
@@ -85,9 +86,12 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
     final bytes = result.files.single.bytes;
     if (bytes == null) return;
     if (!mounted) return;
+    // B-2 / H-6: externalise into the AttachmentStore (pyre:// ref) instead of
+    // inline base64 (web falls back to a data URL).
+    final ref = await externalizeImageBytes(bytes);
+    if (!mounted) return;
     setState(() {
-      _draft.customBackgroundDataUrl =
-          'data:image/png;base64,${base64Encode(bytes)}';
+      _draft.customBackgroundDataUrl = ref;
       _draft.backgroundSource = ChatBackgroundSource.custom;
     });
     _commit();
@@ -134,6 +138,56 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
         children: [
+          // ── How it works ──────────────────────────────────────────────
+          const HowItWorksCard(
+            title: 'How customizing the chat works',
+            subtitle: 'Bubbles, background, and the scene-aware mode.',
+            sections: [
+              HowItWorksSection('What it is', [
+                HowItWorksBlock.paragraph(
+                    'These are the **looks** of every chat — how the message '
+                    'bubbles are styled, what sits behind them, and whether a '
+                    'reasoning model\'s thinking is shown. They\'re global '
+                    'defaults; a single chat can override its background from '
+                    'its own menu.'),
+              ]),
+              HowItWorksSection('Bubbles', [
+                HowItWorksBlock.bullet(
+                    '**Bubble opacity** — how visible the message background '
+                    'is over the chat backdrop.'),
+                HowItWorksBlock.bullet(
+                    '**Message bubbles** — separate colors for your and the '
+                    'character\'s bubbles, plus corner radius, border, text '
+                    'size, and a frosted-glass **background blur**. Leave it '
+                    'all as-is for the default style.'),
+              ]),
+              HowItWorksSection('Background', [
+                HowItWorksBlock.bullet(
+                    'Pick what sits behind the bubbles: the **character '
+                    'avatar** (default), your **persona avatar**, a **custom '
+                    'image** you upload, or **none**. Background opacity and '
+                    'fit tune how it\'s drawn.'),
+                HowItWorksBlock.bullet(
+                    '**Scene-aware (dynamic)** — the background follows the '
+                    'story automatically. As the scene moves, Pyre runs a '
+                    'small model pass to classify the new location and swap '
+                    'the backdrop to match. It uses your configured model, '
+                    'so it adds a little latency on a scene change.'),
+                HowItWorksBlock.paragraph(
+                    'To trigger a scene-aware update by hand — or to correct '
+                    'the location — open a chat\'s menu → **Customize chat** '
+                    'and use **Detect location from chat**.'),
+              ]),
+              HowItWorksSection('Reasoning', [
+                HowItWorksBlock.bullet(
+                    '**Hide model reasoning** — hides a reasoning model\'s '
+                    '<think>…</think> blocks (DeepSeek-R1 and similar) from '
+                    'the chat. It\'s display-only and never changes what the '
+                    'model generates.'),
+              ]),
+            ],
+          ),
+          const SizedBox(height: 8),
           Card(
             margin: const EdgeInsets.symmetric(vertical: 6),
             child: Padding(
@@ -368,19 +422,26 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                   if (_draft.backgroundSource ==
                       ChatBackgroundSource.custom) ...[
                     const SizedBox(height: 4),
-                    if (_draft.customBackgroundDataUrl != null)
+                    // B-2 / H-6: the custom background is now usually a
+                    // `pyre://` ref (externalised on pick), so resolve it via
+                    // the shared image resolver rather than a raw base64Decode
+                    // (which would throw on a non-data: URL).
+                    if (_draft.customBackgroundDataUrl != null &&
+                        Lightbox.resolveImage(
+                                _draft.customBackgroundDataUrl) !=
+                            null)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(8),
-                          child: Image.memory(
-                            base64Decode(_draft
-                                .customBackgroundDataUrl!
-                                .split(',')
-                                .last),
+                          child: Image(
+                            image: Lightbox.resolveImage(
+                                _draft.customBackgroundDataUrl)!,
                             height: 120,
                             width: double.infinity,
                             fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) =>
+                                const SizedBox.shrink(),
                           ),
                         ),
                       ),

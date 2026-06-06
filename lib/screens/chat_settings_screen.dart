@@ -1,4 +1,4 @@
-// Wave CY.18.202 — Chat Settings is now a clean 6-entry HUB.
+// Wave CY.18.202 — Chat Settings is now a clean 8-entry HUB.
 //
 // The old flat screen crammed display knobs, behaviour toggles, and
 // config-shortcuts together. It's now a nav list where each row opens a
@@ -8,9 +8,11 @@
 //   2. Behaviors          → ChatBehaviorsScreen    (delete behavior,
 //                            ask persona, streaming — interaction)
 //   3. Presets            → PresetsScreen          (existing)
-//   4. Long-term Memory   → LongTermMemoryScreen   (existing)
-//   5. Live Sheet         → LiveSheetSettingsScreen (global cadence)
-//   6. Script             → ScriptSettingsScreen    (global beats cap)
+//   4. Regex (find/replace) → RegexRulesScreen     (existing)
+//   5. Long-term Memory   → LongTermMemoryScreen   (existing)
+//   6. Live Sheet         → LiveSheetSettingsScreen (global cadence)
+//   7. Script             → ScriptSettingsScreen    (global beats cap)
+//   8. Guide              → GuideSettingsScreen     (guided generations)
 //
 // Lorebooks moved BACK to the More main menu in this wave (it was here
 // since Wave 193) — it's a content library, not a chat setting.
@@ -20,6 +22,7 @@ import 'package:flutter/material.dart';
 import '../theme.dart';
 import 'chat_appearance_screen.dart';
 import 'chat_behaviors_screen.dart';
+import 'guide_settings_screen.dart';
 import 'live_sheet_settings_screen.dart';
 import 'long_term_memory_screen.dart';
 import 'presets_screen.dart';
@@ -63,7 +66,7 @@ class ChatSettingsScreen extends StatelessWidget {
             ),
             _HubRow(
               icon: Icons.psychology,
-              title: 'Long-term Memory',
+              title: 'Checkpoints',
               subtitle: 'Auto-summarise older messages into a recap.',
               builder: (_) => const LongTermMemoryScreen(),
             ),
@@ -78,6 +81,13 @@ class ChatSettingsScreen extends StatelessWidget {
               title: 'Script',
               subtitle: 'Plant plot beats the story builds toward.',
               builder: (_) => const ScriptSettingsScreen(),
+            ),
+            _HubRow(
+              icon: Icons.explore_outlined,
+              title: 'Guide',
+              subtitle:
+                  'Steer the next reply, or draft your own message from an outline.',
+              builder: (_) => const GuideSettingsScreen(),
             ),
           ]),
         ],

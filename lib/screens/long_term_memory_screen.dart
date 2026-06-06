@@ -73,7 +73,7 @@ class _LongTermMemoryScreenState extends State<LongTermMemoryScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Long-term Memory'),
+        title: const Text('Checkpoints'),
         actions: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -93,7 +93,7 @@ class _LongTermMemoryScreenState extends State<LongTermMemoryScreen> {
           // (branch-aware checkpoint chain, story-style recap, auto-
           // continue on truncation, near-top injection).
           const HowItWorksCard(
-            title: 'How long-term memory works',
+            title: 'How Checkpoints work',
             subtitle: 'What it is, how recaps build, controls.',
             sections: [
               HowItWorksSection('What it is', [
@@ -107,8 +107,8 @@ class _LongTermMemoryScreenState extends State<LongTermMemoryScreen> {
                 HowItWorksBlock.paragraph(
                     'The model keeps continuity — who did what, where '
                     'things stand — while you spend a fraction of the '
-                    'tokens. Memory is **per chat** and can be toggled off '
-                    'for any single conversation.'),
+                    'tokens. Checkpoints are **per chat** and can be toggled '
+                    'off for any single conversation.'),
               ]),
               HowItWorksSection('How the recap builds', [
                 HowItWorksBlock.paragraph(
@@ -149,7 +149,7 @@ class _LongTermMemoryScreenState extends State<LongTermMemoryScreen> {
               ]),
               HowItWorksSection('Controls (per chat)', [
                 HowItWorksBlock.paragraph(
-                    'Open a chat\'s menu → Memory to manage that '
+                    'Open a chat\'s menu → Checkpoints to manage that '
                     'conversation\'s recap:'),
                 HowItWorksBlock.bullet(
                     '**Edit a checkpoint** inline — fix anything the model '
@@ -161,8 +161,8 @@ class _LongTermMemoryScreenState extends State<LongTermMemoryScreen> {
                     '**Summarise now** — force a checkpoint immediately '
                     'instead of waiting for the cadence.'),
                 HowItWorksBlock.bullet(
-                    '**Memory on/off** for this chat — when off, no recap '
-                    'is built or injected (but "Summarise now" still '
+                    '**Checkpoints on/off** for this chat — when off, no '
+                    'recap is built or injected (but "Summarise now" still '
                     'works).'),
               ]),
               HowItWorksSection('Honest notes', [

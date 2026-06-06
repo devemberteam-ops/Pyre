@@ -10,10 +10,13 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models/models.dart';
+import '../services/attachment_store.dart';
+import '../services/regex_rules.dart';
 import '../services/secure_keys.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
+import 'st_bulk_import_flow.dart';
 
 class BackupRestoreScreen extends StatefulWidget {
   const BackupRestoreScreen({super.key});
@@ -88,7 +91,9 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                   const SizedBox(height: 6),
                   const Text(
                     'Save your data to a single JSON file. Pick what to '
-                    'include below. Compatible with the HTML prototype '
+                    'include below. Avatars and gallery images are packed '
+                    'in, so the file fully restores on a new device (this '
+                    'makes it larger). Compatible with the HTML prototype '
                     'backup format.',
                     style:
                         TextStyle(color: EmberColors.textMid, fontSize: 13),
@@ -100,9 +105,9 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                         fontWeight: FontWeight.w600, fontSize: 13),
                   ),
                   _catCheck(_catCharacters, 'Characters',
-                      '${store.characters.length} cards'),
+                      '${store.characters.length} cards · incl. avatars + gallery'),
                   _catCheck(_catPersonas, 'Personas',
-                      '${store.personas.length}'),
+                      '${store.personas.length} · incl. avatars'),
                   _catCheck(_catChats, 'Chats',
                       '${store.chats.length} conversations + memory'),
                   _catCheck(_catLorebooks, 'Lorebooks',
@@ -111,8 +116,8 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                       'chat + creator prompt presets'),
                   _catCheck(_catProviders, 'Connections',
                       '${store.providers.length} providers · ⚠ saved WITH your API keys in plain text'),
-                  _catCheck(
-                      _catSettings, 'App settings', 'model / chat / memory / UI'),
+                  _catCheck(_catSettings, 'App settings',
+                      'model / chat / memory / UI · regex rules · folders · profile'),
                   _catCheck(_catCreatorSessions, 'Creator drafts',
                       '${store.creatorSessions.length} in progress'),
                   const SizedBox(height: 12),
@@ -172,6 +177,40 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                     icon: const Icon(Icons.file_open_outlined, size: 16),
                     label: const Text('Choose file…'),
                     onPressed: () => _pickAndImport(context, store),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // WS-J: "Import from SillyTavern" moved here from the More list —
+          // backup + import belong together. Runs the SAME bulk-import flow
+          // (per-file auto-detect, or a full ST `.zip` backup) it always has.
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Import from SillyTavern',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 15),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Bulk-import World Info, regex, presets, and cards exported '
+                    'from SillyTavern, or pick a full SillyTavern backup '
+                    '(.zip from ST\'s "Download Backup"). Pyre detects each '
+                    'file\'s type automatically.',
+                    style:
+                        TextStyle(color: EmberColors.textMid, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.download_outlined, size: 16),
+                    label: const Text('Choose files…'),
+                    onPressed: () => runStBulkImport(context, store),
                   ),
                 ],
               ),
@@ -456,6 +495,9 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       blob['chatSettings'] = s.chatSettings.toJson();
       blob['memorySettings'] = s.memorySettings.toJson();
       blob['uiPrefs'] = s.uiPrefs.toJson();
+      // F3: regex rules, folders, the three settings singletons the old
+      // branch dropped, and the botbooru profile — see the helper docs.
+      writeBackupSettingsCategory(s, blob);
     }
     if (include.contains(_catCreatorSessions)) {
       blob['creatorSessions'] =
@@ -487,8 +529,10 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
   Future<void> _copyJson(BuildContext context, AppStore store) async {
     if (!_ensureSelection(context)) return;
     if (!await _confirmKeyExport()) return;
-    final json = const JsonEncoder.withIndent('  ').convert(
-        _exportBlob(store, include: _include, includeApiKeys: _include.contains(_catProviders)));
+    final blob = _exportBlob(store,
+        include: _include, includeApiKeys: _include.contains(_catProviders));
+    await embedBackupAttachments(blob); // B-1: pack avatars/gallery/bg bytes.
+    final json = const JsonEncoder.withIndent('  ').convert(blob);
     await Clipboard.setData(ClipboardData(text: json));
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -514,9 +558,11 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     if (!await _confirmKeyExport()) return;
     if (!context.mounted) return;
     try {
-      final json = const JsonEncoder.withIndent('  ')
-          .convert(_exportBlob(store,
-              include: _include, includeApiKeys: _include.contains(_catProviders)));
+      final blob = _exportBlob(store,
+          include: _include,
+          includeApiKeys: _include.contains(_catProviders));
+      await embedBackupAttachments(blob); // B-1: pack avatars/gallery/bg bytes.
+      final json = const JsonEncoder.withIndent('  ').convert(blob);
       if (kIsWeb) {
         // Web has no share sheet — fall back to clipboard.
         await Clipboard.setData(ClipboardData(text: json));
@@ -571,9 +617,11 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     if (!await _confirmKeyExport()) return;
     if (!context.mounted) return;
     try {
-      final json = const JsonEncoder.withIndent('  ')
-          .convert(_exportBlob(store,
-              include: _include, includeApiKeys: _include.contains(_catProviders)));
+      final blob = _exportBlob(store,
+          include: _include,
+          includeApiKeys: _include.contains(_catProviders));
+      await embedBackupAttachments(blob); // B-1: pack avatars/gallery/bg bytes.
+      final json = const JsonEncoder.withIndent('  ').convert(blob);
       if (kIsWeb) {
         // Web cannot write arbitrary files — fall back to clipboard.
         await Clipboard.setData(ClipboardData(text: json));
@@ -666,6 +714,30 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
           cancelLabel: 'Keep mine',
         );
       }
+      // Audit 2026-06-04 (Persist H2): import is a destructive WHOLE-category
+      // REPLACE (s.characters = …, etc.), not a merge — so restoring an old or
+      // partial backup silently drops records the user added since. Confirm
+      // first, listing exactly which categories will be overwritten with
+      // current → incoming counts so the user can see what they stand to lose.
+      final replaceSummary = _replaceSummaryLines(store, blob);
+      if (replaceSummary.isNotEmpty) {
+        if (!context.mounted) return;
+        final ok = await confirmDelete(
+          context,
+          title: 'Replace your data?',
+          message:
+              'This will REPLACE your current data for:\n\n'
+              '${replaceSummary.join('\n')}\n\n'
+              'Records you added since this backup will be lost. Continue?',
+          confirmLabel: 'Replace',
+        );
+        if (!ok) {
+          if (!context.mounted) return;
+          messenger.showSnackBar(
+              const SnackBar(content: Text('Import cancelled.')));
+          return;
+        }
+      }
       await _applyImport(store, blob, importKeys: importKeys);
       messenger.showSnackBar(
         SnackBar(
@@ -728,6 +800,50 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     return false;
   }
 
+  /// Audit 2026-06-04 (Persist H2): build the "Category (current → incoming)"
+  /// lines for the destructive-replace confirm. One line per LIST category
+  /// PRESENT in the backup (the ones `_applyImport` replaces wholesale), plus
+  /// a no-count "App settings" line when the backup carries any settings
+  /// block. Returns an empty list when the backup replaces nothing (e.g. an
+  /// empty/garbage blob) so the caller can skip the dialog.
+  List<String> _replaceSummaryLines(AppStore s, Map<String, dynamic> raw) {
+    int? incoming(String key) {
+      if (!raw.containsKey(key)) return null;
+      final v = raw[key];
+      return v is List ? v.length : 0;
+    }
+
+    final lines = <String>[];
+    void add(String label, String key, int current) {
+      final inc = incoming(key);
+      if (inc == null) return;
+      lines.add('$label ($current → $inc)');
+    }
+
+    add('Characters', 'characters', s.characters.length);
+    add('Personas', 'personas', s.personas.length);
+    add('Chats', 'chats', s.chats.length);
+    add('Lorebooks', 'lorebooks', s.lorebooks.length);
+    add('Presets', 'presets', s.presets.length);
+    add('Connections', 'providers', s.providers.length);
+    add('Creator drafts', 'creatorSessions', s.creatorSessions.length);
+    // F3: regex rules + folders are wholesale-REPLACED on import — surface
+    // their counts like the other list categories.
+    add('Regex rules', 'regexRules', s.regexRules.length);
+    add('Folders', 'folders', s.folders.length);
+    // Settings are singletons (no count). Mention them if any block is present.
+    if (raw.containsKey('modelSettings') ||
+        raw.containsKey('chatSettings') ||
+        raw.containsKey('memorySettings') ||
+        raw.containsKey('uiPrefs') ||
+        raw.containsKey('liveSheetSettings') ||
+        raw.containsKey('scriptSettings') ||
+        raw.containsKey('guideSettings')) {
+      lines.add('App settings');
+    }
+    return lines;
+  }
+
   /// Apply an imported backup blob. Wrapped in try/catch so a partial
   /// failure leaves the previous state untouched rather than half-applied.
   ///
@@ -748,6 +864,13 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     // user-visible diagnostic via loadErrors would also be ideal once
     // the restore flow has a place to surface it. For now print + let
     // the integrity sweep catch any straggler refs.
+    // B-1 (BLOCKER): recreate the `.bin` files for every embedded attachment
+    // BEFORE applying records / running the integrity sweep, so the
+    // `pyre://attachment/<hash>` refs the records carry actually resolve. A
+    // pre-fix backup has no `attachments` map → this is a no-op (restores
+    // exactly as before).
+    await restoreBackupAttachments(raw);
+
     final rawVer = raw['schemaVersion'];
     final fileVersion = rawVer is int
         ? rawVer
@@ -820,26 +943,42 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       throw FormatException('Backup parse failed (likely corrupted): $e');
     }
 
+    // Audit 2026-06-04 (High): only overwrite the active-* pointers when the
+    // backup actually carries the key. A partial / hand-edited backup that has
+    // a collection but omits its active pointer would otherwise null out the
+    // user's current selection (`raw['activePersonaId']` → null) on import.
     if (providers != null) {
       s.providers = providers;
-      s.activeProviderId = raw['activeProviderId'] as String?;
-      s.creatorProviderId = raw['creatorProviderId'] as String?;
-      s.visionProviderId = raw['visionProviderId'] as String?;
+      if (raw.containsKey('activeProviderId')) {
+        s.activeProviderId = raw['activeProviderId'] as String?;
+      }
+      if (raw.containsKey('creatorProviderId')) {
+        s.creatorProviderId = raw['creatorProviderId'] as String?;
+      }
+      if (raw.containsKey('visionProviderId')) {
+        s.visionProviderId = raw['visionProviderId'] as String?;
+      }
     }
     if (characters != null) s.characters = characters;
     if (personas != null) {
       s.personas = personas;
-      s.activePersonaId = raw['activePersonaId'] as String?;
+      if (raw.containsKey('activePersonaId')) {
+        s.activePersonaId = raw['activePersonaId'] as String?;
+      }
     }
     if (chats != null) s.chats = chats;
     if (lorebooks != null) s.lorebooks = lorebooks;
     if (presets != null) {
       s.presets = presets;
-      s.activePresetId = raw['activePresetId'] as String?;
+      if (raw.containsKey('activePresetId')) {
+        s.activePresetId = raw['activePresetId'] as String?;
+      }
     }
     if (creatorPresets != null) {
       s.creatorPresets = creatorPresets;
-      s.activeCreatorPresetId = raw['activeCreatorPresetId'] as String?;
+      if (raw.containsKey('activeCreatorPresetId')) {
+        s.activeCreatorPresetId = raw['activeCreatorPresetId'] as String?;
+      }
     }
     final ms = raw['modelSettings'];
     if (ms is Map) {
@@ -857,6 +996,10 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     }
     final ui = raw['uiPrefs'];
     if (ui is Map) s.uiPrefs = UiPrefs.fromJson(ui.cast<String, dynamic>());
+
+    // F3: restore regex rules, folders, the three extra settings singletons,
+    // and the botbooru profile (MERGE — only keys present in the file apply).
+    applyBackupSettingsCategory(s, raw);
 
     if (creatorSessions != null) {
       s.creatorSessions = creatorSessions;
@@ -1009,5 +1152,172 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     providerIds.length;
 
     s.notifyAndPersist();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mega-audit 2026-06-05 (F1/F2/F3): backup completeness for the "App
+// settings" category. The export/import had drifted behind several
+// persisted, user-editable top-level entities — `regexRules`, `folders`,
+// `liveSheetSettings`, `scriptSettings`, `guideSettings`, and the botbooru
+// creator profile — so a backup → restore on a new device SILENTLY lost
+// them. These two pure helpers are the single source of truth for which
+// keys ride the settings category (export writes them, import reads them),
+// and are unit-tested via a round-trip so the pair can't drift apart.
+//
+// Kept top-level (not on the State) so tests can call them without
+// pumping a widget. The legacy singletons (model/chat/memory/UI settings)
+// continue to be written/read inline in `_exportBlob`/`_applyImport`.
+
+/// Write the extended "App settings" keys from [s] into [blob].
+void writeBackupSettingsCategory(AppStore s, Map<String, dynamic> blob) {
+  // Pyre 1.1 (F4) regex find/replace rules — a fully-synced collection that
+  // was never in the backup. Recreating dozens of rules by hand is real work.
+  blob['regexRules'] = s.regexRules.map((r) => r.toJson()).toList();
+  // Library folders — user-created grouping; characters carry folderIds, so
+  // without the folder definitions the membership dangles on restore.
+  blob['folders'] = s.folders.map((f) => f.toJson()).toList();
+  // The three settings singletons the old "App settings" branch dropped.
+  blob['liveSheetSettings'] = s.liveSheetSettings.toJson();
+  blob['scriptSettings'] = s.scriptSettings.toJson();
+  blob['guideSettings'] = s.guideSettings.toJson();
+  // BotBooru creator profile (feeds the {{creator}} macro + Creator prompt).
+  blob['botbooruUsername'] = s.botbooruUsername;
+  if (s.botbooruAvatar != null) blob['botbooruAvatar'] = s.botbooruAvatar;
+  blob['botbooruAboutMe'] = s.botbooruAboutMe;
+  blob['botbooruTitle'] = s.botbooruTitle;
+  blob['botbooruPronouns'] = s.botbooruPronouns;
+  if (s.botbooruFeaturedCharacterId != null) {
+    blob['botbooruFeaturedCharacterId'] = s.botbooruFeaturedCharacterId;
+  }
+}
+
+/// Read the extended "App settings" keys from [raw] into [s]. MERGE
+/// semantics: a key absent from the blob leaves the store value untouched
+/// (so a partial / older backup never clobbers existing data).
+void applyBackupSettingsCategory(AppStore s, Map<String, dynamic> raw) {
+  if (raw.containsKey('regexRules')) {
+    s.regexRules = ((raw['regexRules'] as List?) ?? const [])
+        .map((r) => RegexRule.fromJson((r as Map).cast<String, dynamic>()))
+        .toList();
+  }
+  if (raw.containsKey('folders')) {
+    s.folders = ((raw['folders'] as List?) ?? const [])
+        .map((f) => Folder.fromJson((f as Map).cast<String, dynamic>()))
+        .toList();
+  }
+  final ls = raw['liveSheetSettings'];
+  if (ls is Map) {
+    s.liveSheetSettings =
+        LiveSheetSettings.fromJson(ls.cast<String, dynamic>());
+  }
+  final sc = raw['scriptSettings'];
+  if (sc is Map) {
+    s.scriptSettings = ScriptSettings.fromJson(sc.cast<String, dynamic>());
+  }
+  final gs = raw['guideSettings'];
+  if (gs is Map) {
+    s.guideSettings = GuideSettings.fromJson(gs.cast<String, dynamic>());
+  }
+  if (raw.containsKey('botbooruUsername')) {
+    s.botbooruUsername = (raw['botbooruUsername'] as String?) ?? '';
+  }
+  if (raw.containsKey('botbooruAvatar')) {
+    s.botbooruAvatar = raw['botbooruAvatar'] as String?;
+  }
+  if (raw.containsKey('botbooruAboutMe')) {
+    s.botbooruAboutMe = (raw['botbooruAboutMe'] as String?) ?? '';
+  }
+  if (raw.containsKey('botbooruTitle')) {
+    s.botbooruTitle = (raw['botbooruTitle'] as String?) ?? '';
+  }
+  if (raw.containsKey('botbooruPronouns')) {
+    s.botbooruPronouns = (raw['botbooruPronouns'] as String?) ?? '';
+  }
+  if (raw.containsKey('botbooruFeaturedCharacterId')) {
+    s.botbooruFeaturedCharacterId =
+        raw['botbooruFeaturedCharacterId'] as String?;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mega-audit 2026-06-05 (B-1, BLOCKER): backup attachment completeness.
+//
+// `_exportBlob` serialises characters / personas (and the botbooru profile
+// avatar, chat backgrounds, …) via `.toJson()`, which emits avatar / gallery
+// as `pyre://attachment/<hash>` REF strings only. The bytes live solely in
+// `attachments/<sha256>.bin` and were NEVER packed into the backup — so a
+// restore on a fresh install / second device resolved every ref to a missing
+// file → blank avatars + empty galleries. (Same-device restore worked, which
+// masked it: the .bin files were still there.)
+//
+// Fix: scan the SERIALISED blob for every `pyre://attachment/<hash>` ref
+// (across ALL included categories — characters, personas, chats, the global
+// + per-chat backgrounds, the botbooru profile avatar — and any future
+// ref-bearing field, for free, because we scan the JSON itself), read each
+// blob's bytes via the AttachmentStore, and embed a top-level
+// `attachments: { "<hash>": "<base64>" }` map (deduped by hash). On import,
+// every entry is written back via `AttachmentStore.store` BEFORE the
+// integrity sweep so the refs resolve. Backwards compatible: a backup with
+// no `attachments` map restores exactly as before.
+//
+// Kept top-level (not on the State) so the export→wipe→import round-trip is
+// unit-testable without pumping a widget.
+
+final RegExp _pyreRefRe = RegExp(r'pyre://attachment/([0-9a-f]{1,128})');
+
+/// Collect every `pyre://attachment/<hash>` ref reachable inside [blob] by
+/// scanning the encoded JSON. Walking the serialised text (rather than a
+/// hand-maintained list of fields) means a ref in ANY category — character
+/// avatar/gallery, persona avatar/gallery, chat background, the botbooru
+/// profile avatar, or a field added later — is captured automatically.
+/// Returns the distinct hashes.
+Set<String> collectBackupAttachmentHashes(Map<String, dynamic> blob) {
+  final encoded = jsonEncode(blob);
+  final out = <String>{};
+  for (final m in _pyreRefRe.allMatches(encoded)) {
+    out.add(m.group(1)!);
+  }
+  return out;
+}
+
+/// Read each referenced attachment's bytes and embed them as a top-level
+/// `attachments: { "<hash>": "<base64>" }` map on [blob] (mutates in place).
+/// Hashes whose bytes can't be read (e.g. a ref synced from a device that
+/// never pushed the blob, or web where there's no local store) are skipped —
+/// the restore simply won't have them, exactly like today. No-op (no
+/// `attachments` key written) when nothing is referenced.
+Future<void> embedBackupAttachments(Map<String, dynamic> blob) async {
+  final hashes = collectBackupAttachmentHashes(blob);
+  if (hashes.isEmpty) return;
+  final out = <String, String>{};
+  for (final hash in hashes) {
+    final bytes =
+        await AttachmentStore.readBytes('${AttachmentStore.urlPrefix}$hash');
+    if (bytes == null || bytes.isEmpty) continue;
+    out[hash] = base64Encode(bytes);
+  }
+  if (out.isNotEmpty) blob['attachments'] = out;
+}
+
+/// Recreate the `.bin` files for every entry in [raw]'s `attachments` map so
+/// the `pyre://attachment/<hash>` refs in the restored records resolve. Call
+/// BEFORE the integrity sweep. Tolerant: a missing/malformed `attachments`
+/// key is a no-op (backwards compatible with pre-fix backups); a single
+/// undecodable entry is skipped rather than aborting the whole restore.
+/// Content-addressed → re-storing bytes that already exist is a cheap no-op.
+Future<void> restoreBackupAttachments(Map<String, dynamic> raw) async {
+  final attachments = raw['attachments'];
+  if (attachments is! Map) return;
+  for (final entry in attachments.entries) {
+    final b64 = entry.value;
+    if (b64 is! String || b64.isEmpty) continue;
+    try {
+      final bytes = base64Decode(b64);
+      await AttachmentStore.store(Uint8List.fromList(bytes));
+    } catch (e) {
+      debugPrint('[BackupRestore] could not restore attachment '
+          '${entry.key}: $e');
+    }
   }
 }

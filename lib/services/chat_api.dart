@@ -21,7 +21,9 @@ import 'package:http/http.dart' as http;
 import '../models/models.dart';
 import 'lan_client.dart';
 import 'llm_debug_log.dart';
+import 'param_policy.dart';
 import 'prompt_post_processing.dart';
+import 'resolvers.dart' show isProviderHostAllowed;
 
 typedef ChatRole = String; // 'system' | 'user' | 'assistant'
 
@@ -187,7 +189,7 @@ ChatApiError _classifyNetworkError(Object e) {
 /// chat warning, the key is on-screen, screenshottable, and one paste
 /// away from leaking. This redacts both the `Bearer …` form and bare
 /// token shapes (the long base64/hex strings providers tend to issue).
-String _scrubProviderBody(String body) {
+String scrubProviderBody(String body, {String? apiKey}) {
   if (body.isEmpty) return body;
   var s = body;
   // `Bearer <token>` (any whitespace, any token chars).
@@ -214,6 +216,15 @@ String _scrubProviderBody(String body) {
     RegExp(r'\b(sk|sk_live|sk_test|pk_live|pk_test|or)[\-_][A-Za-z0-9]{16,}\b'),
     '[redacted-token]',
   );
+  // Audit 2026-06-04 (M4): some providers echo the key inside a JSON `message`
+  // in an UNrecognized shape (no Bearer/sk- prefix), e.g. "Invalid API key:
+  // 9f3a8c…". The rules above miss those, so as a final pass redact any literal
+  // occurrence of the active key itself. Guard on length so a trivially short
+  // key can't nuke common substrings.
+  final k = apiKey?.trim() ?? '';
+  if (k.length >= 6) {
+    s = s.replaceAll(k, '[redacted-key]');
+  }
   return s;
 }
 
@@ -292,7 +303,7 @@ Map<String, dynamic> buildRequestBody({
   // same list reference, so the body stays byte-identical for existing users.
   final processed =
       applyPromptPostProcessing(messages, provider.promptPostProcessing);
-  return <String, dynamic>{
+  final body = <String, dynamic>{
     // Per-provider extra params come FIRST so Pyre-managed fields
     // (model, messages, stream, sampling) win on any conflict. The
     // user can still inject orthogonal params here (reasoning toggle,
@@ -305,6 +316,13 @@ Map<String, dynamic> buildRequestBody({
     'stream': stream,
     ...?extraBody,
   };
+  // Mega-audit 2026-06-04: proactive per-kind/host param allowlist. For the
+  // handful of strict providers (OpenAI reasoning models, Mistral) this drops
+  // / renames the fields they'd hard-reject BEFORE the request goes out;
+  // default / unknown / localhost / OpenRouter / Venice get the SAME map
+  // reference back unchanged, so the body stays byte-identical for them. The
+  // universal 400-retry below is the reactive backstop for the long tail.
+  return safeBodyFor(provider, provider.model, body);
 }
 
 /// Streams partial completions as they arrive. The returned stream yields
@@ -337,6 +355,12 @@ Stream<String> streamChatCompletion({
   // structured-output pipeline injects `response_format: {type:
   // 'json_object'}` here. Null = byte-identical to the previous body.
   Map<String, dynamic>? extraBody,
+  // BLOCKER 1: fired (at most once) when this call hit a param-shape 4xx and
+  // fell back to the minimal-safe body — i.e. the provider rejected one of the
+  // extra body fields (the Creator build's `response_format`). The build latches
+  // a per-build flag on this so it stops re-sending `response_format` on every
+  // subsequent batch. Null = no-op for every other caller.
+  void Function()? onParamFallback,
 }) async* {
   // Wave CY.18.71: web/PWA proxy mode. When running in a browser tab
   // that's paired to a desktop Pyre server, we don't call the upstream
@@ -359,7 +383,10 @@ Stream<String> streamChatCompletion({
   }
   final url = Uri.parse(buildChatUrl(provider.baseUrl, 'chat/completions'));
 
-  final body = buildRequestBody(
+  // Mega-audit 2026-06-04: `body` is non-final so the universal param-error
+  // retry below can swap in the minimal-safe body; the diagnostics closure
+  // captures it by reference and logs whichever body actually ran.
+  var body = buildRequestBody(
     provider: provider,
     settings: settings,
     messages: messages,
@@ -405,14 +432,20 @@ Stream<String> streamChatCompletion({
     }
   }
 
-  final req = http.Request('POST', url);
-  req.headers.addAll({
-    'Content-Type': 'application/json',
-    'Accept': 'text/event-stream',
-    if (provider.apiKey.isNotEmpty) 'Authorization': 'Bearer ${provider.apiKey}',
-    ..._sanitiseHeaders(provider.headers),
-  });
-  req.body = jsonEncode(body);
+  // Build a fresh POST for the current `body`. Called twice at most: once
+  // normally, and once on a param-error retry with the minimal-safe body.
+  http.Request buildReq() {
+    final r = http.Request('POST', url);
+    r.headers.addAll({
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+      if (provider.apiKey.isNotEmpty)
+        'Authorization': 'Bearer ${provider.apiKey}',
+      ..._sanitiseHeaders(provider.headers),
+    });
+    r.body = jsonEncode(body);
+    return r;
+  }
 
   final client = http.Client();
   try {
@@ -436,31 +469,61 @@ Stream<String> streamChatCompletion({
     // provider URL was wrong. Now: `kind: ChatApiErrorKind.offline` for
     // DNS/no-route, `timeout` for stalls, `server` for HTTP 4xx/5xx,
     // and the UI renders a friendly message per kind.
-    final http.StreamedResponse resp;
-    try {
-      // Wave CY.18.120: local servers get a much longer connect window
-      // because a cold model can JIT-load for minutes before sending any
-      // response headers; hosted providers keep the tight 25s window.
-      resp = await client.send(req).timeout(
-        provider.kind == ProviderKind.localhost
-            ? _kLocalConnectTimeout
-            : const Duration(seconds: 25),
-        onTimeout: () => throw ChatApiError.timeout(
-            'Timed out connecting to the provider. For local servers a '
-            'model may still be loading; check the server and try again.'),
-      );
-    } catch (e) {
-      throw _classifyNetworkError(e);
+    // Send the current `req` and return the response. Throws a classified
+    // network error on a connect-level failure / timeout.
+    Future<http.StreamedResponse> send(http.Request r) async {
+      try {
+        // Wave CY.18.120: local servers get a much longer connect window
+        // because a cold model can JIT-load for minutes before sending any
+        // response headers; hosted providers keep the tight 25s window.
+        return await client.send(r).timeout(
+          provider.kind == ProviderKind.localhost
+              ? _kLocalConnectTimeout
+              : const Duration(seconds: 25),
+          onTimeout: () => throw ChatApiError.timeout(
+              'Timed out connecting to the provider. For local servers a '
+              'model may still be loading; check the server and try again.'),
+        );
+      } catch (e) {
+        throw _classifyNetworkError(e);
+      }
     }
+
+    var resp = await send(buildReq());
     if (resp.statusCode >= 400) {
       final errBody = await resp.stream.bytesToString();
-      // Wave CY.1: redact any leaked auth token/header before
-      // surfacing — the body is displayed in Snackbars / chat
-      // warnings.
-      throw ChatApiError(
-        _scrubProviderBody(errBody),
-        statusCode: resp.statusCode,
-      );
+      final scrubbed = scrubProviderBody(errBody, apiKey: provider.apiKey);
+      // Mega-audit 2026-06-04 (THE key fix): universal retry-without-extras.
+      // When a 4xx looks like a PARAMETER-shape rejection (unsupported /
+      // unrecognized / extra / mis-named param — see param_policy.dart),
+      // rebuild with the minimal safe set (model, messages, stream, token cap
+      // under both names) and retry EXACTLY ONCE. This makes the whole zoo of
+      // strict providers (OpenAI reasoning, Mistral, …) fail soft instead of
+      // dead-ending the user. Terminates — no loop; a second failure throws.
+      if (resp.statusCode < 500 && isUnsupportedParamError(scrubbed)) {
+        body = minimalRetryBody(body);
+        // BLOCKER 1: tell the caller a param field was rejected so a multi-call
+        // flow (the Creator build) can stop re-sending the rejected extras on
+        // its next call. Never let a misbehaving callback break the stream.
+        if (onParamFallback != null) {
+          try {
+            onParamFallback();
+          } catch (_) {}
+        }
+        resp = await send(buildReq());
+        if (resp.statusCode >= 400) {
+          final retryBody = await resp.stream.bytesToString();
+          throw ChatApiError(
+            scrubProviderBody(retryBody, apiKey: provider.apiKey),
+            statusCode: resp.statusCode,
+          );
+        }
+      } else {
+        // Wave CY.1: redact any leaked auth token/header before
+        // surfacing — the body is displayed in Snackbars / chat
+        // warnings.
+        throw ChatApiError(scrubbed, statusCode: resp.statusCode);
+      }
     }
 
     // Some providers silently ignore `stream: true` and return a
@@ -540,7 +603,7 @@ Stream<String> streamChatCompletion({
         }
       } catch (e) {
         throw ChatApiError(
-            'Non-SSE response and JSON parse failed: $e\n\nBody:\n${_scrubProviderBody(jsonBody)}');
+            'Non-SSE response and JSON parse failed: $e\n\nBody:\n${scrubProviderBody(jsonBody, apiKey: provider.apiKey)}');
       }
       return;
     }
@@ -622,13 +685,18 @@ Stream<String> streamChatCompletion({
             // Try both field names — prefer `reasoning_content` (more
             // explicit / DeepSeek-native) and fall back to `reasoning`
             // (OpenRouter-normalized).
+            // Mega-audit 2026-06-04 (F9): OpenRouter's newer streaming shape
+            // is `delta.reasoning_details: [...]` (an array of typed parts).
+            // Routes that emit ONLY the array would drop the reasoning channel
+            // entirely (the same family as the Wave BT empty-content bug), so
+            // read it as a third fallback after the two flat fields.
             final rcRaw = delta['reasoning_content'];
             final rRaw = delta['reasoning'];
             final reasoning = (rcRaw is String && rcRaw.isNotEmpty)
                 ? rcRaw
                 : (rRaw is String && rRaw.isNotEmpty)
                     ? rRaw
-                    : null;
+                    : extractReasoningDetailsText(delta['reasoning_details']);
             if (reasoning != null) {
               if (!openedThink) {
                 logBuf?.write('<think>');
@@ -766,7 +834,13 @@ Future<String> completeChat({
   // is a no-op → byte-identical body.
   final processed =
       applyPromptPostProcessing(messages, provider.promptPostProcessing);
-  final reqBody = <String, dynamic>{
+  // Mega-audit 2026-06-04: `reqBody` is non-final so the universal param-error
+  // retry below can swap in the minimal-safe body; the diagnostics closure
+  // captures it by reference and logs whichever body actually ran.
+  // `safeBodyFor` proactively drops/renames the fields strict providers
+  // (OpenAI reasoning, Mistral) reject; permissive providers get the same map
+  // back unchanged.
+  var reqBody = safeBodyFor(provider, provider.model, <String, dynamic>{
     ...provider.extraParams,
     'model': provider.model,
     'messages': processed.map((m) => m.toJson()).toList(),
@@ -774,7 +848,7 @@ Future<String> completeChat({
     if (stop != null && stop.isNotEmpty) 'stop': stop,
     'stream': false,
     ...?extraBody,
-  };
+  });
   void emitDebugRecord({
     required String response,
     String? finishReason,
@@ -812,27 +886,31 @@ Future<String> completeChat({
   // offline auto-summarise leaks `SocketException: Failed host lookup`
   // into MemoryErrors.log and the user sees console-speak gibberish
   // instead of a clean "looks like the device is offline" entry.
-  final http.Response resp;
+  // POST the current `reqBody`. Called twice at most: normally, then once
+  // more on a param-error retry with the minimal-safe body.
+  Future<http.Response> post() => http.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          if (provider.apiKey.isNotEmpty)
+            'Authorization': 'Bearer ${provider.apiKey}',
+          ..._sanitiseHeaders(provider.headers),
+        },
+        body: jsonEncode(reqBody),
+      ).timeout(
+        // Wave CY.18.120: local servers get a 5-minute one-shot window for a
+        // cold model load; hosted providers keep the original 75s.
+        provider.kind == ProviderKind.localhost
+            ? _kLocalCompleteTimeout
+            : const Duration(seconds: 75),
+        onTimeout: () => throw ChatApiError.timeout(
+            'Request timed out. The model never produced a response (a local '
+            'server may still be loading the model).'),
+      );
+
+  http.Response resp;
   try {
-    resp = await http.post(
-      url,
-      headers: {
-        'Content-Type': 'application/json',
-        if (provider.apiKey.isNotEmpty)
-          'Authorization': 'Bearer ${provider.apiKey}',
-        ..._sanitiseHeaders(provider.headers),
-      },
-      body: jsonEncode(reqBody),
-    ).timeout(
-      // Wave CY.18.120: local servers get a 5-minute one-shot window for a
-      // cold model load; hosted providers keep the original 75s.
-      provider.kind == ProviderKind.localhost
-          ? _kLocalCompleteTimeout
-          : const Duration(seconds: 75),
-      onTimeout: () => throw ChatApiError.timeout(
-          'Request timed out. The model never produced a response (a local '
-          'server may still be loading the model).'),
-    );
+    resp = await post();
   } catch (e) {
     // Wave CY.18.214: record the failed call (empty response + the error
     // as the parse outcome) before rethrowing, so the diagnostics log
@@ -842,10 +920,33 @@ Future<String> completeChat({
     throw classified;
   }
   if (resp.statusCode >= 400) {
-    emitDebugRecord(
-        response: '', parseOutcome: 'http ${resp.statusCode}');
-    throw ChatApiError(_scrubProviderBody(resp.body),
-        statusCode: resp.statusCode);
+    final scrubbed = scrubProviderBody(resp.body, apiKey: provider.apiKey);
+    // Mega-audit 2026-06-04 (THE key fix): universal retry-without-extras on a
+    // parameter-shape 4xx. Rebuild with the minimal safe set (model, messages,
+    // stream, token cap under both names) and retry EXACTLY ONCE so strict
+    // providers (OpenAI reasoning, Mistral, …) fail soft. Terminates — a
+    // second failure throws.
+    if (resp.statusCode < 500 && isUnsupportedParamError(scrubbed)) {
+      reqBody = minimalRetryBody(reqBody);
+      try {
+        resp = await post();
+      } catch (e) {
+        final classified = _classifyNetworkError(e);
+        emitDebugRecord(response: '', parseOutcome: 'error: $classified');
+        throw classified;
+      }
+      if (resp.statusCode >= 400) {
+        emitDebugRecord(
+            response: '', parseOutcome: 'http ${resp.statusCode}');
+        throw ChatApiError(
+            scrubProviderBody(resp.body, apiKey: provider.apiKey),
+            statusCode: resp.statusCode);
+      }
+    } else {
+      emitDebugRecord(
+          response: '', parseOutcome: 'http ${resp.statusCode}');
+      throw ChatApiError(scrubbed, statusCode: resp.statusCode);
+    }
   }
   final obj = jsonDecode(resp.body);
   final choices = obj['choices'];
@@ -897,6 +998,18 @@ Future<String> completeChatStreamed({
   // `content` — and thus the return value — comes back empty). Null = no-op,
   // so every other caller is byte-identical.
   StringBuffer? rawSink,
+  // Wave CY.18.270: when the stripped visible content is EMPTY, fall back to
+  // the reasoning channel's text (via [recoverReasoningFromRaw]). Mirrors the
+  // one-shot [extractCompletionMessageText] fallback so the LTM summariser
+  // gets a usable recap from a reasoning model that emits its whole answer in
+  // the `<think>` channel instead of silently producing no checkpoint.
+  // Default false ⇒ no behaviour change for the chat path and every other
+  // existing caller (visible content always wins; reasoning is fallback-only).
+  bool allowReasoningFallback = false,
+  // BLOCKER 1: forwarded to streamChatCompletion — fires when this call fell
+  // back to the minimal body because the provider rejected an extra param
+  // (the Creator build's `response_format`). Null = no-op.
+  void Function()? onParamFallback,
 }) async {
   final buf = StringBuffer();
   await for (final chunk in streamChatCompletion(
@@ -906,6 +1019,7 @@ Future<String> completeChatStreamed({
     stop: stop,
     debugTag: debugTag,
     extraBody: extraBody,
+    onParamFallback: onParamFallback,
   )) {
     buf.write(chunk);
   }
@@ -917,7 +1031,15 @@ Future<String> completeChatStreamed({
         .replaceAll(pyreFinishSentinelRegex, '')
         .replaceAll(pyreDroppedFramesRegex, ''));
   }
-  return stripStreamArtifacts(raw);
+  final stripped = stripStreamArtifacts(raw);
+  // Wave CY.18.270: visible content wins; only when it's empty AND the caller
+  // opted in do we recover the reasoning channel (the LTM summariser does, so
+  // a reasoning-only model still yields a usable recap instead of nothing).
+  if (stripped.isEmpty && allowReasoningFallback) {
+    final recovered = recoverReasoningFromRaw(raw);
+    if (recovered != null && recovered.isNotEmpty) return recovered;
+  }
+  return stripped;
 }
 
 /// Strip Pyre's internal streaming sentinels (finish-reason, dropped-frame)
@@ -926,6 +1048,39 @@ Future<String> completeChatStreamed({
 String stripStreamArtifacts(String raw) => _stripThinkBlocks(raw
     .replaceAll(pyreFinishSentinelRegex, '')
     .replaceAll(pyreDroppedFramesRegex, ''));
+
+/// Wave CY.18.270: recover the REASONING-channel text from an accumulated
+/// stream when the visible/stripped content came back empty. The streaming
+/// transport wraps reasoning tokens (`delta.reasoning` / `reasoning_content`)
+/// in `<think>…</think>` (see the SSE + JSON-fallback branches above); for a
+/// reasoning model that emits its WHOLE answer in the reasoning channel
+/// (Venice's uncensored Qwen, DeepSeek-R1, …) [stripStreamArtifacts] returns
+/// '' and the LTM summariser silently produced no checkpoint.
+///
+/// This is the STREAMING-path twin of [extractCompletionMessageText]'s
+/// reasoning fallback, and mirrors its precedence: callers use the stripped
+/// visible content FIRST and only fall back to this when that is empty.
+///
+/// Returns the inner text of the FIRST `<think>…</think>` block (Pyre
+/// sentinels removed, any nested tags stripped, trimmed), or null when there
+/// is no usable reasoning text. Pure + testable.
+String? recoverReasoningFromRaw(String raw) {
+  final cleaned =
+      raw.replaceAll(pyreFinishSentinelRegex, '').replaceAll(
+            pyreDroppedFramesRegex,
+            '',
+          );
+  final match = _completionThinkBlock.firstMatch(cleaned);
+  if (match == null) return null;
+  // Inner text of `<think>…</think>` with any nested tags stripped.
+  var inner = match
+      .group(0)!
+      .replaceAll(RegExp(r'^<think>', caseSensitive: false), '')
+      .replaceAll(RegExp(r'</think>$', caseSensitive: false), '')
+      .replaceAll(RegExp(r'</?think>', caseSensitive: false), '')
+      .trim();
+  return inner.isEmpty ? null : inner;
+}
 
 // Regexes for the one-shot completion text extraction. Mirror
 // ChatText.stripReasoning (widgets/chat_text.dart) but live here so the
@@ -990,6 +1145,19 @@ Future<void> warmUpProvider(ApiProvider provider) async {
   // Nothing to load if we don't know where to send the request or which
   // model to ask for (e.g. a half-filled provider row).
   if (provider.baseUrl.trim().isEmpty || provider.model.trim().isEmpty) {
+    return;
+  }
+  // Mega-audit 2026-06-05 (H-7): this fires UNATTENDED at launch / on save,
+  // so it's the highest-risk SSRF surface. Refuse to auto-warm an
+  // External/proxy provider whose URL points at a private/internal host —
+  // a synced or imported record could otherwise make the app probe an
+  // attacker-chosen internal address with no user action. The explicit
+  // localhost kind (LM Studio/Ollama) is exempt: reaching a local/LAN
+  // server is its entire purpose.
+  if (!isProviderHostAllowed(provider.baseUrl,
+      isLocalhostKind: provider.kind == ProviderKind.localhost)) {
+    debugPrint('warmUpProvider(${provider.name}) skipped: '
+        'non-localhost provider points at a private/internal host');
     return;
   }
   try {
@@ -1126,7 +1294,20 @@ Stream<String> _streamViaLanProxy({
     // event a `data:` line carries the chunk. `event: error` signals
     // an upstream LLM failure the server forwarded.
     final buf = StringBuffer();
-    await for (final chunk in resp.stream.transform(utf8.decoder)) {
+    // Audit 2026-06-04 (High): inter-chunk stall timeout. The connect above is
+    // bounded, but a server that stalls AFTER headers (dead upstream worker,
+    // hung proxy) would otherwise leave the web/PWA chat on "Generating…"
+    // forever with no error + no Retry. The native SSE path already guards this
+    // with the same kind-aware stall timeout; mirror it here.
+    final stall = provider.kind == ProviderKind.localhost
+        ? _kLocalStreamStallTimeout
+        : const Duration(seconds: 45);
+    await for (final chunk
+        in resp.stream.transform(utf8.decoder).timeout(stall, onTimeout: (sink) {
+      sink.addError(ChatApiError(
+          'LAN proxy stalled - no data from the PC server. It may have lost '
+          'its upstream connection.'));
+    })) {
       buf.write(chunk);
       while (true) {
         final s = buf.toString();

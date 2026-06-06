@@ -27,6 +27,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -37,6 +38,7 @@ import '../services/attachment_store.dart';
 import '../services/png_encoder.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
+import 'export_snack.dart';
 
 /// Wave CY.18.251: one file to inject into the page's `<input type=file>`.
 ///
@@ -51,6 +53,12 @@ class PyreUploadFile {
   const PyreUploadFile(this.name, this.b64);
 }
 
+/// Wave CY.18.260: hard cap on the decoded card PNG bytes posted by the
+/// in-webview download hook ({cardB64}). A real chara_card PNG is far smaller;
+/// this rejects an absurdly large base64 blob before it reaches the importer
+/// (mirrors the 25 MB `fetchCappedNoRedirect` cap the native re-fetch enforced).
+const int _kCardBytesMaxLen = 25 * 1024 * 1024; // 25 MB
+
 class DesktopBotbooruWebview extends StatefulWidget {
   final String initialUrl;
 
@@ -64,6 +72,31 @@ class DesktopBotbooruWebview extends StatefulWidget {
   /// (an empty list when the page has no gallery).
   final void Function(String url, List<String> galleryDomSrcs)
       onImportCurrentUrl;
+
+  /// Wave CY.18.260: FRONTEND-ONLY CHARACTER import from BYTES. The download
+  /// hook now fetches the card PNG INSIDE the authenticated webview
+  /// (`credentials:'include'`) and posts the bytes (base64) — so the parent
+  /// imports from the decoded bytes and makes NO HTTP request (BotBooru
+  /// bot-gates `/download/png`, breaking a cookie-less native re-fetch).
+  /// [galleryDomSrcs] are the scraped `#post-mini-gallery img` srcs.
+  final void Function(Uint8List bytes, List<String> galleryDomSrcs)
+      onImportCardBytes;
+
+  /// Wave CY.18.260: the in-webview card fetch failed (network / auth / HTTP).
+  /// The parent shows a friendly snackbar. [message] is the JS error text.
+  final void Function(String message) onCardError;
+
+  /// FRONTEND-ONLY LOREBOOK import. Called with the raw lorebook JSON TEXT that
+  /// the download hook fetched INSIDE the logged-in webview session (the app
+  /// must never call BotBooru's API). The parent parses the text directly — no
+  /// HTTP request is issued for it. [nameHint] is the page's lorebook title
+  /// (BotBooru's download JSON has an empty top-level `name`); the parent uses
+  /// it only when the JSON's own name is blank.
+  final void Function(String jsonText, {String? nameHint}) onImportLorebookJson;
+
+  /// Called when the in-webview lorebook fetch failed (network/auth/HTTP). The
+  /// parent shows a friendly snackbar. [message] is the JS error text.
+  final void Function(String message) onLorebookError;
 
   /// Required: a back-to-landing handler. The toolbar's Back button
   /// calls this — there's no other way out of the embed (the parent's
@@ -89,6 +122,10 @@ class DesktopBotbooruWebview extends StatefulWidget {
     super.key,
     required this.initialUrl,
     required this.onImportCurrentUrl,
+    required this.onImportCardBytes,
+    required this.onCardError,
+    required this.onImportLorebookJson,
+    required this.onLorebookError,
     required this.onClose,
     this.onPickCardsForUpload,
   });
@@ -192,6 +229,55 @@ class _DesktopBotbooruWebviewState extends State<DesktopBotbooruWebview> {
               // and leaves nothing reusable behind. The payload is a JSON
               // literal embedded directly in the script body.
               await _controller.executeScript(_setFilesIife(payload));
+              return;
+            }
+          }
+          // FRONTEND-ONLY LOREBOOK: the download hook fetches the lorebook
+          // JSON inside the logged-in session and posts {lorebookJson: text}
+          // (or {lorebookError: msg} on failure). Route these BEFORE the URL
+          // path — they carry JSON/an error, not a URL, and the parent must
+          // NOT make any HTTP request for them.
+          if (t.startsWith('{')) {
+            final probe = jsonDecode(t);
+            if (probe is Map && probe['lorebookJson'] is String) {
+              final hint = probe['lorebookName'];
+              widget.onImportLorebookJson(
+                probe['lorebookJson'] as String,
+                nameHint: hint is String ? hint : null,
+              );
+              return;
+            }
+            if (probe is Map && probe['lorebookError'] is String) {
+              widget.onLorebookError(probe['lorebookError'] as String);
+              return;
+            }
+            // Wave CY.18.260: FRONTEND-ONLY CHARACTER — the hook fetched the
+            // card PNG inside the logged-in session and posts {cardB64, gallery}
+            // (or {cardError} on failure). Route these BEFORE the URL path —
+            // they carry bytes/an error, not a URL, and the parent must NOT make
+            // any HTTP request for them. Decode + size-cap the base64 here so a
+            // hostile / huge blob can't reach the importer.
+            if (probe is Map && probe['cardB64'] is String) {
+              final b64 = probe['cardB64'] as String;
+              Uint8List bytes;
+              try {
+                bytes = base64Decode(b64);
+              } catch (_) {
+                widget.onCardError('Could not read the downloaded card.');
+                return;
+              }
+              if (bytes.isEmpty || bytes.length > _kCardBytesMaxLen) {
+                widget.onCardError('Could not read the downloaded card.');
+                return;
+              }
+              final g = probe['gallery'];
+              final gallery =
+                  g is List ? g.whereType<String>().toList() : <String>[];
+              widget.onImportCardBytes(bytes, gallery);
+              return;
+            }
+            if (probe is Map && probe['cardError'] is String) {
+              widget.onCardError(probe['cardError'] as String);
               return;
             }
           }
@@ -342,7 +428,12 @@ class _DesktopBotbooruWebviewState extends State<DesktopBotbooruWebview> {
       } else {
         msg = 'No saved cards to export yet. Opened the folder anyway.';
       }
-      messenger.showSnackBar(SnackBar(content: Text(msg)));
+      // Guaranteed-dismiss notice: explorer.exe was launched just above and
+      // steals window focus, which can freeze this SnackBar's entrance
+      // animation so Flutter never arms the built-in auto-dismiss timer. The
+      // helper arms a frame-independent close so it can't hang forever.
+      // No Share action here (the user picks the file in botbooru's dialog).
+      showExportSnack(messenger, msg, null, visible: const Duration(seconds: 6));
     } catch (e) {
       if (!mounted) return;
       messenger.showSnackBar(
@@ -691,64 +782,169 @@ const String _downloadHookScript = r'''
         .filter(function(s) { return s.indexOf('mini-gallery') >= 0; });
     } catch (e) { return []; }
   }
-  function post(url) {
-    // Wave CY.18.148: send the gallery img srcs ALONGSIDE the download URL
-    // over the PROVEN postMessage channel. The Wave-142 path read the gallery
-    // via executeScript's RETURN value, which silently came back empty in
-    // this offscreen-composited WebView2 — so the gallery never imported.
-    // JSON envelope: { url, gallery:[...] }.
-    try {
-      window.chrome.webview.postMessage(
-        JSON.stringify({ url: url, gallery: readGallery() }));
-    } catch (_) {}
-  }
 
   document.addEventListener('click', function(e) {
     var a = e.target && e.target.closest && e.target.closest('a, button');
     if (!a) return;
     var url = a.href || a.getAttribute('data-url') || '';
-    var m = url.match(/\/download\/png\/(\d+)/);
-    if (!m && a.dataset && a.dataset.id) {
-      var btnText = (a.textContent || '').toLowerCase();
-      if (btnText.indexOf('download png') >= 0) {
-        url = location.origin + '/download/png/' + a.dataset.id;
-        m = url.match(/\/download\/png\/(\d+)/);
-      }
+
+    // LOREBOOK "Download JSON" — the real control is an anchor
+    // `<a href="/api/lorebooks/{id}/download.json" download>` (plus a
+    // `#download-json-btn` button nearby). Match either.
+    //
+    // FRONTEND-ONLY: the app must NEVER call BotBooru's API. That endpoint is
+    // bot-gated (403 to a cookie-less client) and only returns 200 inside a
+    // logged-in browser session. So instead of posting the URL for native to
+    // fetch, we fetch it HERE — inside the webview — with
+    // `credentials:'include'` (the user's session cookies) and post the JSON
+    // TEXT back over the SAME postMessage channel as a {lorebookJson:...}
+    // envelope (or {lorebookError:...} on failure). Native parses the text
+    // directly; it issues no HTTP request of its own.
+    var lb = url.match(/\/api\/lorebooks\/(\d+)\/download\.json/);
+    if (!lb && a.id === 'download-json-btn') {
+      var anchor = document.querySelector(
+        'a[href*="/api/lorebooks/"][href*="download.json"]');
+      var lbHref = anchor ? (anchor.href || '') : '';
+      if (lbHref) { lb = lbHref.match(/\/api\/lorebooks\/(\d+)\/download\.json/); url = lbHref; }
     }
-    if (m) {
+    if (lb) {
       e.preventDefault();
       e.stopPropagation();
-      post(location.origin + '/download/png/' + m[1]);
+      var abs = url.indexOf('http') === 0
+        ? url
+        : (location.origin + '/api/lorebooks/' + lb[1] + '/download.json');
+      // BotBooru's download JSON has an EMPTY top-level `name`; the real title
+      // only lives in the page. Capture it as a name hint: prefer a visible
+      // heading, else strip the ' — Botbooru' suffix off the tab title. The
+      // parent uses it ONLY when the JSON's own name is blank.
+      var lbName = '';
+      try {
+        var t1 = (document.title || '').split(/[—|]/)[0].trim();
+        if (t1 && t1.toLowerCase() !== 'botbooru') lbName = t1;
+      } catch (_) {}
+      if (!lbName) { try {
+        var og = document.querySelector('meta[property="og:title"]');
+        var oc = og && (og.getAttribute('content') || '');
+        if (oc) { var o = oc.split(/[—|]/)[0].trim();
+          if (o && o.toLowerCase() !== 'botbooru') lbName = o; }
+      } catch (_) {} }
+      if (!lbName) { try {
+        var hs = document.querySelectorAll('h1, h2, h3');
+        for (var hi = 0; hi < hs.length; hi++) {
+          var x = (hs[hi].textContent || '').trim();
+          if (x && x.length < 80) { lbName = x; break; }
+        }
+      } catch (_) {} }
+      fetch(abs, { credentials: 'include', headers: { 'Accept': 'application/json' } })
+        .then(function(r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.text();
+        })
+        .then(function(t) {
+          try { window.chrome.webview.postMessage(JSON.stringify({ lorebookJson: t, lorebookName: lbName })); } catch (_) {}
+        })
+        .catch(function(err) {
+          try {
+            window.chrome.webview.postMessage(JSON.stringify({
+              lorebookError: (err && err.message) || 'download failed'
+            }));
+          } catch (_) {}
+        });
+      return;
+    }
+
+    // CHARACTER "Download PNG". Wave CY.18.260: find the numeric card id from
+    // WHATEVER the (possibly-updated) markup exposes (see findCardId), then
+    // fetch the PNG INSIDE the authenticated webview and post the BYTES
+    // (base64) — BotBooru bot-gates /download/png so a native re-fetch stalls
+    // + trips the site's own "Failed to download PNG" alert. The legacy
+    // fetch + URL.createObjectURL overrides (which returned javascript:void(0)
+    // and broke the site's updated handler) are GONE — we own the fetch now.
+    var id = findCardId(a);
+    if (id) {
+      e.preventDefault();
+      e.stopPropagation();
+      var dl = location.origin + '/download/png/' + id;
+      fetch(dl, { credentials: 'include' })
+        .then(function(r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.blob();
+        })
+        .then(function(blob) {
+          return new Promise(function(resolve, reject) {
+            var fr = new FileReader();
+            fr.onloadend = function() {
+              var s = String(fr.result || '');
+              var c = s.indexOf(',');
+              resolve(c >= 0 ? s.slice(c + 1) : s);
+            };
+            fr.onerror = function() { reject(new Error('read failed')); };
+            fr.readAsDataURL(blob);
+          });
+        })
+        .then(function(b64) {
+          try {
+            window.chrome.webview.postMessage(JSON.stringify({
+              cardB64: b64, gallery: readGallery()
+            }));
+          } catch (_) {}
+        })
+        .catch(function(err) {
+          try {
+            window.chrome.webview.postMessage(JSON.stringify({
+              cardError: (err && err.message) || 'download failed'
+            }));
+          } catch (_) {}
+        });
+      return;
     }
   }, true);
 
-  var lastFetched = null;
-  var origFetch = window.fetch;
-  if (origFetch) {
-    window.fetch = function(input, init) {
+  // Wave CY.18.260: locate a BotBooru card id from a clicked element or any
+  // ancestor (mirrors the mobile __pyreFindCardId). Tries an href/data-url/
+  // data-src containing `/download/png/<id>`, then a numeric data-post-id /
+  // data-character-id / data-id, and finally — only for a control whose
+  // label/aria/title/text mentions "download png"/"png" — a bare numeric id.
+  // Best-effort: the exact new markup couldn't be inspected statically.
+  function findCardId(start) {
+    var node = start, depth = 0, sawPng = false;
+    while (node && node.nodeType === 1 && depth < 6) {
       try {
-        var u = (typeof input === 'string')
-          ? input
-          : (input && input.url) || '';
-        if (/\/download\/png\/\d+/.test(u)) lastFetched = u;
+        var href = (node.getAttribute && (node.getAttribute('href') ||
+          node.getAttribute('data-url') ||
+          node.getAttribute('data-src'))) || node.href || '';
+        var hm = String(href).match(/\/download\/png\/(\d+)/);
+        if (hm) return hm[1];
+        var label = ((node.getAttribute &&
+          (node.getAttribute('aria-label') ||
+           node.getAttribute('title'))) || '') + ' ' +
+          (node.textContent || '');
+        label = label.toLowerCase();
+        // Confirmed live (2026-06): <button id="download-png-btn"
+        // aria-label="Download character card as PNG"> — no href, no data id.
+        var isPng = node.id === 'download-png-btn' ||
+          label.indexOf('download png') >= 0 ||
+          label.indexOf('download character card') >= 0;
+        if (isPng) sawPng = true;
+        var pid = node.getAttribute && (
+          node.getAttribute('data-post-id') ||
+          node.getAttribute('data-character-id') ||
+          node.getAttribute('data-id'));
+        if (pid && /^\d+$/.test(pid) &&
+            (isPng || label.indexOf('png') >= 0)) {
+          return pid;
+        }
       } catch (_) {}
-      return origFetch.apply(this, arguments);
-    };
-  }
-  var origCreate = URL.createObjectURL;
-  if (origCreate) {
-    URL.createObjectURL = function(obj) {
-      var blobUrl = origCreate.apply(this, arguments);
-      if (lastFetched) {
-        var abs = lastFetched.indexOf('http') === 0
-          ? lastFetched
-          : (location.origin + lastFetched);
-        post(abs);
-        lastFetched = null;
-        return 'javascript:void(0)';
-      }
-      return blobUrl;
-    };
+      node = node.parentElement;
+      depth++;
+    }
+    // The id now lives ONLY in the page URL (/character/<id>, older /post/<id>);
+    // the button carries none. Endpoint /download/png/<id> is unchanged.
+    if (sawPng) {
+      var pm = String(location.pathname).match(/\/(?:character|post)\/(\d+)/);
+      if (pm) return pm[1];
+    }
+    return '';
   }
 })();
 ''';

@@ -59,4 +59,48 @@ void main() {
       expect(s.isTombstonedNewer('regexRule', 'r1', 1), isTrue);
     });
   });
+
+  group('AppStore default regex rule seeding', () {
+    test('seeds the bundled default formatting rule once + latches flag', () {
+      final s = AppStore();
+      expect(s.defaultRegexRulesSeeded, isFalse);
+      final added = s.seedDefaultRegexRulesIfNeeded();
+      expect(added, isTrue);
+      expect(s.defaultRegexRulesSeeded, isTrue);
+      expect(
+        s.regexRules.any((r) => r.id == kDefaultUnwrapQuoteItalicsRuleId),
+        isTrue,
+      );
+      // The seeded rule carries a real mtime so LAN sync ships it.
+      final seeded = s.regexRules
+          .firstWhere((r) => r.id == kDefaultUnwrapQuoteItalicsRuleId);
+      expect(seeded.mtime > 0, isTrue);
+    });
+
+    test('is a no-op once the flag is latched (respects a user deletion)', () {
+      final s = AppStore();
+      s.seedDefaultRegexRulesIfNeeded();
+      // User deletes the default rule.
+      s.removeRegexRule(kDefaultUnwrapQuoteItalicsRuleId);
+      expect(s.regexRules, isEmpty);
+      // A second seed pass must NOT bring it back (flag already latched).
+      final addedAgain = s.seedDefaultRegexRulesIfNeeded();
+      expect(addedAgain, isFalse);
+      expect(s.regexRules, isEmpty);
+    });
+
+    test('never duplicates by id when the rule already exists', () {
+      final s = AppStore();
+      // Simulate the rule already arriving via sync before the seed runs.
+      s.regexRules.add(RegexRule(id: kDefaultUnwrapQuoteItalicsRuleId));
+      final added = s.seedDefaultRegexRulesIfNeeded();
+      expect(added, isFalse);
+      expect(
+        s.regexRules
+            .where((r) => r.id == kDefaultUnwrapQuoteItalicsRuleId)
+            .length,
+        1,
+      );
+    });
+  });
 }

@@ -10,6 +10,7 @@ import '../services/st_preset_import.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
+import '../widgets/how_it_works_card.dart';
 import '../widgets/setting_slider.dart';
 
 class PresetsScreen extends StatelessWidget {
@@ -18,7 +19,10 @@ class PresetsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AppStore>();
-    final visible = store.visiblePresets;
+    // Filter out tombstoned (deleted:true) presets so a stray synced-in
+    // tombstone can't render as a phantom row (mirrors regex_rules_screen).
+    final visible =
+        store.visiblePresets.where((p) => !p.deleted).toList(growable: false);
     // The locked default is never listed and never previewable.
     // The "Default" pill on the active row only shows when the locked default
     // is actually selected — no other surface exposes its contents.
@@ -46,73 +50,149 @@ class PresetsScreen extends StatelessWidget {
       // applied whenever a preset leaves a field blank (the per-preset
       // overrides live inside the preset editor below). The card scrolls
       // with the list so a long preset list doesn't pin it off-screen.
-      body: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        children: [
-          const _DefaultGenerationCard(),
-          const SizedBox(height: 16),
-          const _SectionLabel('PRESETS'),
-          const SizedBox(height: 8),
-          for (final p in visible) ...[
-            Builder(
-              builder: (context) {
-                final active = p.id == store.activePresetId;
-                return Card(
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      radius: 20,
-                      backgroundColor: p.locked
-                          ? EmberColors.primary.withValues(alpha: 0.22)
-                          : EmberColors.bgElevated,
-                      child: Icon(
-                        p.locked ? Icons.lock_outline : Icons.layers_outlined,
-                        size: 18,
-                        color: p.locked
-                            ? EmberColors.primary
-                            : (active
-                                ? EmberColors.primary
-                                : EmberColors.textMid),
-                      ),
-                    ),
-                    title: Row(
-                      children: [
-                        Flexible(
-                          child: Text(p.name,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w600)),
-                        ),
-                        if (active) ...[
-                          const SizedBox(width: 6),
-                          _Pill(label: 'ACTIVE'),
-                        ],
-                        if (p.locked) ...[
-                          const SizedBox(width: 6),
-                          _Pill(label: 'DEFAULT'),
-                        ],
-                      ],
-                    ),
-                    subtitle: Text(
-                      p.locked
-                          ? 'Built-in preset · tuned for creative roleplay'
-                          : _previewLine(p),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: EmberColors.textMid),
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.more_vert,
-                          color: EmberColors.textMid),
-                      tooltip: 'Preset actions',
-                      onPressed: () => _openPresetKebab(context, p),
-                    ),
-                    onTap: () => store.setActivePreset(p.id),
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
+      //
+      // Perf-at-scale (audit 2026-06-05 #8): virtualized via ListView.builder
+      // so a big imported preset library (ST users hit 30+) doesn't build
+      // EVERY preset card up-front. The fixed header widgets (explainer +
+      // Default generation card + section label) are indices 0..N-1; the
+      // preset cards build lazily after them.
+      body: _buildList(visible),
+    );
+  }
+
+  Widget _buildList(List<Preset> visible) {
+    final header = <Widget>[
+      // ── How it works ──────────────────────────────────────────────
+      // Shared explainer card (collapsed by default), matching the
+      // Long-term Memory / Live Sheet / Script screens.
+      const HowItWorksCard(
+        title: 'How presets work',
+        subtitle: 'What a preset is, and how to switch.',
+        sections: [
+          HowItWorksSection('What it is', [
+            HowItWorksBlock.paragraph(
+                'A **preset** bundles the prompt structure Pyre sends '
+                'to the model — the main system prompt, an optional '
+                'post-history reminder (the jailbreak / prefill slot), '
+                'and the impersonate & continue nudges — together with '
+                'optional **sampling overrides** (temperature, top-p, '
+                'top-k, penalties).'),
+            HowItWorksBlock.paragraph(
+                'A sampling field left blank falls back to your global '
+                '**Default generation** values (the card below). Only '
+                'the fields you fill override the default.'),
+          ]),
+          HowItWorksSection('The default preset', [
+            HowItWorksBlock.bullet(
+                'The built-in **Pyre Default** is locked — it can\'t be '
+                'edited or deleted, so there\'s always a known-good '
+                'fallback.'),
+            HowItWorksBlock.bullet(
+                'To change it, open its menu and pick **Copy '
+                '(editable)** to fork it into a preset you can modify '
+                'freely.'),
+          ]),
+          HowItWorksSection('Building & importing', [
+            HowItWorksBlock.bullet(
+                'Tap **+** to author a preset from scratch, or fork the '
+                'default with Copy.'),
+            HowItWorksBlock.bullet(
+                '**Import a SillyTavern preset** with the upload button '
+                '— its prompts are merged and its post-history block is '
+                'captured.'),
+            HowItWorksBlock.bullet(
+                'Each preset can also **View details** or **Export '
+                'JSON** from its menu.'),
+          ]),
+          HowItWorksSection('Switching', [
+            HowItWorksBlock.bullet(
+                'Tap a preset to make it **active** — the active one is '
+                'used for every chat.'),
+            HowItWorksBlock.bullet(
+                'You can also **quick-switch** the active preset from '
+                'the in-chat kebab menu without leaving the chat.'),
+          ]),
         ],
+      ),
+      const SizedBox(height: 8),
+      const _DefaultGenerationCard(),
+      const SizedBox(height: 16),
+      const _SectionLabel('PRESETS'),
+      const SizedBox(height: 8),
+    ];
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      itemCount: header.length + visible.length,
+      itemBuilder: (context, i) {
+        if (i < header.length) return header[i];
+        final p = visible[i - header.length];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: _PresetCard(preset: p),
+        );
+      },
+    );
+  }
+}
+
+/// One preset row. Extracted from the inline `Builder` so the list can build
+/// lazily; reads the active id from the store so only this card rebuilds when
+/// the active preset changes.
+class _PresetCard extends StatelessWidget {
+  final Preset preset;
+  const _PresetCard({required this.preset});
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    final p = preset;
+    final active = p.id == store.activePresetId;
+    return Card(
+      child: ListTile(
+        leading: CircleAvatar(
+          radius: 20,
+          backgroundColor: p.locked
+              ? EmberColors.primary.withValues(alpha: 0.22)
+              : EmberColors.bgElevated,
+          child: Icon(
+            p.locked ? Icons.lock_outline : Icons.layers_outlined,
+            size: 18,
+            color: p.locked
+                ? EmberColors.primary
+                : (active ? EmberColors.primary : EmberColors.textMid),
+          ),
+        ),
+        title: Row(
+          children: [
+            Flexible(
+              child: Text(p.name,
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+            ),
+            if (active) ...[
+              const SizedBox(width: 6),
+              _Pill(label: 'ACTIVE'),
+            ],
+            if (p.locked) ...[
+              const SizedBox(width: 6),
+              _Pill(label: 'DEFAULT'),
+            ],
+          ],
+        ),
+        subtitle: Text(
+          p.locked
+              ? 'Built-in preset · tuned for creative roleplay'
+              : _previewLine(p),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: EmberColors.textMid),
+        ),
+        trailing: IconButton(
+          icon: const Icon(Icons.more_vert, color: EmberColors.textMid),
+          tooltip: 'Preset actions',
+          onPressed: () => _openPresetKebab(context, p),
+        ),
+        onTap: () => store.setActivePreset(p.id),
       ),
     );
   }
@@ -882,6 +962,9 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
         ),
       );
 
+  // H-3: dispose every controller this dialog created once it closes. The
+  // dialog body only reads them while open, so disposing after the await is
+  // safe; .whenComplete fires on both Save and dismiss.
   await showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -919,7 +1002,7 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
                   minLines: 4,
                   decoration: const InputDecoration(
                     hintText:
-                        'Supports {{char}}, {{user}}, {{description}}, {{personality}}, {{scenario}}, {{persona}}, {{mesExample}}, {{wiBefore}}, {{wiAfter}}.',
+                        'Supports {{char}}, {{user}}, {{description}}, {{personality}}, {{scenario}}, {{persona}}, {{mesExample}}, {{wiBefore}}.',
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -1085,6 +1168,13 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
       ],
     ),
   );
+  for (final c in <TextEditingController>[
+    nameCtl, mainCtl, postCtl, impCtl, cntCtl,
+    tempCtl, topPCtl, topKCtl, tokensCtl, freqCtl,
+    presCtl, minPCtl, topACtl, repCtl,
+  ]) {
+    c.dispose();
+  }
 }
 
 /// Pyre 1.1 (Prompt Manager) — the modular block list inside the preset editor.
@@ -1404,4 +1494,7 @@ Future<void> _showBlockEditor(
       ],
     ),
   );
+  // H-3: dispose the block-editor controllers once the dialog closes.
+  nameCtl.dispose();
+  contentCtl.dispose();
 }

@@ -5,6 +5,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart' show ZLibDecoder;
 import 'package:flutter/foundation.dart' show debugPrint;
 
 /// Wave CY.18.43: surface diagnostics for `parseCharaCardPng` failures.
@@ -109,6 +110,12 @@ Map<String, String> extractTextEntries(List<PngChunk> chunks) {
       // keyword \0 compressionFlag(1) compressionMethod(1) lang \0 trans \0 text
       final nullIdx = _findNull(c.data, 0);
       if (nullIdx < 0) continue;
+      // Audit 2026-06-04 (Low): bounds-guard a truncated iTXt chunk. If the
+      // data ends at/just past the keyword NUL, reading compressionFlag
+      // (nullIdx+1) / compressionMethod (nullIdx+2) throws RangeError — callers
+      // catch it but surface an ugly "RangeError" instead of the friendly
+      // "Not a valid character card". Need keyword\0 + flag + method present.
+      if (nullIdx + 2 >= c.data.length) continue;
       final key = _ascii(Uint8List.sublistView(c.data, 0, nullIdx));
       final compressionFlag = c.data[nullIdx + 1];
       final langNull = _findNull(c.data, nullIdx + 3);
@@ -122,8 +129,23 @@ Map<String, String> extractTextEntries(List<PngChunk> chunks) {
         } catch (_) {
           out[key] = _ascii(textBytes);
         }
+      } else {
+        // Audit 2026-06-04 [import-1-04]: a compressed iTXt chunk
+        // (compressionFlag == 1, method 0 = zlib/deflate) used to be
+        // silently skipped, so a perfectly valid card whose `chara`
+        // payload was stored compressed surfaced as the misleading
+        // "No chara metadata found … (not a Tavern Card?)". Inflate it
+        // here. ZLibDecoder is pure-Dart (web-safe) and `raw: false`
+        // expects the zlib header PNG iTXt uses. On any inflate/decode
+        // failure we fall back to skipping (the prior behaviour) so a
+        // genuinely corrupt chunk never throws out of the extractor.
+        try {
+          final inflated = const ZLibDecoder().decodeBytes(textBytes);
+          out[key] = utf8.decode(inflated, allowMalformed: true);
+        } catch (e) {
+          PngParserErrors.record('iTXt zlib inflate', e);
+        }
       }
-      // compressed iTXt skipped (would require zlib inflate)
     }
   }
   return out;
@@ -206,4 +228,33 @@ CharaCard parseCharaCardJson(String text) {
   final inner = parsed['data'];
   final card = (inner is Map<String, dynamic>) ? inner : parsed;
   return CharaCard(card: card, raw: parsed, imageBytes: null);
+}
+
+/// True when [bytes] begins with the 8-byte PNG signature.
+bool looksLikePng(Uint8List bytes) {
+  if (bytes.length < 8) return false;
+  for (var i = 0; i < 8; i++) {
+    if (bytes[i] != _pngSig[i]) return false;
+  }
+  return true;
+}
+
+/// Parse a downloaded chara-card blob by SNIFFING its content rather than
+/// trusting a URL extension.
+///
+/// Audit 2026-06-04 [import-1-01] / [import-1-09]: the Discover "Import by
+/// URL" bridge and the `?import=` web hand-off unconditionally called
+/// [parseCharaCardPng], so a valid `.json` direct link from an allowlisted
+/// host (catbox / pixeldrain) — or a RisuRealm `json-v2` download URL that
+/// has no `.json` suffix — failed with a confusing "Not a PNG" error. The
+/// typed-URL dialog branched on the extension, which still misses the
+/// extension-less `json-v2` case. Content-sniffing the bytes fixes both:
+///   - PNG signature present  → [parseCharaCardPng] (keeps the avatar).
+///   - otherwise              → [parseCharaCardJson] over a UTF-8 decode
+///     ([library-01]/[import-1-02]: never Latin-1, so accented/CJK/emoji
+///     card text round-trips; `allowMalformed` degrades gracefully instead
+///     of throwing on a non-UTF-8 blob).
+CharaCard parseCharaCard(Uint8List bytes) {
+  if (looksLikePng(bytes)) return parseCharaCardPng(bytes);
+  return parseCharaCardJson(utf8.decode(bytes, allowMalformed: true));
 }

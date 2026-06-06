@@ -11,8 +11,10 @@
 //   4. Version footer.
 
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../services/stability_mode.dart';
 import '../theme.dart';
 
 // Mirrors more_screen.dart placeholders. When these get real hosted
@@ -33,6 +35,47 @@ class AboutPyreScreen extends StatefulWidget {
 }
 
 class _AboutPyreScreenState extends State<AboutPyreScreen> {
+  // Windows-only "Stability mode" toggle state. Reflects the real on-disk
+  // marker file (StabilityMode.isEnabled), not a cached value.
+  bool _stabilityOn = false;
+
+  // Version shown in the footer. Read at runtime from PackageInfo (same source
+  // update_check.dart uses) so it always matches pubspec.yaml and can never
+  // drift like a hard-coded string. Empty until the async load completes.
+  String _version = '';
+
+  @override
+  void initState() {
+    super.initState();
+    if (StabilityMode.supported) {
+      _stabilityOn = StabilityMode.isEnabled();
+    }
+    PackageInfo.fromPlatform().then((info) {
+      if (!mounted) return;
+      setState(() => _version = info.version);
+    }).catchError((_) {
+      // Leave _version empty → footer shows a bare "Pyre" rather than a wrong
+      // number. Non-fatal.
+    });
+  }
+
+  Future<void> _setStability(bool value) async {
+    await StabilityMode.setEnabled(value);
+    if (!mounted) return;
+    // Re-read actual state so the switch never lies if the write failed.
+    setState(() => _stabilityOn = StabilityMode.isEnabled());
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _stabilityOn
+              ? 'Stability mode will apply the next time you start Pyre.'
+              : 'Stability mode off — restart Pyre to return to normal.',
+        ),
+      ),
+    );
+  }
+
   Future<void> _open(String url) async {
     try {
       await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
@@ -235,11 +278,73 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
               ],
             ),
           ),
+
+          // -------- Troubleshooting (Windows-only) --------
+          // Stability mode: an opt-in escape hatch for the rare
+          // flutter_windows.dll access-violation seen when the NVIDIA GeForce
+          // overlay (which hooks the DXGI present chain) is active. It steers
+          // the engine onto MSAA accessibility + the low-power GPU on the next
+          // launch. Default off — only flip it if Pyre crashes during heavy
+          // window interaction.
+          if (StabilityMode.supported) ...[
+            const SizedBox(height: 20),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(4, 4, 4, 8),
+              child: Text(
+                'Troubleshooting',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: EmberColors.textDim,
+                  letterSpacing: 0.4,
+                ),
+              ),
+            ),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(4, 4, 4, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SwitchListTile(
+                      value: _stabilityOn,
+                      onChanged: _setStability,
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 12),
+                      title: const Text('Stability mode'),
+                      subtitle: const Text(
+                        'For rare crashes during heavy use on some NVIDIA '
+                        'setups (often when the GeForce overlay is on). Uses a '
+                        'safer graphics + accessibility path. Takes effect '
+                        'after you restart Pyre.',
+                        style: TextStyle(
+                            color: EmberColors.textMid,
+                            fontSize: 12,
+                            height: 1.4),
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 2, 16, 6),
+                      child: Text(
+                        'Tip: if crashes continue, turning off the NVIDIA '
+                        'in-game overlay for Pyre is the most reliable fix.',
+                        style: TextStyle(
+                            color: EmberColors.textDim,
+                            fontSize: 11,
+                            height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+
           const SizedBox(height: 20),
-          const Center(
+          Center(
             child: Text(
-              'Pyre 1.0.8',
-              style: TextStyle(color: EmberColors.textDim, fontSize: 11),
+              _version.isEmpty ? 'Pyre' : 'Pyre $_version',
+              style: const TextStyle(color: EmberColors.textDim, fontSize: 11),
             ),
           ),
         ],

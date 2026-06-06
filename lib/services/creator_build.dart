@@ -27,7 +27,8 @@
 
 import 'chat_api.dart' show ChatTurn, stripStreamArtifacts;
 import 'creator_build_prompts.dart' show buildContinuationTurns;
-import 'creator_json.dart' show extractJsonObject, looksTruncatedJson;
+import 'creator_json.dart'
+    show extractJsonObject, looksTruncatedJson, endsInsideUnterminatedString;
 
 /// Maximum number of EXTRA continuation calls per batch when a response was
 /// truncated (on top of the 1 initial call). Bounds the loop so it terminates.
@@ -148,6 +149,18 @@ Future<Map<String, dynamic>?> _runBatch(
       final contTurns = buildContinuationTurns(priorTurns: turns, partial: raw);
       final more = stripStreamArtifacts(await call(contTurns));
       if (more.isEmpty) break; // no progress → stop the continuation
+      // MEDIUM 8 (seam guard): a poorly-behaved model, asked to continue, RE-
+      // EMITS the whole object from scratch (a leading `{…}`) instead of
+      // resuming where it stopped. Stitching that onto the partial corrupts the
+      // scan (`{"a":"trunc{"a":…}`). So when the continuation on its OWN is a
+      // complete, parseable object, prefer it and discard the partial.
+      if (endsInsideUnterminatedString(raw)) {
+        final standalone = extractJsonObject(more);
+        if (standalone != null) {
+          parsed = standalone;
+          break;
+        }
+      }
       raw += more; // concat the partial + continuation
       parsed = extractJsonObject(raw); // re-parse the stitched text
     }

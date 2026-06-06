@@ -47,13 +47,21 @@
 /// - [topLevel]         — a top-level chara_card_v2 canvas field that is NOT
 ///                        part of the labeled/XML Description (tagline,
 ///                        first_mes, creator_notes, post_history_instructions).
+/// - [greetingsList]    — the chara_card_v2 `alternate_greetings` list: a list
+///                        of FULL standalone opening messages (each the same
+///                        shape/voice as first_mes). The renderer surfaces it as
+///                        `out['alternate_greetings']` (a `List<String>`); it is
+///                        NEVER folded into the labeled/XML Description. Value
+///                        arrives as a JSON array of strings (a single String or
+///                        absent is tolerated → 1-element / empty list).
 enum CardFieldKind {
   prose,
   nestedBullets,
   bulletList,
   dialogueExamples,
   tags,
-  topLevel
+  topLevel,
+  greetingsList
 }
 
 /// The three Creator build modes.
@@ -446,6 +454,27 @@ const CardField _dialogueExamples = CardField(
     guidance:
         '4-6 exchanges; **bold** speech, *italic* action; ≥1 charged beat.');
 
+// Wave CY.18.270: the chara_card_v2 top-level `alternate_greetings` list.
+// PREVIOUSLY MISSING from EVERY mode's schema — so the structured build never
+// requested, mapped, or checked it, and a user who asked the Creator chat to
+// "add alternate greetings" got an acknowledgement but NO greetings on the card
+// (the conversational layer said it did; the deterministic build had no slot).
+// greetingsList so renderCard surfaces it as out['alternate_greetings'] (a
+// List<String>), NEVER folded into the Description. NOT required — extra
+// greetings beyond first_mes are always optional. CHARACTER + SCENARIO only;
+// persona has no greetings of its own by design (the persona-mode schema /
+// batches exclude it).
+const CardField _alternateGreetings = CardField(
+    key: 'alternate_greetings',
+    label: 'Alternate Greetings',
+    kind: CardFieldKind.greetingsList,
+    guidance:
+        '0-3 ALTERNATE opening messages. Each is a COMPLETE, standalone '
+        'greeting written in the SAME voice, tense, and formatting as '
+        'first_mes (in-character, action-interlaced), but offering a DIFFERENT '
+        'entry into the scene (a different mood, time, or hook) — not a '
+        'rewrite of first_mes. Empty list if none fit.');
+
 const CardField _tags = CardField(
     key: 'tags',
     label: 'Tags',
@@ -536,6 +565,25 @@ const CardField _scenario = CardField(
         '`scenario` field; it is the short framing, DISTINCT from the fuller '
         '<Scene Setup> section (do not just repeat it).');
 
+// The CHARACTER-card top-level `scenario` field. PREVIOUSLY MISSING from the
+// character schema + batches entirely — so a character build never requested,
+// mapped, or checked it, and the Scenario Sheet slot always came back blank.
+// Distinct from `_scenario` above: a character card has NO <Scene Setup>
+// section, so the guidance is worded for the meeting context, not the scenario
+// card's XML. Same top-level key `'scenario'` so renderCard's passthrough
+// surfaces it as out['scenario'] → Character.scenario. required so
+// missingRequired flags it if the model leaves it empty.
+const CardField _charScenario = CardField(
+    key: 'scenario',
+    label: 'Scenario',
+    kind: CardFieldKind.topLevel,
+    required: true,
+    guidance:
+        'The situation {{user}} meets {{char}} in — 2 to 4 sentences '
+        'establishing where they are, the immediate circumstances, and why '
+        'they\'re together. Sets the opening stage for roleplay; keep it '
+        'open-ended, not a full scene.');
+
 // ── Per-mode ordered schemas ──────────────────────────────────────────────
 
 /// Ordered field set for [mode]. The Description sections come first (in
@@ -546,7 +594,9 @@ List<CardField> schemaFor(CreatorMode mode) {
       return <CardField>[
         ..._descriptionSections,
         _tagline,
+        _charScenario,
         _firstMes,
+        _alternateGreetings,
         _dialogueExamples,
         _tags,
         _creatorNotes,
@@ -567,6 +617,7 @@ List<CardField> schemaFor(CreatorMode mode) {
         ..._scenarioSections,
         _scenario,
         _firstMes,
+        _alternateGreetings,
         _dialogueExamples,
         _tags,
         _postHistory,
@@ -650,10 +701,13 @@ List<List<String>> batchesFor(CreatorMode mode) {
           'environmentalReactions',
           'whatTheyWant',
         ],
-        // 4. closing: first_mes + dialogue + tags + notes + tagline + Notes.
+        // 4. closing: scenario + first_mes + alternate greetings + dialogue +
+        //    tags + notes + tagline.
         [
           'notes',
+          'scenario',
           'first_mes',
+          'alternate_greetings',
           'dialogueExamples',
           'tags',
           'creator_notes',
@@ -744,9 +798,11 @@ List<List<String>> batchesFor(CreatorMode mode) {
           'world',
           'npcs',
         ],
-        // 3. first_mes + dialogue + tags + post_history + creator_notes + tagline.
+        // 3. first_mes + alternate greetings + dialogue + tags + post_history +
+        //    creator_notes + tagline.
         [
           'first_mes',
+          'alternate_greetings',
           'dialogueExamples',
           'tags',
           'post_history_instructions',

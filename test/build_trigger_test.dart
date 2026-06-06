@@ -120,4 +120,81 @@ void main() {
       expect(isBuildCommand('a normal message about /build'), isFalse);
     });
   });
+
+  // C-2 (CRITICAL): a normal send during an in-flight structured build must be
+  // blocked, or it bumps `_streamGen` and the build silently discards itself.
+  group('creatorSendBlocked', () {
+    test('blocks a send while a structured build is in flight', () {
+      expect(
+        creatorSendBlocked(
+          trimmedText: 'hello',
+          hasPendingAttachments: false,
+          generating: false,
+          structuredBuilding: true,
+        ),
+        isTrue,
+        reason: 'mid-build send must be blocked (would discard the build)',
+      );
+    });
+
+    test('blocks a send while a normal generation is in flight', () {
+      expect(
+        creatorSendBlocked(
+          trimmedText: 'hello',
+          hasPendingAttachments: false,
+          generating: true,
+          structuredBuilding: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('blocks an empty send (no text, no attachments)', () {
+      expect(
+        creatorSendBlocked(
+          trimmedText: '',
+          hasPendingAttachments: false,
+          generating: false,
+          structuredBuilding: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('allows a normal send when idle with text', () {
+      expect(
+        creatorSendBlocked(
+          trimmedText: 'hello',
+          hasPendingAttachments: false,
+          generating: false,
+          structuredBuilding: false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('allows an attachment-only send (empty text, has attachment)', () {
+      expect(
+        creatorSendBlocked(
+          trimmedText: '',
+          hasPendingAttachments: true,
+          generating: false,
+          structuredBuilding: false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('attachment-only send is still blocked while building', () {
+      expect(
+        creatorSendBlocked(
+          trimmedText: '',
+          hasPendingAttachments: true,
+          generating: false,
+          structuredBuilding: true,
+        ),
+        isTrue,
+      );
+    });
+  });
 }

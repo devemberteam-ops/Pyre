@@ -175,9 +175,15 @@ LiveSheetSnapshot applyLiveSheetDelta({
       // character not yet tracked (a newly-prominent NPC). A `-`/remove op for
       // an unknown entity is still a no-op (nothing to remove).
       if (!op.isAdd) continue;
+      // Audit 2026-06-04 (Low): store the paren-stripped name so a later bare
+      // reference ("Bob") resolves to this entity (via _resolveOpEntity step 2)
+      // instead of auto-creating a second "Bob" when the first op arrived
+      // decorated ("Bob (the guard)").
+      final newName =
+          op.entityName.replaceFirst(_lsTrailingParen, '').trim();
       entity = LiveSheetEntity(
         id: newId('lse'),
-        name: op.entityName,
+        name: newName.isEmpty ? op.entityName : newName,
         kind: LiveSheetEntityKind.npc,
       );
       next.entities.add(entity);
@@ -451,7 +457,12 @@ String buildUpdateBody({required Chat chat, required LiveSheetSnapshot active}) 
       MessageKind.scene => 'Scene',
       MessageKind.system => 'System',
     };
-    buf.writeln('$role: ${m.text}');
+    // chat-core-1-01: strip `<think>…</think>` from assistant bodies so model
+    // reasoning never feeds the Live Sheet update source. Stored text keeps the
+    // reasoning (per-message toggle); only character turns carry it.
+    final text =
+        m.kind == MessageKind.char ? stripStreamArtifacts(m.text) : m.text;
+    buf.writeln('$role: $text');
   }
   return buf.toString();
 }
@@ -541,7 +552,11 @@ Future<Map<LiveSheetSection, List<LiveSheetFact>>?> seedLiveSheetEntity({
       MessageKind.scene => 'Scene',
       MessageKind.system => 'System',
     };
-    body.writeln('$role: ${m.text}');
+    // chat-core-1-01: strip `<think>…</think>` from assistant bodies (see
+    // buildUpdateBody). Stored text is untouched; only char turns carry it.
+    final text =
+        m.kind == MessageKind.char ? stripStreamArtifacts(m.text) : m.text;
+    body.writeln('$role: $text');
   }
   final turns = <ChatTurn>[
     ChatTurn('system', ls.seedPrompt),
@@ -581,6 +596,62 @@ LiveSheetSnapshot seedInitialSnapshot(Chat chat, List<LiveSheetEntity> entities)
     pathHash: idx >= 0 ? computePathHash(chat.messages, idx) : '',
     entities: entities,
   );
+}
+
+/// C-3: build the default Live Sheet entity list for a chat — the persona (as
+/// the `user` entity, falling back to "You" when there's no persona) plus every
+/// real (non-narrator) character in the chat as a `char` entity. Pure: mirrors
+/// the entity construction the Live Sheet screen used to do inline, so the
+/// chat-creation seed and the screen produce identical entities.
+List<LiveSheetEntity> buildLiveSheetEntities({
+  required String? personaName,
+  required Iterable<Character> characters,
+}) {
+  return <LiveSheetEntity>[
+    LiveSheetEntity(
+      id: newId('lse'),
+      name: (personaName != null && personaName.trim().isNotEmpty)
+          ? personaName
+          : 'You',
+      kind: LiveSheetEntityKind.user,
+    ),
+    for (final ch in characters)
+      // A narrator/scenario card has no body — seeding it as a physical entity
+      // makes the model hallucinate one. Skip it; persona + real NPCs seed.
+      if (!isNarratorCard(ch))
+        LiveSheetEntity(
+          id: newId('lse'),
+          name: ch.name,
+          kind: LiveSheetEntityKind.char,
+        ),
+  ];
+}
+
+/// C-3 (default-ON Live Sheet was inert on new chats): ensure an initial Live
+/// Sheet snapshot exists when the chat has Live Sheet enabled. Idempotent —
+/// no-op when disabled or when an active snapshot already exists (so callers
+/// can fire it freely on chat creation, on the first turn, or when the Live
+/// Sheet screen opens, without ever double-seeding). Returns true iff a fresh
+/// snapshot was appended.
+///
+/// Without this, `Chat.liveSheetEnabled` defaulting to true had no effect:
+/// nothing seeded a snapshot, so `shouldUpdateLiveSheet` stayed false and
+/// `buildLiveSheetBlock` returned '' forever — the default-ON flag never
+/// started tracking or injecting.
+bool ensureLiveSheetSeed({
+  required Chat chat,
+  required String? personaName,
+  required Iterable<Character> characters,
+}) {
+  if (!chat.liveSheetEnabled) return false;
+  if (activeLiveSheetSnapshot(chat) != null) return false;
+  final entities = buildLiveSheetEntities(
+    personaName: personaName,
+    characters: characters,
+  );
+  final snapshot = seedInitialSnapshot(chat, entities);
+  chat.liveSheetSnapshots.add(snapshot);
+  return true;
 }
 
 /// Re-anchors [snapshot] in place to the LATEST message, recomputing its

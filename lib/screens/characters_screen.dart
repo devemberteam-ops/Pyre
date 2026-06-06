@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -27,6 +28,7 @@ import '../widgets/avatar.dart';
 import '../widgets/card_import_confirm.dart';
 import '../widgets/confirm_dialog.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/export_snack.dart';
 import 'character_assistant_screen.dart';
 import 'character_details_sheet.dart';
 import 'character_edit_screen.dart';
@@ -44,6 +46,14 @@ class CharactersScreen extends StatefulWidget {
 class _CharactersScreenState extends State<CharactersScreen> {
   String _query = '';
 
+  // BATCH P2-ui (I): debounce the search box. Each keystroke previously called
+  // `setState` immediately, re-running the whole filter+sort and rebuilding the
+  // list per character typed. Now a keystroke only (re)schedules this timer;
+  // the actual `_query` update (and rebuild) fires once the user pauses, so a
+  // burst of typing collapses to a single filter pass.
+  Timer? _searchDebounce;
+  static const _searchDebounceDelay = Duration(milliseconds: 250);
+
   // Wave CY.18.61: published to FocusBus so the global Ctrl+F shortcut
   // registered in main.dart can call .requestFocus() without needing
   // a direct widget-tree path here.
@@ -57,6 +67,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     // Clear before disposing so a hot-reload-stale reference can't
     // be re-used after the node is dead.
     if (identical(FocusBus.charactersSearch, _searchFocus)) {
@@ -66,9 +77,35 @@ class _CharactersScreenState extends State<CharactersScreen> {
     super.dispose();
   }
 
+  /// Apply a new search query immediately, cancelling any pending debounce.
+  /// Used when the value must take effect now (segment switch clears it).
+  void _setQueryNow(String value) {
+    _searchDebounce?.cancel();
+    if (_query == value) return;
+    setState(() => _query = value);
+  }
+
+  /// Debounced search handler — see [_searchDebounce].
+  void _onQueryChanged(String raw) {
+    final next = raw.trim().toLowerCase();
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(_searchDebounceDelay, () {
+      if (!mounted) return;
+      if (_query == next) return;
+      setState(() => _query = next);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final store = context.watch<AppStore>();
+    // BATCH P2-ui (F): read (not watch). This screen is hosted inside an
+    // `ActiveTabGate` in the shell, which rebuilds it on every store notify
+    // while it's the active tab and freezes it while off-screen. A root
+    // `context.watch` here would re-subscribe and rebuild even when off-screen
+    // (the InheritedWidget marks dependents dirty regardless of the gate),
+    // defeating the gate — so the screen reads the store instead and lets the
+    // gate govern its rebuilds.
+    final store = context.read<AppStore>();
     final segment = store.uiPrefs.charactersSegment == 'personas' ? 1 : 0;
     final charCount = store.characters.length;
     final personaCount = store.personas.length;
@@ -101,7 +138,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
               onSelectionChanged: (s) {
                 store.setCharactersSegment(
                     s.first == 0 ? 'characters' : 'personas');
-                setState(() => _query = '');
+                _setQueryNow('');
               },
               style: ButtonStyle(
                 backgroundColor: WidgetStateProperty.resolveWith((states) =>
@@ -128,8 +165,7 @@ class _CharactersScreenState extends State<CharactersScreen> {
                 prefixIcon: const Icon(Icons.search, size: 18),
                 isDense: true,
               ),
-              onChanged: (v) =>
-                  setState(() => _query = v.trim().toLowerCase()),
+              onChanged: _onQueryChanged,
             ),
           ),
           Expanded(
@@ -253,7 +289,11 @@ Future<void> _pickAndImportPersona(BuildContext context) async {
     // so sniff for chara_card markers before falling back to a native persona.
     Persona persona;
     if (ext == 'json') {
-      final map = jsonDecode(String.fromCharCodes(bytes));
+      // Audit 2026-06-04 [library-01]: decode the file as UTF-8 (not Latin-1
+      // via String.fromCharCodes) so accented/CJK/emoji persona text survives.
+      // Decode once and reuse for both the chara_card sniff and the parser.
+      final jsonText = utf8.decode(bytes, allowMalformed: true);
+      final map = jsonDecode(jsonText);
       if (map is! Map<String, dynamic>) {
         throw const FormatException('Not a JSON object');
       }
@@ -279,7 +319,7 @@ Future<void> _pickAndImportPersona(BuildContext context) async {
           map.containsKey('gallery');
       final looksLikeCard = strongCardSignal && !hasNativePersonaKeys;
       if (looksLikeCard) {
-        final card = parseCharaCardJson(String.fromCharCodes(bytes));
+        final card = parseCharaCardJson(jsonText);
         persona = _personaFromImportedCard(characterFromCharaCard(card));
       } else {
         // Native Pyre persona. Re-id so importing a persona you already
@@ -308,6 +348,9 @@ Future<void> _pickAndImportPersona(BuildContext context) async {
       messenger.showSnackBar(const SnackBar(content: Text('Import cancelled.')));
       return;
     }
+    // B-2 / H-6: externalise a card-imported persona's inline avatar so it
+    // persists as a pyre:// ref, not inline base64.
+    await externalizePersonaImages(persona);
     store.addPersona(persona);
     messenger.showSnackBar(
       SnackBar(content: Text('Imported persona "${persona.name}"')),
@@ -660,38 +703,25 @@ Future<void> _exportCharacterAsPng(BuildContext context, Character c) async {
       }
     }
 
-    // Drop any lingering export banner first — opening the OS share
-    // sheet pauses a live SnackBar's dismiss timer, so it would
-    // otherwise stick around. Show the filename only, not the full
-    // path, so the bar stays compact.
-    messenger.hideCurrentSnackBar();
+    // Deliver per platform: on mobile the documents dir is app-private and
+    // invisible, so we open the share sheet directly; on desktop we show the
+    // saved-path confirmation + a Share button. (Filename only, not the full
+    // path, so the desktop bar stays compact.)
     final banner = galleryExported > 0
         ? 'Exported — ${file.uri.pathSegments.last} '
             '(+$galleryExported gallery ${galleryExported == 1 ? 'image' : 'images'})'
         : 'Exported — ${file.uri.pathSegments.last}';
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(banner),
-        action: SnackBarAction(
-          label: 'Share',
-          onPressed: () async {
-            // Hand the PNG(s) to the OS share sheet so the user can
-            // post it to botbooru / Discord / wherever in one tap.
-            try {
-              await Share.shareXFiles(
-                shareFiles,
-                subject: '${c.name} — Pyre card',
-                text: 'Character card exported from Pyre.',
-              );
-            } catch (e) {
-              messenger.showSnackBar(
-                SnackBar(content: Text('Share failed: $e')),
-              );
-            }
-          },
-        ),
-        duration: const Duration(seconds: 4),
-      ),
+    await deliverExport(
+      messenger,
+      shareFiles,
+      savedBanner: banner,
+      shareSubject: '${c.name} — Pyre card',
+      shareText: 'Character card exported from Pyre.',
+      // Mobile: offer a real "Save to device" (SAF → Downloads) for the card
+      // PNG; gallery images still ride along via the Share action.
+      saveBytes: pngBytes,
+      saveFileName: file.uri.pathSegments.last,
+      saveExtensions: const ['png'],
     );
   } catch (e) {
     messenger.showSnackBar(
@@ -788,32 +818,19 @@ Future<void> _exportPersonaAsPng(BuildContext context, Persona p) async {
       }
     }
 
-    messenger.hideCurrentSnackBar();
     final banner = galleryExported > 0
         ? 'Exported — ${file.uri.pathSegments.last} '
             '(+$galleryExported gallery ${galleryExported == 1 ? 'image' : 'images'})'
         : 'Exported — ${file.uri.pathSegments.last}';
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(banner),
-        action: SnackBarAction(
-          label: 'Share',
-          onPressed: () async {
-            try {
-              await Share.shareXFiles(
-                shareFiles,
-                subject: '${p.name} — Pyre persona',
-                text: 'Persona exported from Pyre as a character card.',
-              );
-            } catch (e) {
-              messenger.showSnackBar(
-                SnackBar(content: Text('Share failed: $e')),
-              );
-            }
-          },
-        ),
-        duration: const Duration(seconds: 4),
-      ),
+    await deliverExport(
+      messenger,
+      shareFiles,
+      savedBanner: banner,
+      shareSubject: '${p.name} — Pyre persona',
+      shareText: 'Persona exported from Pyre as a character card.',
+      saveBytes: pngBytes,
+      saveFileName: file.uri.pathSegments.last,
+      saveExtensions: const ['png'],
     );
   } catch (e) {
     messenger.showSnackBar(
@@ -840,10 +857,13 @@ Future<void> _pickAndImportCard(BuildContext context) async {
       );
       return;
     }
-    final ext = (f.extension ?? '').toLowerCase();
-    final card = ext == 'json'
-        ? parseCharaCardJson(String.fromCharCodes(bytes))
-        : parseCharaCardPng(bytes);
+    // Audit 2026-06-04 [library-01]/[import-1-02]: sniff the content rather
+    // than trust the picked extension. The old `.json` branch decoded bytes
+    // with `String.fromCharCodes` (Latin-1), mojibaking accented/CJK/emoji
+    // card text. `parseCharaCard` PNG-sniffs and otherwise UTF-8-decodes the
+    // JSON, so non-ASCII names round-trip and a mislabelled .png/.json still
+    // imports.
+    final card = parseCharaCard(bytes);
     final character = characterFromCharaCard(card);
     // Wave CY.18.141: BotBooru gallery auto-import REMOVED (owner's request:
     // don't call our API, use our frontend). A file import has no live frontend
@@ -875,6 +895,9 @@ Future<void> _pickAndImportCard(BuildContext context) async {
       character: character,
       charaCardData: card.card,
     );
+    // B-2 / H-6: externalise the inline avatar into the AttachmentStore so it
+    // persists as a pyre:// ref, not inline base64.
+    await externalizeCharacterImages(character);
     store.addCharacter(character);
     messenger.showSnackBar(
       SnackBar(content: Text('Imported ${character.name}')),
@@ -916,24 +939,27 @@ class _CharacterList extends StatelessWidget {
   }
 
   /// Count of chats that include this character — used by the
-  /// "Most chatted" sort and could surface in tooltips later.
-  int _chatCount(Character c) =>
-      store.chats.where((ch) => ch.characterIds.contains(c.id)).length;
+  /// "Most chatted" sort.
+  ///
+  /// BATCH P2-ui (B): reads P1's memoized `chatCountByCharacter` map (one
+  /// O(N_chats) pass, cached + invalidated on chat mutation) so the sort
+  /// comparator is O(1) per lookup instead of rescanning ALL chats per
+  /// comparison (the old O(N_chars · log N · N_chats) blow-up). Absent =
+  /// no chats = 0.
+  int _chatCount(Character c) => store.chatCountByCharacter[c.id] ?? 0;
 
   /// Last chat activity touching this character (max updatedAt across
   /// chats that contain them). 0 = never used → sorts to the bottom in
   /// recent mode.
-  int _lastUsedAt(Character c) {
-    var max = 0;
-    for (final ch in store.chats) {
-      if (!ch.characterIds.contains(c.id)) continue;
-      if (ch.updatedAt > max) max = ch.updatedAt;
-    }
-    return max;
-  }
+  ///
+  /// BATCH P2-ui (B): reads P1's memoized `lastUsedAtByCharacter` map; see
+  /// `_chatCount` above for the rationale. Absent = never used = 0.
+  int _lastUsedAt(Character c) => store.lastUsedAtByCharacter[c.id] ?? 0;
 
   List<Character> _applyFiltersAndSort() {
-    Iterable<Character> stream = store.characters;
+    // Filter out tombstoned (deleted:true) records so a stray synced-in
+    // tombstone can't render as a phantom card (mirrors regex_rules_screen).
+    Iterable<Character> stream = store.characters.where((c) => !c.deleted);
 
     // 1. Folder
     if (store.charFolderId != null) {
@@ -1010,6 +1036,15 @@ class _CharacterList extends StatelessWidget {
         store.charFolderId != null ||
         query.isNotEmpty;
 
+    // BATCH P2-ui (A): virtualize. The old `ListView(children:[...])` built a
+    // `_CharacterCard` (avatar decode + token chip) for EVERY filtered
+    // character up-front, on every rebuild — the primary "more cards =
+    // slower / OOM past ~100" surface. Flatten the favorites header + fav
+    // rows + rest rows into a single typed item list and feed it to a
+    // `ListView.builder` so only on-screen rows inflate. Scroll position is
+    // preserved by the builder the same way the Chats tab already is.
+    final items = _buildItems(favs, rest);
+
     return Column(
       children: [
         _OrgControlRow(store: store),
@@ -1024,22 +1059,80 @@ class _CharacterList extends StatelessWidget {
                       ? 'Clear filters or change sort to see more.'
                       : 'Nothing matches your search.',
                 )
-              : ListView(
+              : ListView.builder(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  children: [
-                    if (favs.isNotEmpty)
-                      _FavoritesSection(store: store, favs: favs),
-                    for (final c in rest) ...[
-                      _CharacterCard(store: store, character: c),
-                      const SizedBox(height: 8),
-                    ],
-                  ],
+                  itemCount: items.length,
+                  itemBuilder: (context, i) => items[i].build(store),
                 ),
         ),
       ],
     );
   }
+
+  /// BATCH P2-ui (A): flatten the favorites section + the remaining cards into
+  /// a single list of lazily-built rows for the `ListView.builder`. The
+  /// favorites header is its own item (so it scrolls with the list and the
+  /// collapse toggle still works); when collapsed, the fav rows are simply
+  /// not appended.
+  List<_CharItem> _buildItems(List<Character> favs, List<Character> rest) {
+    final items = <_CharItem>[];
+    if (favs.isNotEmpty) {
+      items.add(_FavHeaderItem(favs.length));
+      if (store.charFavoritesExpanded) {
+        for (final c in favs) {
+          items.add(_CardItem(c));
+        }
+      }
+      items.add(const _GapItem());
+    }
+    for (final c in rest) {
+      items.add(_CardItem(c));
+    }
+    return items;
+  }
+}
+
+/// BATCH P2-ui (A): one lazily-built row in the virtualized Characters list.
+/// Each concrete subtype renders itself given the [AppStore]; only the
+/// on-screen items are ever built by the enclosing `ListView.builder`.
+abstract class _CharItem {
+  const _CharItem();
+  Widget build(AppStore store);
+}
+
+/// The collapsible "FAVORITES (N)" header row.
+class _FavHeaderItem extends _CharItem {
+  final int count;
+  const _FavHeaderItem(this.count);
+
+  @override
+  Widget build(AppStore store) => _FavoritesHeader(
+        count: count,
+        expanded: store.charFavoritesExpanded,
+        onToggle: () =>
+            store.setCharFavoritesExpanded(!store.charFavoritesExpanded),
+      );
+}
+
+/// A character card row (+ its trailing 8px gap, matching the old spread).
+class _CardItem extends _CharItem {
+  final Character character;
+  const _CardItem(this.character);
+
+  @override
+  Widget build(AppStore store) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: _CharacterCard(store: store, character: character),
+      );
+}
+
+/// A small spacer between the favorites section and the rest of the list.
+class _GapItem extends _CharItem {
+  const _GapItem();
+
+  @override
+  Widget build(AppStore store) => const SizedBox(height: 4);
 }
 
 /// Wave CY.18.38: control row above the list. Sort dropdown +
@@ -1222,55 +1315,56 @@ class _ActiveTagChipsRow extends StatelessWidget {
   }
 }
 
-/// Collapsible "FAVORITES (N)" section that floats favorite chars
-/// to the top of the list. Header state is persisted in the store.
-class _FavoritesSection extends StatelessWidget {
-  final AppStore store;
-  final List<Character> favs;
-  const _FavoritesSection({required this.store, required this.favs});
+/// Collapsible "FAVORITES (N)" header that floats favorite chars to the top
+/// of the list. Header state is persisted in the store.
+///
+/// BATCH P2-ui (A): this is now the HEADER ONLY — the favorite rows are
+/// flattened into the parent `ListView.builder` (see `_buildItems`) so they
+/// virtualize like every other row instead of being eagerly built inside a
+/// `Column` here.
+/// The collapsible "FAVORITES (N)" header. Shared by the Characters and
+/// Personas lists (completeness-gaps: personas used to have a bare static
+/// header). The caller supplies the live [count], the current [expanded]
+/// state, and the toggle callback so the same widget drives either tab's
+/// persisted collapse state.
+class _FavoritesHeader extends StatelessWidget {
+  final int count;
+  final bool expanded;
+  final VoidCallback onToggle;
+  const _FavoritesHeader({
+    required this.count,
+    required this.expanded,
+    required this.onToggle,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final expanded = store.charFavoritesExpanded;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        InkWell(
-          onTap: () => store.setCharFavoritesExpanded(!expanded),
-          child: Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-            child: Row(
-              children: [
-                const Icon(Icons.star,
-                    size: 14, color: EmberColors.primary),
-                const SizedBox(width: 6),
-                Text(
-                  'FAVORITES (${favs.length})',
-                  style: const TextStyle(
-                    color: EmberColors.primary,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 11,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-                const Spacer(),
-                Icon(
-                  expanded ? Icons.expand_less : Icons.expand_more,
-                  size: 18,
-                  color: EmberColors.textMid,
-                ),
-              ],
+    return InkWell(
+      onTap: onToggle,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+        child: Row(
+          children: [
+            const Icon(Icons.star, size: 14, color: EmberColors.primary),
+            const SizedBox(width: 6),
+            Text(
+              'FAVORITES ($count)',
+              style: const TextStyle(
+                color: EmberColors.primary,
+                fontWeight: FontWeight.w700,
+                fontSize: 11,
+                letterSpacing: 1.2,
+              ),
             ),
-          ),
-        ),
-        if (expanded)
-          for (final c in favs) ...[
-            _CharacterCard(store: store, character: c),
-            const SizedBox(height: 8),
+            const Spacer(),
+            Icon(
+              expanded ? Icons.expand_less : Icons.expand_more,
+              size: 18,
+              color: EmberColors.textMid,
+            ),
           ],
-        const SizedBox(height: 4),
-      ],
+        ),
+      ),
     );
   }
 }
@@ -1291,10 +1385,14 @@ class _CharacterCard extends StatelessWidget {
           dataUrl: character.avatar,
           fallback: character.name,
           tappableLightbox: true,
+          // Non-destructive Recrop: tapping the (face-framed) thumbnail opens
+          // the WHOLE uncropped original, not the crop. Null when never
+          // recropped → AvatarBubble falls back to the full `avatar`.
+          fullImageUrl: character.avatarOriginal,
         ),
         title: Text(character.name,
             style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: _CharacterSubtitle(character: character),
+        subtitle: _CharacterSubtitle(store: store, character: character),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1336,13 +1434,17 @@ class _CharacterCard extends StatelessWidget {
 /// the user can spot at a glance which characters are heavy (e.g.
 /// 8k+ token monsters that will eat their context window).
 class _CharacterSubtitle extends StatelessWidget {
+  final AppStore store;
   final Character character;
-  const _CharacterSubtitle({required this.character});
+  const _CharacterSubtitle({required this.store, required this.character});
 
   @override
   Widget build(BuildContext context) {
+    // BATCH P2-ui (E): use P1's memoized per-character token estimate (keyed
+    // by id + content-hash) instead of re-summing every text field of the
+    // card on each rebuild.
     final tokenLabel =
-        formatTokenCount(approxTokensForCharacter(character));
+        formatTokenCount(store.approxTokensForCharacterCached(character));
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1427,17 +1529,28 @@ class _PersonaList extends StatelessWidget {
     }
   }
 
-  int _lastUsedAt(Persona p) {
-    var max = 0;
+  /// BATCH P2-ui (B): last chat activity per persona, precomputed in ONE
+  /// O(N_chats) pass. The old `_lastUsedAt` rescanned ALL chats per sort
+  /// comparison (O(N_personas · log N · N_chats)). There's no store-level
+  /// memoized persona map (persona N is intentionally small), so a single
+  /// local pass per build is the proportionate fix. Personas with no chats
+  /// are absent (callers treat absent as 0).
+  Map<String, int> _lastUsedAtByPersona() {
+    final m = <String, int>{};
     for (final ch in store.chats) {
-      if (ch.personaId != p.id) continue;
-      if (ch.updatedAt > max) max = ch.updatedAt;
+      final pid = ch.personaId;
+      if (pid == null) continue;
+      final prev = m[pid];
+      if (prev == null || ch.updatedAt > prev) m[pid] = ch.updatedAt;
     }
-    return max;
+    return m;
   }
 
   List<Persona> _applyFiltersAndSort() {
-    final list = store.personas.where(_matches).toList();
+    // Filter out tombstoned (deleted:true) records so a stray synced-in
+    // tombstone can't render as a phantom persona (mirrors regex_rules_screen).
+    final list =
+        store.personas.where((p) => !p.deleted && _matches(p)).toList();
     switch (store.personaSortKey) {
       case 'created':
         list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -1448,7 +1561,9 @@ class _PersonaList extends StatelessWidget {
         break;
       case 'recent':
       default:
-        list.sort((a, b) => _lastUsedAt(b).compareTo(_lastUsedAt(a)));
+        final lastUsed = _lastUsedAtByPersona();
+        list.sort((a, b) =>
+            (lastUsed[b.id] ?? 0).compareTo(lastUsed[a.id] ?? 0));
         break;
     }
     return list;
@@ -1498,45 +1613,74 @@ class _PersonaList extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: ListView(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            children: [
-              if (favs.isNotEmpty) ...[
-                const Padding(
-                  padding:
-                      EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                  child: Row(
-                    children: [
-                      Icon(Icons.star,
-                          size: 14, color: EmberColors.primary),
-                      SizedBox(width: 6),
-                      Text(
-                        'FAVORITES',
-                        style: TextStyle(
-                          color: EmberColors.primary,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 11,
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                for (final p in favs) ...[
-                  _PersonaCard(store: store, persona: p),
-                  const SizedBox(height: 8),
-                ],
-              ],
-              for (final p in rest) ...[
-                _PersonaCard(store: store, persona: p),
-                const SizedBox(height: 8),
-              ],
-            ],
-          ),
+          // BATCH P2-ui (A): virtualize the persona list the same way as the
+          // character list — only on-screen rows build. (N is small here, but
+          // the eager `ListView(children:[...])` still built every row +
+          // avatar on each rebuild; the builder keeps it consistent.)
+          child: Builder(builder: (context) {
+            final items = _buildPersonaItems(favs, rest);
+            return ListView.builder(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              itemCount: items.length,
+              itemBuilder: (context, i) => items[i].build(store),
+            );
+          }),
         ),
       ],
     );
   }
+
+  /// BATCH P2-ui (A): flatten the favorites header + fav rows + rest rows into
+  /// a single lazily-built item list for the `ListView.builder`.
+  List<_PersonaItem> _buildPersonaItems(
+      List<Persona> favs, List<Persona> rest) {
+    final items = <_PersonaItem>[];
+    if (favs.isNotEmpty) {
+      items.add(_PersonaFavHeaderItem(favs.length));
+      // Completeness-gaps: honor the persisted collapse state (parity with
+      // the Characters list — favorites can be folded away).
+      if (store.personaFavoritesExpanded) {
+        for (final p in favs) {
+          items.add(_PersonaCardItem(p));
+        }
+      }
+    }
+    for (final p in rest) {
+      items.add(_PersonaCardItem(p));
+    }
+    return items;
+  }
+}
+
+/// BATCH P2-ui (A): one lazily-built row in the virtualized Personas list.
+abstract class _PersonaItem {
+  const _PersonaItem();
+  Widget build(AppStore store);
+}
+
+class _PersonaFavHeaderItem extends _PersonaItem {
+  final int count;
+  const _PersonaFavHeaderItem(this.count);
+
+  @override
+  Widget build(AppStore store) => _FavoritesHeader(
+        count: count,
+        expanded: store.personaFavoritesExpanded,
+        onToggle: () => store
+            .setPersonaFavoritesExpanded(!store.personaFavoritesExpanded),
+      );
+}
+
+class _PersonaCardItem extends _PersonaItem {
+  final Persona persona;
+  const _PersonaCardItem(this.persona);
+
+  @override
+  Widget build(AppStore store) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: _PersonaCard(store: store, persona: persona),
+      );
 }
 
 class _PersonaCard extends StatelessWidget {
@@ -1554,7 +1698,11 @@ class _PersonaCard extends StatelessWidget {
     return Card(
       child: ListTile(
         leading: AvatarBubble(
-            dataUrl: p.avatar, fallback: p.name, tappableLightbox: true),
+            dataUrl: p.avatar,
+            fallback: p.name,
+            tappableLightbox: true,
+            // Non-destructive Recrop: tap opens the whole original, not the crop.
+            fullImageUrl: p.avatarOriginal),
         title: Row(
           children: [
             Flexible(
@@ -1728,6 +1876,25 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
               await _exportCharacterAsPng(context, c);
             },
           ),
+          // In-app Duplicate — mirrors the lorebook "Copy as new" / preset
+          // "Copy (editable)" convention. Non-destructive, so no confirm
+          // dialog; a fresh "<name> (copy)" appears right after the original.
+          ListTile(
+            leading: const Icon(Icons.copy_outlined),
+            title: const Text('Duplicate'),
+            subtitle: const Text(
+              'Make an editable copy of this character.',
+              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+            ),
+            onTap: () {
+              Navigator.pop(sheet);
+              final clone = store.duplicateCharacter(c.id);
+              if (clone == null) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Duplicated as "${clone.name}".')),
+              );
+            },
+          ),
           // Wave CY.18.38: "Add to folder" via a sub-sheet listing the
           // user's folders + a "create new" option.
           ListTile(
@@ -1825,6 +1992,23 @@ void _showPersonaMenu(BuildContext context, AppStore store, Persona p) {
             onTap: () async {
               Navigator.pop(sheet);
               await _exportPersonaAsPng(context, p);
+            },
+          ),
+          // In-app Duplicate — same convention as the character menu.
+          ListTile(
+            leading: const Icon(Icons.copy_outlined),
+            title: const Text('Duplicate'),
+            subtitle: const Text(
+              'Make an editable copy of this persona.',
+              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+            ),
+            onTap: () {
+              Navigator.pop(sheet);
+              final clone = store.duplicatePersona(p.id);
+              if (clone == null) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Duplicated as "${clone.name}".')),
+              );
             },
           ),
           const Divider(color: EmberColors.stroke),
@@ -1986,18 +2170,18 @@ Future<void> _showImportCharacterDialog(BuildContext context) async {
                         }
                         bytes = resp.bodyBytes;
                       }
-                      // Pick the parser by the resolved URL's extension: a
-                      // `.json` link is raw chara_card JSON, everything
-                      // else is treated as a chara_card_v2 PNG. A blob that
-                      // isn't a valid v1/v2 card throws here and the import
-                      // fails (we never save garbage).
-                      final isJson =
-                          target.path.toLowerCase().endsWith('.json');
+                      // Audit 2026-06-04 [import-1-09]: pick the parser by
+                      // SNIFFING the bytes, not the URL extension. The old
+                      // `.json`-suffix test missed a RisuRealm `json-v2`
+                      // download URL (no `.json` suffix) and any JSON served
+                      // from an extension-less link. `parseCharaCard` reads
+                      // the PNG signature and otherwise UTF-8-decodes the JSON
+                      // (non-ASCII safe). A blob that isn't a valid v1/v2 card
+                      // throws here and the import fails (we never save
+                      // garbage).
                       final CharaCard card;
                       try {
-                        card = isJson
-                            ? parseCharaCardJson(utf8.decode(bytes))
-                            : parseCharaCardPng(bytes);
+                        card = parseCharaCard(bytes);
                       } catch (e) {
                         throw 'Not a valid character card: $e';
                       }
@@ -2029,6 +2213,9 @@ Future<void> _showImportCharacterDialog(BuildContext context) async {
                         character: character,
                         charaCardData: card.card,
                       );
+                      // B-2 / H-6: externalise the inline avatar so it
+                      // persists as a pyre:// ref, not inline base64.
+                      await externalizeCharacterImages(character);
                       store.addCharacter(character);
                       if (ctx.mounted) Navigator.pop(ctx);
                     } catch (e) {
@@ -2050,6 +2237,7 @@ Future<void> _showImportCharacterDialog(BuildContext context) async {
       ),
     ),
   );
+  urlCtl.dispose(); // H-3: dispose the URL-import controller on dialog close.
 }
 
 /// Wave CY.18.255 (audit FIX 4): DNS-rebinding SSRF guard for the typed

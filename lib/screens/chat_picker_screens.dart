@@ -130,9 +130,14 @@ class _PersonaPickerScreenState extends State<PersonaPickerScreen> {
   Widget build(BuildContext context) {
     final store = context.watch<AppStore>();
     final q = _query.trim().toLowerCase();
+    // M-4: exclude soft-deleted (tombstoned) personas — a synced-in tombstone
+    // would otherwise show in the picker and, if selected, pin a deleted
+    // persona whose text keeps injecting until GC. Mirrors the main list in
+    // characters_screen (`_applyFiltersAndSort`).
+    final live = store.personas.where((p) => !p.deleted);
     final filtered = q.isEmpty
-        ? store.personas
-        : store.personas.where((p) {
+        ? live.toList()
+        : live.where((p) {
             final hay = '${p.name} ${p.tagline ?? ''} ${p.description}'
                 .toLowerCase();
             return hay.contains(q);
@@ -163,10 +168,16 @@ class _PersonaPickerScreenState extends State<PersonaPickerScreen> {
               onChanged: (v) => setState(() => _query = v),
             ),
           ),
+          // Perf-at-scale (audit 2026-06-05 #9): virtualized with
+          // ListView.builder — the "No persona" tile + divider are the fixed
+          // header (indices 0/1), an optional empty-state is index 2, then the
+          // persona rows build lazily. Mirrors the sibling character/lorebook
+          // pickers in this file. Avoids building every persona row up-front
+          // for users with hundreds of personas (seed flow + "Add as persona").
           Expanded(
-            child: ListView(
-              children: [
-                ListTile(
+            child: Builder(
+              builder: (context) {
+                final noPersonaTile = ListTile(
                   leading: const Icon(Icons.person_off_outlined,
                       color: EmberColors.textDim),
                   title: const Text('No persona'),
@@ -177,24 +188,17 @@ class _PersonaPickerScreenState extends State<PersonaPickerScreen> {
                   ),
                   trailing: (widget.showCurrentSelection &&
                           widget.selectedPersonaId == null)
-                      ? const Icon(Icons.check,
-                          color: EmberColors.primary)
+                      ? const Icon(Icons.check, color: EmberColors.primary)
                       : null,
                   onTap: () =>
                       Navigator.pop(context, pickerNoPersonaSentinel),
-                ),
-                const Divider(color: EmberColors.stroke, height: 1),
-                if (filtered.isEmpty && store.personas.isNotEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(32),
-                    child: EmptyState(
-                      icon: Icons.search_off,
-                      title: 'No matches',
-                      subtitle: 'Nothing matches your search.',
-                    ),
-                  ),
-                if (store.personas.isEmpty)
-                  const Padding(
+                );
+                const divider =
+                    Divider(color: EmberColors.stroke, height: 1);
+                // Optional empty-state shown right under the header.
+                Widget? emptyState;
+                if (store.personas.isEmpty) {
+                  emptyState = const Padding(
                     padding: EdgeInsets.all(32),
                     child: EmptyState(
                       icon: Icons.face_outlined,
@@ -202,32 +206,51 @@ class _PersonaPickerScreenState extends State<PersonaPickerScreen> {
                       subtitle:
                           'Create one from the Personas tab to play as a specific identity.',
                     ),
-                  ),
-                for (final p in filtered)
-                  ListTile(
-                    leading: AvatarBubble(
-                      dataUrl: p.avatar,
-                      fallback: p.name,
-                      radius: 18,
+                  );
+                } else if (filtered.isEmpty) {
+                  emptyState = const Padding(
+                    padding: EdgeInsets.all(32),
+                    child: EmptyState(
+                      icon: Icons.search_off,
+                      title: 'No matches',
+                      subtitle: 'Nothing matches your search.',
                     ),
-                    title: Text(p.name),
-                    subtitle: p.tagline != null && p.tagline!.isNotEmpty
-                        ? Text(
-                            p.tagline!,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: EmberColors.textMid, fontSize: 12),
-                          )
-                        : null,
-                    trailing: (widget.showCurrentSelection &&
-                            p.id == widget.selectedPersonaId)
-                        ? const Icon(Icons.check,
-                            color: EmberColors.primary)
-                        : null,
-                    onTap: () => Navigator.pop(context, p.id),
-                  ),
-              ],
+                  );
+                }
+                final headerCount = emptyState != null ? 3 : 2;
+                return ListView.builder(
+                  itemCount: headerCount + filtered.length,
+                  itemBuilder: (context, i) {
+                    if (i == 0) return noPersonaTile;
+                    if (i == 1) return divider;
+                    if (emptyState != null && i == 2) return emptyState;
+                    final p = filtered[i - headerCount];
+                    return ListTile(
+                      leading: AvatarBubble(
+                        dataUrl: p.avatar,
+                        fallback: p.name,
+                        radius: 18,
+                      ),
+                      title: Text(p.name),
+                      subtitle: p.tagline != null && p.tagline!.isNotEmpty
+                          ? Text(
+                              p.tagline!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: EmberColors.textMid, fontSize: 12),
+                            )
+                          : null,
+                      trailing: (widget.showCurrentSelection &&
+                              p.id == widget.selectedPersonaId)
+                          ? const Icon(Icons.check,
+                              color: EmberColors.primary)
+                          : null,
+                      onTap: () => Navigator.pop(context, p.id),
+                    );
+                  },
+                );
+              },
             ),
           ),
         ],

@@ -114,33 +114,20 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
   // ─── snapshot bootstrap ───────────────────────────────────────────────────
 
   void _ensureSnapshot(AppStore store, Chat chat) {
-    if (!chat.liveSheetEnabled) return;
-    if (lsheet.activeLiveSheetSnapshot(chat) != null) return;
-
+    // C-3: delegate to the shared (idempotent) seeder so the screen and the
+    // chat-creation path produce identical entities. Resolves the chat persona
+    // + non-narrator characters; only touches the chat when a snapshot was
+    // actually appended (so it still syncs).
     final persona = _chatPersona(store, chat);
-    final entities = <LiveSheetEntity>[
-      LiveSheetEntity(
-        id: newId('lse'),
-        name: persona?.name ?? 'You',
-        kind: LiveSheetEntityKind.user,
-      ),
-      ...chat.characterIds
-          .map((id) => chat.characterSnapshots[id] ?? store.characterById(id))
-          .whereType<Character>()
-          // Wave CY.18.218: a narrator/scenario card has no body — seeding it as
-          // a physical entity makes the model hallucinate one. Skip it; the
-          // persona + any real NPC entities still seed.
-          .where((ch) => !lsheet.isNarratorCard(ch))
-          .map((ch) => LiveSheetEntity(
-                id: newId('lse'),
-                name: ch.name,
-                kind: LiveSheetEntityKind.char,
-              )),
-    ];
-
-    final snapshot = lsheet.seedInitialSnapshot(chat, entities);
-    chat.liveSheetSnapshots.add(snapshot);
-    store.notifyAndPersist();
+    final characters = chat.characterIds
+        .map((id) => chat.characterSnapshots[id] ?? store.characterById(id))
+        .whereType<Character>();
+    final seeded = lsheet.ensureLiveSheetSeed(
+      chat: chat,
+      personaName: persona?.name,
+      characters: characters,
+    );
+    if (seeded) store.touchChat(chat); // F1: snapshot seed syncs
   }
 
   // ─── LLM actions ──────────────────────────────────────────────────────────
@@ -174,7 +161,7 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
         if (!mounted) return;
         if (snap != null) {
           lsheet.appendLiveSheetSnapshot(chat, snap);
-          store.notifyAndPersist();
+          store.touchChat(chat); // F1: snapshot update syncs
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('No significant changes detected.')),
@@ -220,7 +207,7 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
       // history already folded into the seed (double-counting). Once, after
       // every entity is seeded.
       lsheet.reanchorSnapshotToLatest(chat, active);
-      store.notifyAndPersist();
+      store.touchChat(chat); // F1: re-anchor + seeded facts sync
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Filled the sheet from the conversation.')),
@@ -289,7 +276,7 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
         for (final s in LiveSheetSection.values) {
           entity.sections[s] = sections[s] ?? [];
         }
-        store.notifyAndPersist();
+        store.touchChat(chat); // F1: seeded entity sections sync
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Could not generate sheet data.')),
@@ -342,7 +329,7 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
       kind: LiveSheetEntityKind.npc,
     );
     active.entities.add(entity);
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: NPC entity add syncs
 
     // Offer to generate from chat.
     if (!mounted) return;
@@ -405,7 +392,7 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
     if (ok != true || !mounted) return;
     _invalidateEntityControllers(entity.id);
     active.entities.removeWhere((e) => e.id == entity.id);
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: entity removal syncs
   }
 
   // ─── build ────────────────────────────────────────────────────────────────
@@ -447,7 +434,7 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
               onChanged: (v) {
                 chat.liveSheetEnabled = v;
                 if (v) _ensureSnapshot(store, chat);
-                store.notifyAndPersist();
+                store.touchChat(chat); // F1: liveSheetEnabled toggle syncs
               },
               title: const Text('Live Sheet'),
               subtitle: const Text(
@@ -512,7 +499,7 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
                 isSeeding: _seedingEntityId == entity.id,
                 controllerFor: _controllerFor,
                 onInvalidateSection: _invalidateSectionControllers,
-                onPersist: store.notifyAndPersist,
+                onPersist: () => store.touchChat(chat), // F1: fact edits sync
                 onRemoveEntity: () =>
                     _confirmRemoveEntity(store, chat, active, entity),
                 onSeedFromChat: () => _seedEntity(store, chat, entity),

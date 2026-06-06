@@ -23,14 +23,12 @@
 // individual inputs (avatar picker, username, title, pronouns,
 // about me textarea, featured picker).
 
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../services/attachment_store.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/lightbox.dart';
@@ -96,23 +94,33 @@ class _BotbooruProfileScreenState extends State<BotbooruProfileScreen> {
     final cropped = await cropAvatar(context, bytes);
     if (cropped == null) return;
     if (!mounted) return;
-    context.read<AppStore>().setBotbooruAvatar(
-        'data:image/png;base64,${base64Encode(cropped)}');
+    // B-2 / H-6: externalise into the AttachmentStore (pyre:// ref) instead of
+    // inline base64 (web falls back to a data URL).
+    final ref = await externalizeImageBytes(cropped);
+    if (!mounted) return;
+    context.read<AppStore>().setBotbooruAvatar(ref);
   }
 
   Future<void> _recropAvatar() async {
-    final url = context.read<AppStore>().botbooruAvatar;
-    if (url == null || !url.startsWith('data:')) return;
-    final comma = url.indexOf(',');
-    if (comma < 0) return;
+    final store = context.read<AppStore>();
+    // Non-destructive Recrop: crop from the ORIGINAL when one exists so a
+    // second recrop re-crops the full image, never a crop-of-a-crop.
+    final current = store.botbooruAvatar;
+    final source = store.botbooruAvatarOriginal ?? current;
+    if (source == null || source.isEmpty) return;
     try {
-      final bytes = base64Decode(url.substring(comma + 1));
+      // B-2 / H-6: resolve bytes via the shared helper (the avatar is now
+      // usually a `pyre://` ref), recrop, then re-externalise.
+      final bytes = await resolveAvatarBytes(source);
+      if (bytes == null || bytes.isEmpty) return;
       if (!mounted) return;
       final cropped = await cropAvatar(context, bytes);
       if (cropped == null) return;
+      final ref = await externalizeImageBytes(cropped);
       if (!mounted) return;
-      context.read<AppStore>().setBotbooruAvatar(
-          'data:image/png;base64,${base64Encode(cropped)}');
+      // Preserve the current full avatar as the original on the first recrop
+      // (ref copy — no re-externalize); later recrops keep it.
+      context.read<AppStore>().recropBotbooruAvatar(ref, original: current);
     } catch (_) {}
   }
 
@@ -149,6 +157,9 @@ class _BotbooruProfileScreenState extends State<BotbooruProfileScreen> {
   Widget build(BuildContext context) {
     final store = context.watch<AppStore>();
     final avatar = store.botbooruAvatar;
+    // Non-destructive Recrop: the lightbox opens the uncropped original when a
+    // recrop preserved one, so the WHOLE profile picture is viewable.
+    final avatarFull = store.botbooruAvatarOriginal ?? avatar;
     final username = store.botbooruUsername;
     final title = store.botbooruTitle.trim();
     final pronouns = store.botbooruPronouns.trim();
@@ -241,7 +252,7 @@ class _BotbooruProfileScreenState extends State<BotbooruProfileScreen> {
             onTapAvatarPicker: _pickAvatar,
             onTapAvatarLightbox: avatar == null
                 ? null
-                : () => _openLightbox(avatar, username),
+                : () => _openLightbox(avatarFull ?? avatar, username),
             onRecrop: avatar == null ? null : _recropAvatar,
             onRemove: avatar == null ? null : _removeAvatar,
           ),
@@ -464,7 +475,10 @@ class _AvatarCircle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bytes = _decode(dataUrl);
+    // B-2 / H-6: the avatar is now usually a `pyre://` ref (externalised on
+    // pick), so resolve it via the shared image resolver rather than a raw
+    // base64Decode (which only handled `data:` URLs).
+    final provider = Lightbox.resolveImage(dataUrl);
     return Container(
       width: size,
       height: size,
@@ -475,12 +489,12 @@ class _AvatarCircle extends StatelessWidget {
           color: EmberColors.primary.withValues(alpha: 0.45),
           width: 2,
         ),
-        image: bytes != null
-            ? DecorationImage(image: MemoryImage(bytes), fit: BoxFit.cover)
+        image: provider != null
+            ? DecorationImage(image: provider, fit: BoxFit.cover)
             : null,
       ),
       alignment: Alignment.center,
-      child: bytes == null
+      child: provider == null
           ? Text(
               fallbackInitial.toUpperCase(),
               style: TextStyle(
@@ -491,17 +505,6 @@ class _AvatarCircle extends StatelessWidget {
             )
           : null,
     );
-  }
-
-  Uint8List? _decode(String? url) {
-    if (url == null || !url.startsWith('data:')) return null;
-    final comma = url.indexOf(',');
-    if (comma < 0) return null;
-    try {
-      return base64Decode(url.substring(comma + 1));
-    } catch (_) {
-      return null;
-    }
   }
 }
 
@@ -1124,20 +1127,12 @@ class _FeaturedTile extends StatelessWidget {
   final VoidCallback? onTapLightbox;
   const _FeaturedTile({required this.character, required this.onTapLightbox});
 
-  Uint8List? _decode(String? url) {
-    if (url == null || !url.startsWith('data:')) return null;
-    final comma = url.indexOf(',');
-    if (comma < 0) return null;
-    try {
-      return base64Decode(url.substring(comma + 1));
-    } catch (_) {
-      return null;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final bytes = _decode(character.avatar);
+    // B-2 / H-6: resolve the character avatar via the shared resolver so a
+    // `pyre://` ref (the normal form post-migration / externalised import)
+    // renders, not just an inline `data:` URL.
+    final provider = Lightbox.resolveImage(character.avatar);
     final tagline = (character.tagline ?? '').trim();
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1154,13 +1149,12 @@ class _FeaturedTile extends StatelessWidget {
                 color: EmberColors.primary.withValues(alpha: 0.5),
                 width: 2,
               ),
-              image: bytes != null
-                  ? DecorationImage(
-                      image: MemoryImage(bytes), fit: BoxFit.cover)
+              image: provider != null
+                  ? DecorationImage(image: provider, fit: BoxFit.cover)
                   : null,
             ),
             alignment: Alignment.center,
-            child: bytes == null
+            child: provider == null
                 ? Text(
                     character.name.isNotEmpty
                         ? character.name.characters.first.toUpperCase()
@@ -1318,32 +1312,22 @@ class _SmallAvatar extends StatelessWidget {
   final String fallback;
   const _SmallAvatar({required this.dataUrl, required this.fallback});
 
-  Uint8List? _decode(String? url) {
-    if (url == null || !url.startsWith('data:')) return null;
-    final comma = url.indexOf(',');
-    if (comma < 0) return null;
-    try {
-      return base64Decode(url.substring(comma + 1));
-    } catch (_) {
-      return null;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final bytes = _decode(dataUrl);
+    // B-2 / H-6: resolve via the shared resolver so a `pyre://` ref renders.
+    final provider = Lightbox.resolveImage(dataUrl);
     return Container(
       width: 36,
       height: 36,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: EmberColors.bgElevated,
-        image: bytes != null
-            ? DecorationImage(image: MemoryImage(bytes), fit: BoxFit.cover)
+        image: provider != null
+            ? DecorationImage(image: provider, fit: BoxFit.cover)
             : null,
       ),
       alignment: Alignment.center,
-      child: bytes == null
+      child: provider == null
           ? Text(
               fallback.isNotEmpty
                   ? fallback.characters.first.toUpperCase()

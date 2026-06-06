@@ -20,11 +20,63 @@
 //
 // ignore_for_file: use_build_context_synchronously
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
+
+/// Max accepted size (in characters) for a lorebook JSON captured by the
+/// Discover webview's "Download JSON" hook. The webview fetches the bytes in
+/// its OWN authenticated session and posts the JSON TEXT back to native; this
+/// cap mirrors the ~25 MB body cap on the PNG/card fetch path so a hostile or
+/// runaway page can't OOM the app by posting an enormous string. A real
+/// lorebook is a few KB–low MB; 25 MB is generous headroom.
+const int kLorebookImportMaxChars = 25 * 1024 * 1024;
+
+/// Pure parser for a lorebook captured as raw JSON TEXT (no I/O, no HTTP).
+///
+/// This is the heart of the frontend-only BotBooru lorebook import: the
+/// embedded webview's JS hook fetches `/api/lorebooks/{id}/download.json`
+/// INSIDE the logged-in session (`credentials:'include'`) — which the app's
+/// own cookie-less client can't do (the endpoint is bot-gated) — and posts the
+/// resulting JSON text back to native. Native feeds it here, NOT to any
+/// `http.get`.
+///
+/// Returns a [Lorebook] on success, or null when:
+///   * [text] is empty/blank,
+///   * [text] exceeds [kLorebookImportMaxChars] (size gate trips BEFORE the
+///     decode so a giant payload is cheaply rejected),
+///   * [text] isn't valid JSON,
+///   * the decoded JSON isn't a JSON object, or
+///   * the object doesn't look like a lorebook ([tryParseLorebookJson]).
+///
+/// [nameFallback] is an optional page-title hint captured by the Discover
+/// webview's "Download JSON" hook. BotBooru's download payload ships an EMPTY
+/// top-level `name` — the real title lives only in the page (document.title /
+/// a heading) — so the hook reads it and passes it here. It is used as the
+/// imported book's name ONLY when the JSON's own `name` is blank; a non-empty
+/// JSON name always wins. Falls back to "Imported Lorebook" when both are
+/// blank.
+Lorebook? parseLorebookImportText(String text, {String? nameFallback}) {
+  final trimmed = text.trim();
+  if (trimmed.isEmpty) return null;
+  // Size gate first — cheap reject of an oversized payload before jsonDecode.
+  if (trimmed.length > kLorebookImportMaxChars) return null;
+  dynamic decoded;
+  try {
+    decoded = jsonDecode(trimmed);
+  } catch (_) {
+    return null; // not valid JSON
+  }
+  if (decoded is! Map) return null; // a lorebook is a JSON object
+  return tryParseLorebookJson(
+    decoded.cast<String, dynamic>(),
+    nameFallback: nameFallback,
+  );
+}
 
 /// Wave CY.18.42: in-memory log for lorebook-import failures that the
 /// importer used to silently fall through on. Pre-Wave a malformed
@@ -252,6 +304,57 @@ Lorebook? tryParseLorebookJson(
     return lorebookFromCharacterBook(root, nameFallback: nameFallback);
   }
   return null;
+}
+
+/// Confirm dialog for importing a STANDALONE lorebook (e.g. BotBooru's
+/// "Download JSON" on a `/lorebook/{id}` page). Mirrors the
+/// [showEmbeddedBookDialog] style — shows the book name + entry count so the
+/// user knows what they're about to add, and frames lorebook entries as an
+/// injection surface (they feed text into the model's context) so importing
+/// is an explicit choice. Returns true to import, false/null to cancel.
+Future<bool> confirmLorebookImport({
+  required BuildContext context,
+  required String bookName,
+  required int entryCount,
+}) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: EmberColors.bgPanel,
+      title: const Text('Import this lorebook?'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '"$bookName" — $entryCount '
+            '${entryCount == 1 ? "entry" : "entries"}',
+            style: const TextStyle(
+              color: EmberColors.textHigh,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Lorebook entries are injected into the model\'s context during '
+            'chat. Only import books from sources you trust.',
+            style: TextStyle(color: EmberColors.textMid),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('Import'),
+        ),
+      ],
+    ),
+  );
+  return ok ?? false;
 }
 
 /// User choice from [showEmbeddedBookDialog].

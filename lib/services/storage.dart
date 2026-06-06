@@ -30,13 +30,21 @@
 import 'dart:convert';
 import 'dart:io' show File, Directory;
 
-import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart' show kIsWeb, compute, debugPrint;
 import 'package:path_provider/path_provider.dart';
 import 'package:pyre/dev_flavor.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const String storageKey = 'emberchat.v1';
 const String stateFileName = 'emberchat_state.json';
+
+/// H-10: top-level encode used as the `compute()` callback so the whole-
+/// library `jsonEncode` runs OFF the UI isolate on native (and inline on
+/// web, where compute has no worker). It is a plain function — not a
+/// closure — because `compute` must be able to send it to a background
+/// isolate. The output is byte-for-byte identical to the previous
+/// synchronous `jsonEncode(data)`; only the thread it runs on changes.
+String encodeStateBlob(Map<String, dynamic> data) => jsonEncode(data);
 
 /// Status of the last load attempt. Surfaced in the Storage screen so
 /// the user knows whether they're seeing the real state, a recovered
@@ -226,8 +234,29 @@ class JsonStorage {
   ///
   /// Wave CY.18.40: replaces the old non-atomic File.writeAsString
   /// that allowed mid-flight crashes to truncate the main file.
+  /// H-10: monotonically-increasing write sequence. Each `save()` claims a
+  /// number BEFORE the (async) off-isolate encode; after the encode it only
+  /// proceeds to the disk write if no NEWER `save()` has been started in the
+  /// meantime. AppStore already serialises persists (`_persistInFlight` +
+  /// `_persistQueued` → `_persistOnce` is awaited end-to-end), so two saves
+  /// never actually overlap today — but the `compute()` hop introduces an
+  /// await between snapshot and write, so this guard makes "latest wins"
+  /// explicit and keeps the invariant true even if a future caller (or a
+  /// test) fires overlapping saves: a stale encode result can never clobber
+  /// a newer one's write.
+  int _writeSeq = 0;
+
   Future<void> save(Map<String, dynamic> data) async {
-    final encoded = jsonEncode(data);
+    final mySeq = ++_writeSeq;
+    // H-10: encode off the UI isolate. `compute` runs `encodeStateBlob` in a
+    // background isolate on native (freeing the UI thread during a large
+    // library serialise) and inline on web (no isolates there). The data is
+    // the plain Map/List/String/num/bool toJson structure — fully sendable.
+    final encoded = await compute(encodeStateBlob, data);
+    // If a newer save started while we were encoding, drop this stale write —
+    // the newer one carries fresher state and owns the write. Without this,
+    // an out-of-order encode completion could overwrite newer bytes on disk.
+    if (mySeq != _writeSeq) return;
     if (kIsWeb) {
       // SharedPreferences on web is effectively atomic at the JS
       // localStorage layer — no temp file dance needed.

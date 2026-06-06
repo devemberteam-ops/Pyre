@@ -69,10 +69,28 @@ void main() {
     });
   });
   group('Chat live sheet fields', () {
-    test('defaults: empty snapshots, disabled', () {
+    test('a NEW chat defaults Live Sheet to ENABLED', () {
+      // Live Sheet is a strong feature; a freshly-created chat (constructor
+      // path, e.g. startChatWith / chat import) should have it on by default.
+      final c = Chat(id: 'c1', characterIds: const ['x']);
+      expect(c.liveSheetEnabled, true);
+      expect(c.liveSheetSnapshots, isEmpty);
+    });
+    test('an EXISTING saved chat with no field stays DISABLED (fromJson)', () {
+      // Backwards-compat: a chat persisted before the default flip (the field
+      // is absent) must NOT silently turn Live Sheet on.
       final c = Chat.fromJson({'id': 'c1'});
       expect(c.liveSheetSnapshots, isEmpty);
       expect(c.liveSheetEnabled, false);
+    });
+    test('a saved chat with the field set is honoured (fromJson)', () {
+      expect(
+          Chat.fromJson({'id': 'c1', 'liveSheetEnabled': true}).liveSheetEnabled,
+          true);
+      expect(
+          Chat.fromJson({'id': 'c1', 'liveSheetEnabled': false})
+              .liveSheetEnabled,
+          false);
     });
     test('round-trips snapshots + enabled', () {
       final c = Chat.fromJson({'id': 'c1'})
@@ -581,6 +599,32 @@ void main() {
       expect(body, isNot(contains('ENTITY: You (the user / {{user}})')));
       expect(body, contains('this entity is the user'));
     });
+
+    // chat-core-1-01: assistant <think> reasoning must not bleed into the
+    // Live Sheet update source body.
+    test('strips <think> from char turns; keeps user text intact', () {
+      final c = Chat.fromJson({'id': 'c1'})..liveSheetEnabled = true;
+      c.messages.addAll([
+        msg('m0', MessageKind.char, 'opening'),
+        msg('m1', MessageKind.user, 'I draw my <think>not reasoning</think> blade'),
+        msg('m2', MessageKind.char,
+            '<think>she should react with fear</think>the slime lunges'),
+      ]);
+      final snap = LiveSheetSnapshot(
+          id: 'a',
+          anchorMessageId: 'm0',
+          pathHash: computePathHash(c.messages, 0),
+          entities: [
+            LiveSheetEntity(id: 'e', name: 'Ren', kind: LiveSheetEntityKind.user)
+          ]);
+      final body = buildUpdateBody(chat: c, active: snap);
+      // char turn reasoning is gone.
+      expect(body, contains('the slime lunges'));
+      expect(body, isNot(contains('she should react')));
+      expect(body, isNot(contains('<think>she should react')));
+      // user turn is left verbatim (only assistant bodies carry reasoning).
+      expect(body, contains('I draw my <think>not reasoning</think> blade'));
+    });
   });
 
   group('seedInitialSnapshot', () {
@@ -592,6 +636,107 @@ void main() {
       expect(snap.pathHash, computePathHash(c.messages, 0));
       expect(snap.entities.single.name, 'Ren');
       expect(snap.entities.single.hasAnyFact, false);
+    });
+  });
+
+  // C-3: Live Sheet defaults ON for new chats but nothing seeded a snapshot, so
+  // the default-ON flag was inert. ensureLiveSheetSeed (called at chat creation
+  // + by the screen) must seed an active snapshot so the auto-updater can fire.
+  group('buildLiveSheetEntities', () {
+    test('persona becomes the user entity; characters become char entities', () {
+      final ents = buildLiveSheetEntities(
+        personaName: 'Ren',
+        characters: [Character(id: 'a', name: 'Vesna')],
+      );
+      expect(ents.length, 2);
+      expect(ents.first.name, 'Ren');
+      expect(ents.first.kind, LiveSheetEntityKind.user);
+      expect(ents[1].name, 'Vesna');
+      expect(ents[1].kind, LiveSheetEntityKind.char);
+    });
+
+    test('null/blank persona falls back to "You"', () {
+      expect(
+        buildLiveSheetEntities(personaName: null, characters: const [])
+            .single
+            .name,
+        'You',
+      );
+      expect(
+        buildLiveSheetEntities(personaName: '   ', characters: const [])
+            .single
+            .name,
+        'You',
+      );
+    });
+
+    test('a narrator/scenario card is NOT seeded as a physical entity', () {
+      final ents = buildLiveSheetEntities(
+        personaName: 'Ren',
+        characters: [
+          Character(
+              id: 's',
+              name: 'The Sunken Gate',
+              description: '<Narrator>\nYou are the omniscient narrator.'),
+          Character(id: 'a', name: 'Vesna'),
+        ],
+      );
+      // user + Vesna only; the narrator card is skipped.
+      expect(ents.map((e) => e.name), ['Ren', 'Vesna']);
+    });
+  });
+
+  group('ensureLiveSheetSeed', () {
+    Chat newEnabledChat() {
+      final c = Chat(id: 'c1', characterIds: const ['a']);
+      c.messages
+          .add(Message(id: 'm0', kind: MessageKind.char, variants: ['hi']));
+      return c;
+    }
+
+    test('FAILING-BEFORE-FIX: a default-ON new chat has NO active snapshot '
+        'until seeded; ensureLiveSheetSeed creates one', () {
+      final c = newEnabledChat();
+      // Reproduces the bug: liveSheetEnabled is true but nothing seeded.
+      expect(c.liveSheetEnabled, true);
+      expect(activeLiveSheetSnapshot(c), isNull);
+      expect(shouldUpdateLiveSheet(c, LiveSheetSettings.fromJson({})), false,
+          reason: 'no snapshot → the auto-updater can never fire (the bug)');
+
+      final seeded = ensureLiveSheetSeed(
+        chat: c,
+        personaName: 'Ren',
+        characters: [Character(id: 'a', name: 'Vesna')],
+      );
+      expect(seeded, true);
+      expect(activeLiveSheetSnapshot(c), isNotNull,
+          reason: 'the fix: an active snapshot now exists → tracking starts');
+      expect(activeLiveSheetSnapshot(c)!.entities.map((e) => e.name),
+          ['Ren', 'Vesna']);
+    });
+
+    test('idempotent: does NOT double-seed when a snapshot already exists', () {
+      final c = newEnabledChat();
+      expect(
+          ensureLiveSheetSeed(
+              chat: c, personaName: 'Ren', characters: const []),
+          true);
+      expect(c.liveSheetSnapshots.length, 1);
+      // A second call is a no-op (active snapshot already present).
+      expect(
+          ensureLiveSheetSeed(
+              chat: c, personaName: 'Ren', characters: const []),
+          false);
+      expect(c.liveSheetSnapshots.length, 1);
+    });
+
+    test('no-op when Live Sheet is disabled', () {
+      final c = newEnabledChat()..liveSheetEnabled = false;
+      expect(
+          ensureLiveSheetSeed(
+              chat: c, personaName: 'Ren', characters: const []),
+          false);
+      expect(c.liveSheetSnapshots, isEmpty);
     });
   });
 }

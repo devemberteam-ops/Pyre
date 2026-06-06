@@ -29,6 +29,10 @@ class _DetailField {
 /// details view is true parity, not a near-copy.
 class _DetailsSheetBody extends StatelessWidget {
   final String? avatar;
+  /// Non-destructive Recrop: the uncropped original (or null). Tapping the
+  /// header avatar opens this in the lightbox so the WHOLE image shows, not
+  /// the face-cropped thumbnail.
+  final String? avatarOriginal;
   final String name;
   final String? tagline;
   final List<_DetailField> fields;
@@ -53,6 +57,7 @@ class _DetailsSheetBody extends StatelessWidget {
 
   const _DetailsSheetBody({
     required this.avatar,
+    this.avatarOriginal,
     required this.name,
     required this.tagline,
     required this.fields,
@@ -98,6 +103,8 @@ class _DetailsSheetBody extends StatelessWidget {
                 fallback: name,
                 radius: 56,
                 tappableLightbox: true,
+                // Non-destructive Recrop: tap shows the full uncropped image.
+                fullImageUrl: avatarOriginal ?? avatar,
               ),
             ),
             const SizedBox(height: 12),
@@ -249,6 +256,7 @@ class CharacterDetailsSheet extends StatelessWidget {
     }
     return _DetailsSheetBody(
       avatar: c.avatar,
+      avatarOriginal: c.avatarOriginal,
       name: c.name,
       tagline: c.tagline,
       gallery: c.gallery,
@@ -434,6 +442,7 @@ class PersonaDetailsSheet extends StatelessWidget {
     final persona = p;
     return _DetailsSheetBody(
       avatar: persona.avatar,
+      avatarOriginal: persona.avatarOriginal,
       name: persona.name,
       tagline: persona.tagline,
       gallery: persona.gallery,

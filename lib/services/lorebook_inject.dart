@@ -10,7 +10,43 @@
 
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../models/models.dart';
+
+// ── Compiled keyword-RegExp cache ──────────────────────────────────────
+//
+// Audit 2026-06-05 (perf-at-scale, finding #5): every send/regen/continue
+// re-scans all bound lorebooks, compiling a fresh RegExp per key per entry.
+// A big world-info import (200+ entries, several keys each) means
+// hundreds-to-thousands of `RegExp(...)` builds synchronously in the
+// pre-send window. Keys change rarely (only on lorebook edit/import), so we
+// memoize the compiled key RegExp keyed by (key, caseSensitive, wholeWords).
+// Bounded so a pathological book can't grow it unbounded.
+const _kKeyRegexCacheMax = 2048;
+final Map<String, RegExp> _keyRegexCache = <String, RegExp>{};
+
+RegExp _compileKeyCached(String key, bool caseSensitive, bool wholeWords) {
+  // \x00 is never a valid key/flag char → unambiguous composite key.
+  final cacheKey = '${caseSensitive ? 1 : 0}\x00${wholeWords ? 1 : 0}\x00$key';
+  final hit = _keyRegexCache[cacheKey];
+  if (hit != null) return hit;
+  final escaped = RegExp.escape(key);
+  final pattern =
+      wholeWords ? '(?<![A-Za-z0-9])$escaped(?![A-Za-z0-9])' : escaped;
+  final re = RegExp(pattern, caseSensitive: caseSensitive);
+  if (_keyRegexCache.length >= _kKeyRegexCacheMax) _keyRegexCache.clear();
+  _keyRegexCache[cacheKey] = re;
+  return re;
+}
+
+/// Test-only: number of distinct (key,caseSensitive,wholeWords) regexes cached.
+@visibleForTesting
+int get debugKeyRegexCacheSize => _keyRegexCache.length;
+
+/// Test-only: drop the compiled keyword-RegExp cache.
+@visibleForTesting
+void debugClearKeyRegexCache() => _keyRegexCache.clear();
 
 /// Combine the three sources of bound lorebooks for [chat] (per-chat,
 /// character-bound, persona-bound) and resolve them to actual Lorebook
@@ -145,10 +181,33 @@ LorebookScanResult scanLorebookHits(
       }
     }
   }
-  hits.sort((a, b) => b.order.compareTo(a.order));
+  // Wave 1.1 fix (H-9): DETERMINISTIC, STABLE injection order. Dart's
+  // `List.sort` is NOT a stable sort, so for the overwhelmingly common
+  // all-`order:0` case (every hand-made entry — `order` is import-only) the
+  // build-to-build sequence was implementation-defined: it could reshuffle
+  // equal-order entries between runs, which (a) reads non-deterministically
+  // and (b) busts provider prompt caching by changing the assembled prompt
+  // bytes. We sort an INDEX list (the insertion order = scan order = book
+  // order then entry order) by `order` DESCENDING, tie-breaking on the
+  // original index ASCENDING. Equal-order entries therefore inject in a
+  // fixed, documented sequence (scan order) every time; an explicit higher
+  // `order` still wins. We reorder `trace` in lockstep so the diagnostic
+  // trace stays aligned with the reordered hits.
+  //
+  // (Optional future affordance — intentionally NOT built here to respect the
+  // app's minimalism: a drag-to-reorder editor for `order`. Today `order` is
+  // only set on import; this fix makes the equal-`order` default stable.)
+  final idx = List<int>.generate(hits.length, (i) => i);
+  idx.sort((a, b) {
+    final byOrder = hits[b].order.compareTo(hits[a].order); // desc
+    if (byOrder != 0) return byOrder;
+    return a.compareTo(b); // stable tie-break: original scan order
+  });
+  final sortedHits = [for (final i in idx) hits[i]];
+  final sortedTrace = [for (final i in idx) trace[i]];
   return LorebookScanResult(
-    hits: hits,
-    trace: trace,
+    hits: sortedHits,
+    trace: sortedTrace,
     totalScanned: totalScanned,
     skippedDisabled: skippedDisabled,
   );
@@ -301,9 +360,7 @@ bool _keyMatches(
   bool caseSensitive = false,
   bool wholeWords = true,
 }) {
-  final escaped = RegExp.escape(key);
-  final pattern = wholeWords
-      ? '(?<![A-Za-z0-9])$escaped(?![A-Za-z0-9])'
-      : escaped;
-  return RegExp(pattern, caseSensitive: caseSensitive).hasMatch(text);
+  // Reuse a cached compiled RegExp for this (key, caseSensitive, wholeWords)
+  // — the scan recompiles per key per entry per prompt build otherwise.
+  return _compileKeyCached(key, caseSensitive, wholeWords).hasMatch(text);
 }

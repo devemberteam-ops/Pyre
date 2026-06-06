@@ -2,10 +2,10 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../models/models.dart' show UiPrefs;
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../services/lan_client.dart';
@@ -17,10 +17,10 @@ import 'backup_restore_screen.dart';
 import 'botbooru_profile_screen.dart';
 import 'character_creator_screen.dart';
 import 'chat_settings_screen.dart';
+import 'display_settings_screen.dart';
 import 'lorebooks_screen.dart';
 import 'about_pyre_screen.dart';
 import 'desktop_shortcuts_screen.dart';
-import 'st_bulk_import_flow.dart';
 import 'storage_screen.dart';
 
 class MoreScreen extends StatelessWidget {
@@ -67,10 +67,18 @@ class MoreScreen extends StatelessWidget {
             // pick from.
           ]),
           const SizedBox(height: 12),
-          // Pyre 1.1 (F5): global UI text-scale. Cross-platform (a phone
-          // user asked for bigger text), so it lives here in the main
-          // More list rather than the desktop-only Shortcuts screen.
-          const _DisplayCard(),
+          // WS-J: "App text size" moved out of an inline card into a dedicated
+          // Display settings screen (the future home for related display
+          // settings). Cross-platform, so it stays in the main More list.
+          _MoreCard(rows: [
+            _MoreRow(
+              label: 'Display',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                    builder: (_) => const DisplaySettingsScreen()),
+              ),
+            ),
+          ]),
           const SizedBox(height: 12),
           // Wave CY.18.193: Presets + Long-term Memory moved INTO Chat
           // Settings (a hub). Wave CY.18.202: Lorebooks moved BACK out
@@ -125,19 +133,8 @@ class MoreScreen extends StatelessWidget {
                     builder: (_) => const BackupRestoreScreen()),
               ),
             ),
-            // Pyre 1.1 (F7): bulk "Import from SillyTavern". One entry where
-            // the user multi-selects a pile of mixed ST `.json` files (+ `.png`
-            // cards); Pyre auto-detects each file's type and routes it to the
-            // right existing importer (World Info / regex / presets / cards),
-            // then shows a per-file summary.
-            _MoreRow(
-              label: 'Import from SillyTavern',
-              subtitle:
-                  'Bulk-import World Info, regex, presets, and cards exported '
-                  'from SillyTavern. Pyre detects each file\'s type '
-                  'automatically.',
-              onTap: () => runStBulkImport(context, store),
-            ),
+            // WS-J: "Import from SillyTavern" moved INTO the Backup & Restore
+            // screen (backup + import belong together). Reachable there now.
             // Privacy + About merged into a single full screen. The
             // screen handles the brand summary, the privacy statement,
             // and the legal links — covers everything a user looking
@@ -233,6 +230,11 @@ class _VersionFooter extends StatefulWidget {
 }
 
 class _VersionFooterState extends State<_VersionFooter> {
+  // Read at runtime from PackageInfo (same source the update-check uses) so the
+  // footer always matches pubspec.yaml and can never drift like a hard-coded
+  // string. Empty until the async load completes.
+  String _version = '';
+
   @override
   void initState() {
     super.initState();
@@ -240,6 +242,10 @@ class _VersionFooterState extends State<_VersionFooter> {
       // Fire-and-forget; checkForUpdate publishes to the notifier on success.
       checkForUpdate();
     }
+    PackageInfo.fromPlatform().then((info) {
+      if (!mounted) return;
+      setState(() => _version = info.version);
+    }).catchError((_) {/* leave empty → bare "Pyre"; non-fatal */});
   }
 
   Future<void> _open(String url) async {
@@ -258,14 +264,14 @@ class _VersionFooterState extends State<_VersionFooter> {
         return Column(
           children: [
             const SizedBox(height: 16),
-            const Center(
+            Center(
               child: Text(
-                // Wave CY.18.209: align with About Pyre's footer (Wave 340).
-                // The real version is in pubspec.yaml and is what the
-                // update-check reads via PackageInfo; this is just a
-                // human-facing label, kept consistent across both screens.
-                'Pyre 1.0.8',
-                style: TextStyle(color: EmberColors.textDim, fontSize: 11),
+                // The real version lives in pubspec.yaml; read dynamically via
+                // PackageInfo (same source the update-check uses) so this label
+                // and About Pyre's footer always match it and never drift.
+                _version.isEmpty ? 'Pyre' : 'Pyre $_version',
+                style: const TextStyle(
+                    color: EmberColors.textDim, fontSize: 11),
               ),
             ),
             if (update != null) ...[
@@ -371,15 +377,10 @@ class _MoreCard extends StatelessWidget {
 class _MoreRow extends StatelessWidget {
   final String label;
   final String? trailing;
-
-  /// Optional one-line description shown under the label (e.g. the
-  /// "Import from SillyTavern" intro). Null keeps the original single-line row.
-  final String? subtitle;
   final VoidCallback? onTap;
   const _MoreRow({
     required this.label,
     this.trailing,
-    this.subtitle,
     this.onTap,
   });
 
@@ -390,31 +391,12 @@ class _MoreRow extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
         child: Row(
-          crossAxisAlignment: subtitle == null
-              ? CrossAxisAlignment.center
-              : CrossAxisAlignment.start,
           children: [
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: const TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w600),
-                  ),
-                  if (subtitle != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle!,
-                      style: const TextStyle(
-                        color: EmberColors.textMid,
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
-                    ),
-                  ],
-                ],
+              child: Text(
+                label,
+                style: const TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w600),
               ),
             ),
             if (trailing != null) ...[
@@ -427,120 +409,6 @@ class _MoreRow extends StatelessWidget {
             ],
             const Icon(Icons.chevron_right,
                 color: EmberColors.textDim, size: 22),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Pyre 1.1 (F5): "App text size" card — a global UI text-scale slider.
-///
-/// Lives in the cross-platform More list (a phone user reported the
-/// default text was too small to read). Range is
-/// [UiPrefs.kUiScaleMin]–[UiPrefs.kUiScaleMax]; the live value shows as a
-/// percentage, and a "Reset" affordance snaps back to 100%. The slider
-/// tracks a local value while dragging (so it stays smooth) and commits
-/// through [AppStore.setUiScale], which clamps + persists and triggers the
-/// whole-app rebuild that re-applies the scale.
-class _DisplayCard extends StatefulWidget {
-  const _DisplayCard();
-
-  @override
-  State<_DisplayCard> createState() => _DisplayCardState();
-}
-
-class _DisplayCardState extends State<_DisplayCard> {
-  // Local "in-flight" value while the thumb is being dragged. Null means
-  // "not dragging — read the live value straight from the store".
-  double? _dragValue;
-
-  @override
-  Widget build(BuildContext context) {
-    final store = context.watch<AppStore>();
-    final stored = store.uiPrefs.clampedUiScale;
-    final value = _dragValue ?? stored;
-    final pct = (value * 100).round();
-    final isDefault = (stored - 1.0).abs() < 0.001 && _dragValue == null;
-
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 12, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'App text size',
-                    style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w600),
-                  ),
-                ),
-                Text(
-                  '$pct%',
-                  style: const TextStyle(
-                      color: EmberColors.textMid,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600),
-                ),
-                // "Reset" only when the user has moved off 100%.
-                if (!isDefault)
-                  TextButton(
-                    onPressed: () {
-                      setState(() => _dragValue = null);
-                      store.setUiScale(1.0);
-                    },
-                    style: TextButton.styleFrom(
-                      minimumSize: const Size(0, 32),
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text('Reset'),
-                  )
-                else
-                  const SizedBox(width: 8),
-              ],
-            ),
-            const Padding(
-              padding: EdgeInsets.only(top: 2, bottom: 2),
-              child: Text(
-                'Make all text in the app larger or smaller. '
-                'This adds to your device font-size setting.',
-                style: TextStyle(
-                  color: EmberColors.textMid,
-                  fontSize: 12,
-                  height: 1.35,
-                ),
-              ),
-            ),
-            Row(
-              children: [
-                const Text('A',
-                    style: TextStyle(
-                        fontSize: 13, color: EmberColors.textDim)),
-                Expanded(
-                  child: Slider(
-                    value: value,
-                    min: UiPrefs.kUiScaleMin,
-                    max: UiPrefs.kUiScaleMax,
-                    // 0.8 → 1.4 in 0.05 steps = 12 divisions.
-                    divisions: 12,
-                    label: '$pct%',
-                    onChanged: (v) => setState(() => _dragValue = v),
-                    onChangeEnd: (v) {
-                      store.setUiScale(v);
-                      setState(() => _dragValue = null);
-                    },
-                  ),
-                ),
-                const Text('A',
-                    style: TextStyle(
-                        fontSize: 22, color: EmberColors.textDim)),
-              ],
-            ),
           ],
         ),
       ),

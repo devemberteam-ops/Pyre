@@ -16,8 +16,15 @@ class ChatsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final store = context.watch<AppStore>();
-    final chats = [...store.chats]
+    // BATCH P2-ui (F): read (not watch). Hosted inside an `ActiveTabGate` that
+    // rebuilds this screen on every store notify while it's the active tab and
+    // freezes it while off-screen. A root `context.watch` would re-subscribe
+    // and rebuild even when off-screen (defeating the gate), so we read and let
+    // the gate govern rebuilds.
+    final store = context.read<AppStore>();
+    // Filter out tombstoned (deleted:true) records so a stray synced-in
+    // tombstone can't render as a phantom chat (mirrors regex_rules_screen).
+    final chats = store.chats.where((c) => !c.deleted).toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
 
     if (chats.isEmpty) {
@@ -164,6 +171,8 @@ class _CharacterChatsRow extends StatelessWidget {
               fallback: character?.name ?? '?',
               radius: 20,
               tappableLightbox: true,
+              // Non-destructive Recrop: tap opens the whole original, not the crop.
+              fullImageUrl: character?.avatarOriginal,
             ),
             const SizedBox(width: 12),
             Expanded(

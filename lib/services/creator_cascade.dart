@@ -331,3 +331,26 @@ bool isBuildCommand(String raw) {
   final s = raw.trim().toLowerCase();
   return s == '/build' || s == '/build the sheet';
 }
+
+/// C-2 (CRITICAL): true when a normal Creator chat send must be BLOCKED.
+///
+/// A send is blocked when there's nothing to send (empty text AND no staged
+/// attachments) OR a generation is already in flight (`generating`) OR a
+/// structured build is in flight (`structuredBuilding`).
+///
+/// The `structuredBuilding` arm is the load-bearing one: a normal send during
+/// an in-flight build calls `_runConversation`, which bumps `_streamGen`; the
+/// build then bails at its `myGen != _streamGen` guard BEFORE writing the
+/// canvas / done-status, silently discarding the whole build (the "pass N of M"
+/// status bubble freezes forever and the sheet stays empty). Blocking the send
+/// keeps the build's generation token stable so it completes.
+bool creatorSendBlocked({
+  required String trimmedText,
+  required bool hasPendingAttachments,
+  required bool generating,
+  required bool structuredBuilding,
+}) {
+  if (trimmedText.isEmpty && !hasPendingAttachments) return true;
+  if (generating || structuredBuilding) return true;
+  return false;
+}

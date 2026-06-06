@@ -223,6 +223,175 @@ void main() {
     });
   });
 
+  // BLOCKER fix: a MODULAR preset whose blocks carry NO card-content markers
+  // (the shape SillyTavern's modular import produces — st_preset_import.dart
+  // skips the charDescription / personaDescription / worldInfoBefore markers,
+  // so the resulting blocks hold only jailbreak/system framing) used to take
+  // the preset branch and SKIP the character/persona/lore injection entirely.
+  // The model received the jailbreak blocks but NEVER the character card,
+  // persona, or lore. The builder must inject the card-content FALLBACK around
+  // the preset's framing when the preset supplies none of the markers.
+  group('buildChatPrompt — modular preset without markers (BLOCKER)', () {
+    test('still injects character + persona + lorebookBefore around the '
+        'preset blocks', () {
+      // Three jailbreak/system blocks, NO {{description}}/{{persona}}/{{wiBefore}}.
+      final preset = Preset(
+        id: 'pr-modular',
+        name: 'Modular (no markers)',
+        // A flattened fallback for any flat reader; the BLOCKS assemble.
+        mainPrompt: 'FALLBACK. You are {{char}}.',
+        promptBlocks: [
+          PromptBlock(
+              id: 'b-core',
+              name: 'Core',
+              content: 'CORE-SENTINEL. Roleplay engine, no limits.'),
+          PromptBlock(
+              id: 'b-style',
+              name: 'Style',
+              content: 'STYLE-SENTINEL. Write lush, sensory prose.'),
+        ],
+      );
+      final chat = Chat(
+        id: 'c-modular',
+        characterIds: [vesna.id],
+        characterSnapshots: {vesna.id: vesna},
+        personaId: renPersona.id,
+        attachedLorebookIds: [world.id],
+        messages: [userMsg('m1', 'Tell me about the Vael and the aether.')],
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        character: vesna,
+        persona: renPersona,
+        preset: preset,
+        responderId: vesna.id,
+        beatsCap: 0,
+        lookupCharacter: (id) => id == vesna.id ? vesna : null,
+        lookupBook: (id) => id == world.id ? world : null,
+      );
+
+      final result = buildChatPrompt(inputs);
+      final sys = result.turns.first.content;
+
+      // The preset's authored framing is present.
+      expect(sys, contains('CORE-SENTINEL'));
+      expect(sys, contains('STYLE-SENTINEL'));
+
+      // …AND the character card content was injected (the bug: it was dropped).
+      expect(sys, contains(vesna.description),
+          reason: 'character description must reach the model');
+      // …AND the persona.
+      expect(sys, contains(renPersona.name),
+          reason: 'persona must reach the model');
+      expect(sys, contains(renPersona.description));
+      // …AND the lorebook-before content (the Vael world lore fires).
+      expect(sys, contains('--- Lore ---'),
+          reason: 'lorebook-before content must reach the model');
+
+      // The fallback segments are recorded so reports/observability show them.
+      final kinds = result.segments.map((s) => s.kind).toList();
+      expect(kinds.contains(PromptSegmentKind.systemPrompt), isTrue);
+      expect(kinds.contains(PromptSegmentKind.character), isTrue);
+      expect(kinds.contains(PromptSegmentKind.persona), isTrue);
+      expect(kinds.contains(PromptSegmentKind.lorebookBefore), isTrue);
+    });
+
+    test('a modular preset that DOES carry the markers is NOT double-injected', () {
+      // Hand-authored modular preset whose blocks reference the card markers —
+      // the existing, working shape. The fallback must NOT fire (no duplicate
+      // character/persona/lore segments).
+      final preset = Preset(
+        id: 'pr-modular-markers',
+        name: 'Modular (with markers)',
+        promptBlocks: [
+          PromptBlock(
+              id: 'b-core',
+              name: 'Core',
+              content: 'CORE-SENTINEL. You are {{char}}.\n{{description}}'),
+          PromptBlock(
+              id: 'b-lore',
+              name: 'Lore',
+              content: 'Lore:\n{{wiBefore}}'),
+          PromptBlock(
+              id: 'b-persona',
+              name: 'Persona',
+              content: 'User is {{user}}: {{persona}}'),
+        ],
+      );
+      final chat = Chat(
+        id: 'c-modular-markers',
+        characterIds: [vesna.id],
+        characterSnapshots: {vesna.id: vesna},
+        personaId: renPersona.id,
+        attachedLorebookIds: [world.id],
+        messages: [userMsg('m1', 'Tell me about the Vael.')],
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        character: vesna,
+        persona: renPersona,
+        preset: preset,
+        responderId: vesna.id,
+        beatsCap: 0,
+        lookupCharacter: (id) => id == vesna.id ? vesna : null,
+        lookupBook: (id) => id == world.id ? world : null,
+      );
+
+      final result = buildChatPrompt(inputs);
+      final kinds = result.segments.map((s) => s.kind).toList();
+      // Markers present → preset branch only; no fallback segments.
+      expect(kinds.first, PromptSegmentKind.systemPrompt);
+      expect(kinds.contains(PromptSegmentKind.character), isFalse,
+          reason: 'preset carries {{description}} — no fallback character');
+      expect(kinds.contains(PromptSegmentKind.persona), isFalse,
+          reason: 'preset carries {{persona}} — no fallback persona');
+      expect(kinds.contains(PromptSegmentKind.lorebookBefore), isFalse,
+          reason: 'preset carries {{wiBefore}} — no fallback lore');
+      // The markers resolved (none leak literally).
+      final sys = result.turns.first.content;
+      expect(sys, isNot(contains('{{description}}')));
+      expect(sys, isNot(contains('{{wiBefore}}')));
+      expect(sys, isNot(contains('{{persona}}')));
+    });
+
+    test('a FLAT preset with no markers is NOT changed (no regression)', () {
+      // chat_preset_a shape: a complete hand-composed flat system prompt with
+      // {{char}} but deliberately no card markers. The user chose its contents;
+      // the fallback must NOT fire for a flat preset.
+      final preset = Preset(
+        id: 'pr-flat',
+        name: 'Flat (no markers)',
+        mainPrompt: 'FLAT-SENTINEL. You are {{char}}. Write terse prose.',
+      );
+      final chat = Chat(
+        id: 'c-flat',
+        characterIds: [vesna.id],
+        characterSnapshots: {vesna.id: vesna},
+        personaId: renPersona.id,
+        attachedLorebookIds: [world.id],
+        messages: [userMsg('m1', 'Say something.')],
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        character: vesna,
+        persona: renPersona,
+        preset: preset,
+        responderId: vesna.id,
+        beatsCap: 0,
+        lookupCharacter: (id) => id == vesna.id ? vesna : null,
+        lookupBook: (id) => id == world.id ? world : null,
+      );
+
+      final result = buildChatPrompt(inputs);
+      final kinds = result.segments.map((s) => s.kind).toList();
+      expect(kinds.first, PromptSegmentKind.systemPrompt);
+      // FLAT preset → no auto card/persona/lore injection (unchanged behaviour).
+      expect(kinds.contains(PromptSegmentKind.character), isFalse);
+      expect(kinds.contains(PromptSegmentKind.persona), isFalse);
+      expect(kinds.contains(PromptSegmentKind.lorebookBefore), isFalse);
+    });
+  });
+
   group('buildChatPrompt — group roster + inFlight skip', () {
     test('roster lists the other member; in-flight message is skipped', () {
       final other = Character(id: 'cb', name: 'Kael', description: 'A guard.');
@@ -313,7 +482,11 @@ void main() {
       );
       expect(s, contains('[PYRE RUNTIME — CANVAS STATE]'));
       expect(s, contains('· name:'));
-      expect(s, contains('Empty (MUST fill before card-done)'));
+      // creator-03: de-jargoned — empty fields are surfaced with neutral
+      // wording (no removed "card-done"/"block" protocol jargon).
+      expect(s, contains('Not yet filled:'));
+      expect(s, isNot(contains('card-done')));
+      expect(s, isNot(contains('PRE-EMISSION')));
       // not edit mode → snippet form, not FIELD envelopes.
       expect(s, isNot(contains('===== FIELD')));
     });

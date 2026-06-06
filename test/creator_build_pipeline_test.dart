@@ -63,6 +63,34 @@ void main() {
       expect(result, {'a': 'truncated value', 'b': 'y'});
     });
 
+    // MEDIUM 8: on a truncation continuation, a poorly-behaved model re-opens
+    // with a leading `{` instead of continuing mid-string. The stitched text
+    // `{"a":"trunc{"a":"truncated value","b":"y"}` would corrupt the scan; the
+    // seam guard strips the stray leading `{` so the object still parses.
+    test('continuation that re-emits a leading { is de-corrupted at the seam',
+        () async {
+      final batches = [
+        ['a', 'b'],
+      ];
+
+      Future<String> call(List<ChatTurn> turns) async {
+        final last = turns.last.content;
+        if (last.contains('Continue the JSON object')) {
+          // The model wrongly re-opens the whole object.
+          return '{"a":"truncated value","b":"y"}';
+        }
+        return '{"a":"trunc'; // truncated mid-string
+      }
+
+      final result = await runStructuredBuild(
+        batches: batches,
+        call: call,
+        buildTurns: fakeBuild,
+      );
+
+      expect(result, {'a': 'truncated value', 'b': 'y'});
+    });
+
     test('permanently unparseable batch → its keys absent, others intact',
         () async {
       final batches = [

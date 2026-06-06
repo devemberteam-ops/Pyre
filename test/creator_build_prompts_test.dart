@@ -189,6 +189,31 @@ void main() {
       expect(all, contains('"dialogue"'));
     });
 
+    // CRITICAL 2: a persona's dialogue examples are the USER's own lines, so the
+    // build prompt must explicitly tell the model to write them in the user's
+    // voice (the renderer then prefixes {{user}}:). The character prompt must
+    // NOT carry that instruction.
+    test('persona dialogueExamples hint says the lines are the USER\'s voice',
+        () {
+      final personaTurns = buildBatchTurns(
+        mode: CreatorMode.persona,
+        batchKeys: ['dialogueExamples'],
+        transcript: [ChatTurn('user', 'a persona named Pat')],
+      );
+      final personaAll = _allContent(personaTurns).toLowerCase();
+      expect(personaAll, contains('user\'s own'),
+          reason: 'persona dialogue hint should name the user\'s own voice');
+
+      final charTurns = buildBatchTurns(
+        mode: CreatorMode.character,
+        batchKeys: ['dialogueExamples'],
+        transcript: [ChatTurn('user', 'a character named Mina')],
+      );
+      final charAll = _allContent(charTurns).toLowerCase();
+      expect(charAll.contains('user\'s own'), isFalse,
+          reason: 'character dialogue hint must NOT use the persona-voice line');
+    });
+
     test('tags batch demands a JSON array of discovery tags', () {
       final turns = buildBatchTurns(
         mode: CreatorMode.character,
@@ -446,7 +471,8 @@ void main() {
       expect(personaDetailed, contains('~8,000'));
     });
 
-    test('scenario mode never gets the length directive, for ANY size', () {
+    test('scenario never gets the CHARACTER brevity directive, for ANY size',
+        () {
       for (final size in CreatorDescriptionSize.values) {
         final all = _allContent(buildBatchTurns(
           mode: CreatorMode.scenario,
@@ -454,9 +480,29 @@ void main() {
           transcript: [ChatTurn('user', 'a haunted seaside inn')],
           descriptionSize: size,
         ));
+        // The char/persona "LENGTH DISCIPLINE" block (token budget + the
+        // overlapping-field list) is for the assembled Description and never
+        // applies to a scenario.
         expect(all, isNot(contains('LENGTH DISCIPLINE')),
-            reason: 'scenario must not carry the brevity directive for $size');
+            reason: 'scenario must not carry the char brevity directive '
+                'for $size');
+        expect(all, isNot(contains('~5,000')));
       }
+    });
+
+    // LOW 13: scenario batches now carry their OWN, looser length aim so the
+    // <World>/<NPCs> prose stays focused (less ballooning / truncation churn),
+    // distinct from the char/persona token-budget directive.
+    test('scenario batches DO carry a looser section-length aim', () {
+      final all = _allContent(buildBatchTurns(
+        mode: CreatorMode.scenario,
+        batchKeys: batchesFor(CreatorMode.scenario)[1], // world + npcs
+        transcript: [ChatTurn('user', 'a haunted seaside inn')],
+      ));
+      expect(all, contains('SECTION LENGTH'),
+          reason: 'scenario should get a looser per-section length aim');
+      // It is size-agnostic — the char token budget never leaks in.
+      expect(all, isNot(contains('LENGTH DISCIPLINE')));
     });
   });
 }

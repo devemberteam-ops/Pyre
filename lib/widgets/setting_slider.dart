@@ -98,6 +98,7 @@ class SliderCard extends StatelessWidget {
         ],
       ),
     );
+    controller.dispose(); // H-3: dispose the type-value controller on close.
     if (raw == null) return;
     // Accept either `.` or `,` as decimal separator (PT-BR habit).
     final parsed = double.tryParse(raw.trim().replaceAll(',', '.'));
@@ -106,6 +107,17 @@ class SliderCard extends StatelessWidget {
     onChanged(clamped);
     onChangeEnd?.call(clamped);
   }
+
+  /// M-5: the value handed to the Material [Slider] must satisfy its
+  /// `min <= value <= max` assert. A stored value can legitimately fall
+  /// outside the slider's range (an older build with a wider cap, a synced /
+  /// hand-edited backup with `maxTokens > 4096` or `temp > 2`, etc.), which
+  /// crashes in debug and renders oddly in release. We clamp ONLY the value
+  /// shown to the Slider — the stored value (and the `display` string the
+  /// caller passes) are untouched, so a user's intentional high value isn't
+  /// silently lost; it just pins to the slider end until they retype it.
+  double get _clampedSliderValue =>
+      max <= min ? min : value.clamp(min, max);
 
   @override
   Widget build(BuildContext context) {
@@ -242,7 +254,7 @@ class SliderCard extends StatelessWidget {
                       enabledThumbRadius: 8),
                 ),
                 child: Slider(
-                  value: value,
+                  value: _clampedSliderValue, // M-5: keep within [min,max]
                   min: min,
                   max: max,
                   divisions: divisions,

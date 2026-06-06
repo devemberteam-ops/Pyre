@@ -122,6 +122,30 @@ void main() {
           'Aimi Taniguchi');
     });
 
+    // LOW 12: a `.` that ends a short token (an initial / a title) must NOT cut
+    // the name — only a sentence-ending period (a token > 2 chars before it,
+    // followed by a space) cuts.
+    test('name clamp does NOT cut initials or short titles', () {
+      expect(
+          renderCard({'fullName': 'J. Smith'}, CreatorMode.character)['name'],
+          'J. Smith');
+      expect(
+          renderCard({'fullName': 'Dr. Vale'}, CreatorMode.character)['name'],
+          'Dr. Vale');
+      expect(
+          renderCard({'fullName': 'St. Claire'}, CreatorMode.character)['name'],
+          'St. Claire');
+      expect(
+          renderCard({'fullName': 'A. J. Holloway'},
+              CreatorMode.character)['name'],
+          'A. J. Holloway');
+      // but a real sentence-ending period still cuts (existing behaviour).
+      expect(
+          renderCard({'fullName': 'Juno. Or so they say.'},
+              CreatorMode.character)['name'],
+          'Juno');
+    });
+
     test('empty optional field is skipped entirely (no "Label: —")', () {
       final fields = <String, dynamic>{
         'fullName': 'Solo',
@@ -133,6 +157,80 @@ void main() {
       expect(desc.contains('Race:'), isFalse);
       expect(desc.contains('—'), isFalse);
       expect(desc, 'Full Name: Solo\n\nCore Traits: Quiet.');
+    });
+  });
+
+  group('renderCard — alternate_greetings (the owner-reported gap)', () {
+    test('character: a List of 2 greetings maps to out["alternate_greetings"] '
+        'as a List<String> of length 2 (NOT folded into the Description)', () {
+      final fields = <String, dynamic>{
+        'fullName': 'Mina',
+        'first_mes': 'The bell jingles as you step in.',
+        'alternate_greetings': <String>[
+          '*She looks up from the espresso machine, ears flicking.* '
+              '**"Oh — you came back."**',
+          '*Rain hammers the window; the cafe is empty but for her.* '
+              '**"We\'re technically closed, but… stay."**',
+        ],
+      };
+      final out = renderCard(fields, CreatorMode.character);
+
+      expect(out['alternate_greetings'], isA<List<String>>());
+      final greetings = out['alternate_greetings'] as List<String>;
+      expect(greetings.length, 2);
+      expect(greetings[0], contains('Oh — you came back.'));
+      expect(greetings[1], contains('stay.'));
+
+      // Greetings must NOT bleed into the labeled Description body.
+      final desc = out['description'] as String;
+      expect(desc.contains('Alternate Greetings'), isFalse);
+      expect(desc.contains('Oh — you came back.'), isFalse);
+    });
+
+    test('scenario: a List of 2 greetings maps to out["alternate_greetings"]',
+        () {
+      final fields = <String, dynamic>{
+        'name': 'The Sunken Gate',
+        'first_mes': 'The jungle breathes around you.',
+        'alternate_greetings': <String>[
+          'A different cold-open: you wake at the gate, alone.',
+          'Or: the storm has already passed, and the ruins steam.',
+        ],
+      };
+      final out = renderCard(fields, CreatorMode.scenario);
+      final greetings = out['alternate_greetings'] as List<String>;
+      expect(greetings.length, 2);
+      // Scenario XML Description must not carry an <Alternate Greetings> tag.
+      final desc = out['description'] as String;
+      expect(desc.contains('Alternate Greetings'), isFalse);
+    });
+
+    test('tolerates a single STRING (one greeting) → a 1-element list', () {
+      final out = renderCard(<String, dynamic>{
+        'fullName': 'Solo',
+        'alternate_greetings': 'A lone alternate opening.',
+      }, CreatorMode.character);
+      expect(out['alternate_greetings'], <String>['A lone alternate opening.']);
+    });
+
+    test('absent / empty → no alternate_greetings key (trimmed empties)', () {
+      final absent = renderCard(
+          <String, dynamic>{'fullName': 'Solo'}, CreatorMode.character);
+      expect(absent.containsKey('alternate_greetings'), isFalse);
+
+      final empty = renderCard(<String, dynamic>{
+        'fullName': 'Solo',
+        'alternate_greetings': <String>['', '   '],
+      }, CreatorMode.character);
+      expect(empty.containsKey('alternate_greetings'), isFalse);
+    });
+
+    test('persona does NOT carry alternate_greetings (excluded by design)', () {
+      final out = renderCard(<String, dynamic>{
+        'fullName': 'Me',
+        'alternate_greetings': <String>['nope'],
+      }, CreatorMode.persona);
+      expect(out.containsKey('alternate_greetings'), isFalse);
     });
   });
 
@@ -361,6 +459,53 @@ void main() {
     });
   });
 
+  group('carryForwardDuplicateTags (CRITICAL 4)', () {
+    test('a duplicate <Tag> (world#2) in the existing card is carried into the '
+        'rebuilt fields so the edit re-render does not drop it', () {
+      // A scenario card with TWO <World> sections decomposes to world + world#2.
+      const original = '<World>\nThe surface realm.\n</World>\n\n'
+          '<World>\nThe sunken realm below.\n</World>\n\n'
+          '<NPCs>\nSehka, the warden.\n</NPCs>';
+      final existing = decomposeDescription(original, CreatorMode.scenario);
+      expect(existing.containsKey('world#2'), isTrue,
+          reason: 'precondition: the duplicate decomposed to world#2');
+
+      // The edit build only re-requested base keys (the batches never list
+      // world#2), so the model output has world but NOT world#2.
+      final fields = <String, dynamic>{
+        'world': 'The surface realm, now expanded.',
+        'npcs': 'Sehka, the warden.',
+      };
+
+      final merged = carryForwardDuplicateTags(fields, existing);
+
+      // The duplicate survives the edit.
+      expect(merged['world#2'], 'The sunken realm below.');
+      // The model's edit to the base key is preserved (not clobbered).
+      expect(merged['world'], 'The surface realm, now expanded.');
+
+      // …and it re-renders into a second <World> block.
+      final desc =
+          renderCard(merged, CreatorMode.scenario)['description'] as String;
+      expect('<World>'.allMatches(desc).length, 2,
+          reason: 'both <World> blocks must survive the edit');
+    });
+
+    test('does NOT overwrite a base key the model returned', () {
+      final fields = <String, dynamic>{'world': 'New value.'};
+      final existing = <String, String>{'world': 'Old value.'};
+      final merged = carryForwardDuplicateTags(fields, existing);
+      expect(merged['world'], 'New value.');
+    });
+
+    test('no #N keys → fields unchanged', () {
+      final fields = <String, dynamic>{'world': 'x'};
+      final existing = <String, String>{'world': 'old', 'npcs': 'y'};
+      final merged = carryForwardDuplicateTags(fields, existing);
+      expect(merged, {'world': 'x'});
+    });
+  });
+
   group('renderMesExample', () {
     test('<START>-separated, **bold**/*italic*, includes a charged beat', () {
       final examples = <dynamic>[
@@ -403,6 +548,53 @@ void main() {
       expect(out.contains('<START>'), isTrue);
       expect(out.contains('{{user}}: What are you reading?'), isTrue);
       expect(out.contains('{{char}}: Oh— nothing.'), isTrue);
+    });
+
+    // CRITICAL 2: a {action, dialogue} item defaults to {{char}}: voice for a
+    // character card — the existing contract.
+    test('character mode: {action, dialogue} item defaults to {{char}}: voice',
+        () {
+      final out = renderMesExample(<dynamic>[
+        {'action': 'waves', 'dialogue': 'hi there'},
+      ], mode: CreatorMode.character);
+      expect(out.contains('{{char}}: '), isTrue);
+      expect(out.contains('{{user}}: '), isFalse);
+    });
+
+    // CRITICAL 2: in PERSONA mode the same {action, dialogue} item is the
+    // user's own line, so it must default to {{user}}: voice — a persona is the
+    // user's self-insert.
+    test('persona mode: {action, dialogue} item defaults to {{user}}: voice',
+        () {
+      final out = renderMesExample(<dynamic>[
+        {'action': 'waves', 'dialogue': 'hi there'},
+      ], mode: CreatorMode.persona);
+      expect(out.contains('{{user}}: '), isTrue);
+      expect(out.contains('{{char}}: '), isFalse);
+    });
+
+    // CRITICAL 2: renderCard threads the mode → a persona's dialogue examples
+    // render in {{user}}: voice (the whole point of a persona).
+    test('renderCard(persona) renders dialogue examples in {{user}}: voice', () {
+      final fields = <String, dynamic>{
+        'fullName': 'Persona Pat',
+        'dialogueExamples': <dynamic>[
+          {'action': 'grins', 'dialogue': 'Let me handle this.'},
+        ],
+      };
+      final mes =
+          renderCard(fields, CreatorMode.persona)['mes_example'] as String;
+      expect(mes.contains('{{user}}: '), isTrue);
+      expect(mes.contains('{{char}}: '), isFalse);
+    });
+
+    // CRITICAL 2: an explicit `speaker` field still wins over the mode default.
+    test('explicit speaker overrides the persona mode default', () {
+      final out = renderMesExample(<dynamic>[
+        {'speaker': 'Mina', 'action': 'waves', 'dialogue': 'hi'},
+      ], mode: CreatorMode.persona);
+      expect(out.contains('Mina: '), isTrue);
+      expect(out.contains('{{user}}: '), isFalse);
     });
   });
 

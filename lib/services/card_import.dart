@@ -3,6 +3,7 @@
 import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../models/models.dart';
+import 'attachment_store.dart';
 import 'png_parser.dart';
 
 /// Wave CY.18.43: card-import diagnostics. Pre-Wave a malformed
@@ -106,4 +107,69 @@ Character characterFromCharaCard(CharaCard card, {String? overrideAvatar}) {
         : <String, dynamic>{},
     avatar: overrideAvatar ?? card.avatarDataUrl,
   );
+}
+
+/// Audit 2026-06-05: restore the fields the chara_card_v2 canvas rebuild
+/// drops on the Creator's "Edit with AI" save path. The canvas only carries
+/// the chara_card `data` block, so the extra [Character.gallery] images, the
+/// [Character.favorite] star, and the top-level [Character.talkativeness] are
+/// at their empty defaults on a `characterFromCharaCard` rebuild. Without
+/// this, an AI edit silently WIPED a BotBooru card's gallery, un-starred a
+/// favourited card, and dropped talkativeness. Mirrors the persona edit path,
+/// which already restores its extras from the existing record.
+///
+/// Mutates [rebuilt] in place and returns it for chaining.
+///
+/// [keepFavorite] is true for an in-place OVERWRITE (the edited card IS the
+/// original record, so its star carries over) and false for a "Save as a
+/// copy" fork (a fresh copy is its own new record and starts unstarred).
+Character restoreCanvasDroppedExtras(
+  Character rebuilt,
+  Character original, {
+  required bool keepFavorite,
+}) {
+  rebuilt.gallery = List<String>.from(original.gallery);
+  rebuilt.talkativeness = original.talkativeness;
+  if (keepFavorite) rebuilt.favorite = original.favorite;
+  return rebuilt;
+}
+
+/// Mega-audit 2026-06-05 (B-2 / H-6): externalise a freshly-imported
+/// character's INLINE images (avatar + gallery) into the AttachmentStore so
+/// they enter state as `pyre://attachment/<hash>` refs instead of inline
+/// base64. Pre-fix, `characterFromCharaCard` set the avatar to an inline
+/// `data:` URL and `addCharacter` never externalised it, so every imported
+/// avatar stayed inline forever — re-encoded on each debounced save and
+/// copied into all rolling backups. This mirrors the persona ST import path
+/// (`st_bulk_import_flow.dart`).
+///
+/// Idempotent: already-external `pyre://` refs and empty values are left
+/// untouched. On web (no fs → store returns null) the inline URLs stay as-is,
+/// which is correct. Best-effort: a single image that fails to externalise
+/// keeps its inline form rather than aborting the import.
+Future<void> externalizeCharacterImages(Character c) async {
+  final nextAvatar = await externalizeInlineImageRef(c.avatar);
+  if (nextAvatar != null) c.avatar = nextAvatar;
+  if (c.gallery.isNotEmpty) {
+    for (var i = 0; i < c.gallery.length; i++) {
+      final next = await externalizeInlineImageRef(c.gallery[i]);
+      if (next != null) c.gallery[i] = next;
+    }
+  }
+}
+
+/// Mega-audit 2026-06-05 (B-2 / H-6): persona counterpart of
+/// [externalizeCharacterImages]. A persona imported FROM a card (the
+/// `_personaFromImportedCard` path) inherits the card's inline `data:`
+/// avatar; this externalises it (+ any inline gallery entries) into the
+/// AttachmentStore. Idempotent / web-safe (see [externalizeInlineImageRef]).
+Future<void> externalizePersonaImages(Persona p) async {
+  final nextAvatar = await externalizeInlineImageRef(p.avatar);
+  if (nextAvatar != null) p.avatar = nextAvatar;
+  if (p.gallery.isNotEmpty) {
+    for (var i = 0; i < p.gallery.length; i++) {
+      final next = await externalizeInlineImageRef(p.gallery[i]);
+      if (next != null) p.gallery[i] = next;
+    }
+  }
 }

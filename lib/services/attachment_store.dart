@@ -20,7 +20,7 @@
 // every method). Web reads attachments via the LAN server's HTTP
 // endpoint, never via local fs — see RemoteBackend in Wave 71.
 
-import 'dart:convert' show base64Decode;
+import 'dart:convert' show base64Decode, base64Encode;
 import 'dart:io' show Directory, File;
 import 'dart:typed_data';
 
@@ -259,6 +259,18 @@ class AttachmentStore {
         if (match == null) continue;
         final hash = match.group(1)!;
         if (referenced.contains(hash)) continue;
+        // Audit 2026-06-04 (M1): protect freshly-written blobs. `referenced` is
+        // a snapshot from the GC's start; the SyncEngine's first tick (or a
+        // concurrent import) can write a NEW blob seconds later that the
+        // snapshot doesn't know about. Skip anything modified very recently so
+        // we never reap a just-arrived blob (a genuine orphan is still collected
+        // on the next launch). If we can't read the mtime, skip conservatively.
+        try {
+          final modified = await entry.lastModified();
+          if (DateTime.now().difference(modified).inSeconds < 120) continue;
+        } catch (_) {
+          continue;
+        }
         try {
           await entry.delete();
           // Best-effort delete of the mime sidecar too.
@@ -299,6 +311,53 @@ class AttachmentStore {
     }
     return total;
   }
+}
+
+/// Mega-audit 2026-06-05 (B-2 / H-6): externalise freshly-picked / decoded
+/// image BYTES into the AttachmentStore, returning the `pyre://attachment/<hash>`
+/// ref to persist on the owning record. On web (no fs → `store` returns null)
+/// it falls back to an inline `data:` URL so the image still round-trips —
+/// exactly the persona ST import path's contract (`st_bulk_import_flow.dart`).
+///
+/// Use this at EVERY upload site (avatar pick, background pick, AI-creator
+/// avatar) so images enter state as a ref and never linger as inline base64
+/// (which re-encodes on every debounced save + gets copied into all rolling
+/// backups). Empty input → an empty string (callers treat that as "no image").
+Future<String> externalizeImageBytes(Uint8List bytes,
+    {String mime = 'image/png'}) async {
+  if (bytes.isEmpty) return '';
+  final ref = await AttachmentStore.store(bytes, mime: mime);
+  if (ref != null) return ref;
+  // Web / store-unavailable fallback: keep the bytes inline.
+  return 'data:$mime;base64,${base64Encode(bytes)}';
+}
+
+/// Mega-audit 2026-06-05 (B-2 / H-6): externalise an inline image REF STRING
+/// (a `data:` URL or bare/`,`-prefixed base64) into a `pyre://attachment/<hash>`
+/// ref. Already-externalised `pyre://` refs and empty/null inputs are returned
+/// unchanged (idempotent). On web — or if the bytes can't be decoded / stored —
+/// the original string is returned untouched (inline fallback stays valid).
+Future<String?> externalizeInlineImageRef(String? value) async {
+  if (value == null || value.isEmpty) return value;
+  if (AttachmentStore.isPyreUrl(value)) return value; // already external
+  if (!value.startsWith('data:')) {
+    // A bare base64 string (rare) — try to decode; anything else (http URL,
+    // garbage) is left as-is.
+    final bytes = await resolveAvatarBytes(value);
+    if (bytes == null || bytes.isEmpty) return value;
+    final ref = await AttachmentStore.store(bytes, mime: 'image/png');
+    return ref ?? value;
+  }
+  final bytes = await resolveAvatarBytes(value);
+  if (bytes == null || bytes.isEmpty) return value;
+  // Best-effort mime from the data URL header (else default to PNG).
+  String mime = 'image/png';
+  final semi = value.indexOf(';');
+  if (value.startsWith('data:') && semi > 5) {
+    mime = value.substring(5, semi);
+  }
+  final ref = await AttachmentStore.store(bytes, mime: mime);
+  return ref ?? value;
 }
 
 /// Wave CY.18.145: resolve a Character/Persona `avatar` field to raw image

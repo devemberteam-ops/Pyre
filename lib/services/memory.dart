@@ -34,10 +34,13 @@
 // variant choices. The empty string is a sentinel for legacy migrated
 // checkpoints and is always treated as valid.
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'dart:async' show unawaited;
+
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
 import '../models/models.dart';
 import 'chat_api.dart';
+import 'llm_debug_log.dart';
 
 /// Wave CY.18.42: in-memory error log for memory-system failures.
 /// Pre-Wave the LLM-summariser calls swallowed every error with
@@ -182,14 +185,59 @@ List<MemoryCheckpoint> findValidCheckpoints(Chat chat) {
 /// lands exactly at message #20 and every subsequent fire lands
 /// 20 messages after the previous anchor.
 bool shouldSummarize(Chat chat, {MemorySettings? memorySettings}) {
-  if (!chat.memoryEnabled) return false;
-  // Global kill-switch — autoEvery == 0 means "never auto-summarise".
-  if (memorySettings != null && memorySettings.autoEvery == 0) return false;
+  return summarizeDecision(chat, memorySettings: memorySettings).shouldSummarize;
+}
+
+/// Diagnostic companion to [shouldSummarize]: returns the SAME boolean
+/// verdict alongside the intermediate numbers that drove it, so a silent
+/// non-firing auto-summariser can be diagnosed from the export-only log.
+///
+/// IMPORTANT: this is the single source of truth — [shouldSummarize] now
+/// delegates here and reads back `.shouldSummarize`, so the boolean result
+/// is byte-identical to the prior inline logic. The extra fields are pure
+/// observability; computing them changes nothing.
+class SummarizeDecision {
+  /// True iff the auto-summariser should fire now (== [shouldSummarize]).
+  final bool shouldSummarize;
+
+  /// Anchor index of the last VALID checkpoint for the current branch, or
+  /// -1 when there is none.
+  final int lastAnchor;
+
+  /// Count of NEW durable (assistant `MessageKind.char`) turns past the
+  /// last anchor — the quantity compared against [threshold].
+  final int newCharMsgs;
+
+  /// The effective fire threshold (resolved from `autoEvery` or the
+  /// `_summarizeThreshold` default).
+  final int threshold;
+
+  /// Number of valid checkpoints for the current branch.
+  final int validCount;
+
+  /// Total messages in the chat (all kinds).
+  final int totalMessages;
+
+  const SummarizeDecision({
+    required this.shouldSummarize,
+    required this.lastAnchor,
+    required this.newCharMsgs,
+    required this.threshold,
+    required this.validCount,
+    required this.totalMessages,
+  });
+}
+
+/// Computes the auto-summarise verdict AND the numbers behind it. The
+/// boolean logic is identical to the historical inline body of
+/// [shouldSummarize]; this just also surfaces the intermediates.
+SummarizeDecision summarizeDecision(Chat chat,
+    {MemorySettings? memorySettings}) {
+  final valid = findValidCheckpoints(chat);
+  final lastAnchor = valid.isEmpty ? -1 : valid.last.anchorMessageIdx;
   final threshold = memorySettings != null && memorySettings.autoEvery > 0
       ? memorySettings.autoEvery
       : _summarizeThreshold;
-  final valid = findValidCheckpoints(chat);
-  final lastAnchor = valid.isEmpty ? -1 : valid.last.anchorMessageIdx;
   // Count only DURABLE turns (assistant prose) past the anchor — not user / ooc
   // / scene / system messages. A run of impersonations or OOC chatter with no
   // new character reply must NOT trip the summariser (it would checkpoint over
@@ -199,7 +247,24 @@ bool shouldSummarize(Chat chat, {MemorySettings? memorySettings}) {
   for (var i = lastAnchor + 1; i < chat.messages.length; i++) {
     if (chat.messages[i].kind == MessageKind.char) newMessages++;
   }
-  return newMessages >= threshold;
+  // Preserve the exact short-circuits of the original boolean: memory off
+  // OR autoEvery==0 kill-switch ⇒ false, regardless of the counts.
+  final bool fire;
+  if (!chat.memoryEnabled) {
+    fire = false;
+  } else if (memorySettings != null && memorySettings.autoEvery == 0) {
+    fire = false;
+  } else {
+    fire = newMessages >= threshold;
+  }
+  return SummarizeDecision(
+    shouldSummarize: fire,
+    lastAnchor: lastAnchor,
+    newCharMsgs: newMessages,
+    threshold: threshold,
+    validCount: valid.length,
+    totalMessages: chat.messages.length,
+  );
 }
 
 /// Builds the LLM prompt body for a checkpoint covering messages
@@ -255,16 +320,39 @@ String _buildSummariserBody({
       MessageKind.scene => 'Scene',
       MessageKind.system => 'System',
     };
-    body.writeln('$role: ${m.text}');
+    // chat-core-1-01: assistant bodies can carry `<think>…</think>` reasoning
+    // (kept in the STORED text for the per-message toggle). Strip it from the
+    // summariser's SOURCE so chain-of-thought never feeds the recap. Only
+    // character turns carry reasoning; other roles pass through verbatim.
+    final text =
+        m.kind == MessageKind.char ? stripStreamArtifacts(m.text) : m.text;
+    body.writeln('$role: $text');
   }
   return body.toString();
 }
+
+/// memory test seam: exposes [_buildSummariserBody] so the summariser source
+/// assembly (incl. the chat-core-1-01 `<think>` strip) is unit-testable.
+@visibleForTesting
+String buildSummariserBodyForTest({
+  required Chat chat,
+  required int startExclusive,
+  required int endInclusive,
+  required List<MemoryCheckpoint> priorContext,
+}) =>
+    _buildSummariserBody(
+      chat: chat,
+      startExclusive: startExclusive,
+      endInclusive: endInclusive,
+      priorContext: priorContext,
+    );
 
 /// System prompt used by the summariser. Honours
 /// [MemorySettings.summaryPrompt] when provided (with `{{words}}`
 /// substitution); otherwise falls back to a sensible default tuned for
 /// the new checkpoint paradigm.
-String _resolveSystemPrompt({
+@visibleForTesting
+String resolveSystemPrompt({
   required bool hasPriorContext,
   required MemorySettings? memorySettings,
 }) {
@@ -293,67 +381,35 @@ String _resolveSystemPrompt({
       'invent new events. Do NOT write any action, dialogue, or outcome '
       'that has not already occurred in the messages provided. Do NOT '
       'continue the scene or add anything that comes after the last '
-      'message. RETELL what happened — never continue it. Every sentence '
-      'you write must describe something that is already in the '
-      'conversation above, nothing more. ';
-  if (memorySettings != null &&
-      memorySettings.summaryPrompt.trim().isNotEmpty) {
-    // Soft cap: convert memoryLimit (lines, loosely "words") into a
-    // word budget the template can interpolate.
-    final words =
-        (memorySettings.memoryLimit.clamp(50, 5000) ~/ 1).toString();
-    // Wave CY.18.209: ALWAYS prepend the anti-continuation framing, even
-    // when the user supplies their own template — the recap-not-continuation
-    // discipline is non-negotiable regardless of the editable summary text.
-    return '$antiContinuationBlock'
-        '${memorySettings.summaryPrompt.replaceAll('{{words}}', words)}';
-  }
-  return hasPriorContext
-      ? '$antiContinuationBlock'
-          'You are the NARRATOR of an unfolding roleplay, keeping a '
-          'running STORY of it across entries that read as one '
-          'continuous tale — not a log, not a status report. You are '
-          'given the story so far, then the exact point where it '
-          'currently ends; write the NEXT part of the story recap, '
-          'continuing seamlessly from that handoff in the same '
-          'third-person, PAST-tense narrative voice — the next page of '
-          'the same recap, never a fresh summary. Open with a connective '
-          'beat ("From there", "In the days that followed", "Soon '
-          'after", "Meanwhile") rather than re-introducing anyone. TELL '
-          'it as a story: what the characters did, how things shifted '
-          'between them, what it cost or meant, the texture of the '
-          'moment — NOT a dry, minute-by-minute description and NOT a '
-          'list of events. Cover ONLY the new events given below; do '
-          'NOT repeat, rephrase or re-summarise anything already in the '
-          'story so far, and do NOT restart or re-introduce people and '
-          'places already named. Close on whatever is still unresolved '
-          'so the next part has a thread to pick up. Stay concrete — '
-          'real names, real places, real events from the conversation; '
-          'invent nothing. Keep it to ONE focused paragraph — roughly '
-          '150–300 words, vivid but economical, never padded or run '
-          'long (a recap, not the scene replayed). Prose only: no '
-          'headers, no bullet points, no commentary.'
-      : '$antiContinuationBlock'
-          'You are the NARRATOR of an unfolding roleplay, beginning a '
-          'running STORY recap of it. This is the OPENING recap entry — '
-          'write it like the first page of a story, in flowing '
-          'third-person, PAST-tense prose. Establish who the characters '
-          'are, where they are and the situation that sets things in '
-          'motion, then carry it through the first real beats: what the '
-          'characters did, what shifted between them, what is left '
-          'hanging. TELL it as a story with shape and stakes — NOT a '
-          'minute-by-minute description and NOT a list of events strung '
-          'together with "then… then… then". This opening sets the '
-          'narrative VOICE for every entry that follows (each continues '
-          'directly from where the last ended), so make it vivid and '
-          'leave a clear thread unresolved on the final line. Stay '
-          'concrete — use the real names, places and events from the '
-          'conversation below, and invent nothing that is not there. Do '
-          'NOT borrow names or settings from this instruction. Keep it '
-          'to ONE focused paragraph — roughly 150–300 words, vivid but '
-          'economical, never padded or run long (a recap, not the scene '
-          'replayed). Prose only: no headers, no bullet points, no '
-          'commentary.';
+      'message. RETELL what happened in the PAST tense — never continue '
+      'it. Within those limits, write it as flowing narrative prose (a '
+      '"story so far"), not a bulleted log and not a flat list of '
+      'events. ';
+  // Soft cap: convert memoryLimit (lines, loosely "words") into a word
+  // budget the template can interpolate via `{{words}}`.
+  final words =
+      ((memorySettings?.memoryLimit ?? 1000).clamp(50, 5000) ~/ 1).toString();
+  // Wave CY.18.270: the rich narrative-arc framing now lives in ONE place —
+  // MemorySettings._defaultPrompt — which already covers BOTH the
+  // "Story so far" handoff case and the opening-arc case in prose, and is
+  // PAST-tense throughout. Use the user's custom template when they supplied
+  // one (a non-empty summaryPrompt), otherwise fall back to that same default
+  // arc framing. This removes the prior DEAD, divergent narrative branch (the
+  // user's persisted summaryPrompt always defaulted to the non-empty
+  // _defaultPrompt, so the old hasPriorContext branches below were never
+  // reached) and keeps a single source of truth for the arc framing.
+  // `hasPriorContext` is left as a documented param: the actual WITH/WITHOUT
+  // prior-context split is handled by the prompt body itself (it inspects the
+  // "Story so far" block the user-turn builder includes), not by branching
+  // here — so both code paths now yield the same coherent arc framing.
+  final body = (memorySettings != null &&
+          memorySettings.summaryPrompt.trim().isNotEmpty)
+      ? memorySettings.summaryPrompt
+      : MemorySettings().summaryPrompt; // == _defaultPrompt arc framing
+  // Wave CY.18.209: ALWAYS prepend the anti-continuation framing — the
+  // recap-not-continuation discipline is non-negotiable regardless of the
+  // editable summary text.
+  return '$antiContinuationBlock${body.replaceAll('{{words}}', words)}';
 }
 
 /// Returns true when [text] appears to end on a complete sentence, i.e.
@@ -395,6 +451,70 @@ bool recapLooksComplete(String text) {
   return false;
 }
 
+/// Leading-line markers a reasoning model uses for its META-REASONING /
+/// planning preamble (anchored to the START of a line, word-boundary aware so
+/// a narrative line that merely SHARES a prefix word — e.g. "Letting go…",
+/// "Sounds drifted…" — is never mistaken for a plan line). These are the
+/// "thinking out loud" lines that precede the actual recap when a reasoning
+/// model dumps its `<think>` channel as the answer.
+final RegExp _kRecapPlanLine = RegExp(
+  r'''^\s*(?:[-*>#•]\s*)?(?:'''
+  // first-person planning: I should/need/will/must/'ll/'m/am/have to/want
+  r"i(?:'ll|'m| am| should| need| will| must| have to| want| can| could| think| guess| see| have| now)\b"
+  r'|'
+  // task framing
+  r'my (?:task|job|goal)\b|the user\b|user (?:wants|asks|is asking)\b|we (?:need|should|must)\b'
+  r'|'
+  // discourse openers used to start reasoning
+  r"let me\b|let'?s\b|okay\b|ok\b|alright\b|so,|now,|first,|next,|then,|hmm\b|wait\b|actually,|right,|well,"
+  r')',
+  caseSensitive: false,
+);
+
+/// Wave: strip a reasoning model's META-REASONING preamble from a recovered
+/// LTM recap before it is stored. ONLY used on the empty-visible-content
+/// fallback path (when [recoverReasoningFromRaw] returned the raw `<think>`
+/// channel verbatim) — visible content still wins untouched.
+///
+/// Mirrors [stripVisionReasoningPreamble] (image_describe.dart): drop any
+/// `<think>…</think>` blocks, then drop the LEADING contiguous run of planning
+/// lines ("The user wants…/I should…/Let me…/Wait…") and keep the narrative
+/// recap tail. Conservative: stops at the first non-plan (narrative) line, and
+/// NEVER nukes the text to empty — if every line looks like reasoning it
+/// returns the think-stripped text (a thin recap beats none). Pure + tested.
+String stripRecapReasoningPreamble(String raw) {
+  // 1. Drop any <think>…</think> reasoning blocks first.
+  final withoutThink = raw.replaceAll(
+    RegExp(r'<think>.*?</think>', dotAll: true, caseSensitive: false),
+    '',
+  );
+
+  // 2. Drop a LEADING contiguous run of plan/meta lines. Blank lines inside
+  //    the leading run are skipped (still part of the preamble); we stop at the
+  //    first non-blank line that does NOT look like a plan line — that is where
+  //    the narrative recap begins.
+  final lines = withoutThink.split('\n');
+  var start = 0;
+  for (var i = 0; i < lines.length; i++) {
+    final t = lines[i].trim();
+    if (t.isEmpty) {
+      start = i + 1;
+      continue;
+    }
+    if (_kRecapPlanLine.hasMatch(t)) {
+      start = i + 1;
+      continue;
+    }
+    break; // first narrative line — keep from here on
+  }
+
+  final kept = lines.sublist(start).join('\n').trim();
+  if (kept.isNotEmpty) return kept;
+  // Everything looked like reasoning — never return nothing.
+  final fallback = withoutThink.trim();
+  return fallback.isNotEmpty ? fallback : raw.trim();
+}
+
 /// Wave CY.18.164: the summariser sends NO preset, so `_samplingPayload`
 /// falls through to the GLOBAL `modelSettings.maxTokens` (default 1024) —
 /// which can be lower than the RP preset's cap. The storytelling recap
@@ -407,6 +527,42 @@ ModelSettings _recapSettings(ModelSettings base) {
   return ModelSettings.fromJson(base.toJson())..maxTokens = 1024;
 }
 
+/// Runs one recap LLM call via [completeChatStreamed] with the reasoning
+/// fallback ON, but cleans the result of META-REASONING preamble ONLY when the
+/// answer actually came from that fallback (visible content wins, untouched).
+///
+/// HOW it isolates the fallback path without a second call: it captures the raw
+/// stream via `rawSink`. If [stripStreamArtifacts] of the raw is non-empty, the
+/// returned text IS the visible content — return it verbatim. If it is empty,
+/// the return value was recovered from the `<think>` channel
+/// ([recoverReasoningFromRaw]) — a reasoning-only model (Venice's uncensored
+/// Qwen) dumping its whole recap (planning lines and all) — so run
+/// [stripRecapReasoningPreamble] to drop the "The user wants…/I should…/wait…"
+/// scaffolding before it is stored as the checkpoint.
+Future<String> _completeRecapSanitized({
+  required ApiProvider provider,
+  required ModelSettings settings,
+  required List<ChatTurn> messages,
+}) async {
+  final rawSink = StringBuffer();
+  final result = await completeChatStreamed(
+    provider: provider,
+    settings: settings,
+    messages: messages,
+    debugTag: 'ltm', // Wave CY.18.214 diagnostics tag
+    // Wave CY.18.270: a reasoning-only model (Venice's uncensored Qwen) emits
+    // its whole recap in the `<think>` channel; stripping it left '' → "empty
+    // reply" → no checkpoint. The recap is internal context (never shown
+    // verbatim), so a cleaned-up "thinky" recap beats none.
+    allowReasoningFallback: true,
+    rawSink: rawSink,
+  );
+  // Visible content present ⇒ the result is the visible content; leave it alone.
+  if (stripStreamArtifacts(rawSink.toString()).isNotEmpty) return result;
+  // Empty visible content ⇒ result came from the reasoning fallback; clean it.
+  return stripRecapReasoningPreamble(result);
+}
+
 /// Generate a fresh checkpoint covering everything between the last
 /// valid anchor (exclusive) and the cutoff (inclusive). Returns null
 /// when there's nothing to summarise or the LLM call fails.
@@ -416,7 +572,13 @@ Future<MemoryCheckpoint?> generateCheckpoint({
   required ModelSettings settings,
   MemorySettings? memorySettings,
 }) async {
-  if (provider.baseUrl.isEmpty) return null;
+  if (provider.baseUrl.isEmpty) {
+    // Wave CY.18.270: was a silent `return null` — record it so the failure
+    // is visible (the chat-screen SnackBar reads MemoryErrors) instead of the
+    // summariser appearing to do nothing when no provider URL is configured.
+    MemoryErrors.record('generateCheckpoint', 'provider has no base URL');
+    return null;
+  }
   final valid = findValidCheckpoints(chat);
   final lastAnchor = valid.isEmpty ? -1 : valid.last.anchorMessageIdx;
   // Cover everything up to the latest message. No keep-recent buffer:
@@ -425,7 +587,15 @@ Future<MemoryCheckpoint?> generateCheckpoint({
   // chat replay starts past the new anchor and grows back from zero
   // as the user keeps chatting.
   final cutoff = chat.messages.length - 1;
-  if (cutoff <= lastAnchor) return null;
+  if (cutoff <= lastAnchor) {
+    // SILENT export-only breadcrumb (Wave CY.18.214 channel). This early
+    // return otherwise records NOTHING — making a stuck "nothing to cover"
+    // case invisible. No behaviour change: the return is identical.
+    unawaited(LlmDebugLog.instance
+        .trace('ltm.gen: skipped cutoff<=lastAnchor (cutoff=$cutoff '
+            'lastAnchor=$lastAnchor)'));
+    return null;
+  }
 
   final priorCapped = valid.length > kMaxCheckpointsInPrompt
       ? valid.sublist(valid.length - kMaxCheckpointsInPrompt)
@@ -437,7 +607,7 @@ Future<MemoryCheckpoint?> generateCheckpoint({
     endInclusive: cutoff,
     priorContext: priorCapped,
   );
-  final systemPrompt = _resolveSystemPrompt(
+  final systemPrompt = resolveSystemPrompt(
     hasPriorContext: priorCapped.isNotEmpty,
     memorySettings: memorySettings,
   );
@@ -467,11 +637,10 @@ Future<MemoryCheckpoint?> generateCheckpoint({
         await Future<void>.delayed(const Duration(milliseconds: 600));
       }
       try {
-        firstChunk = (await completeChatStreamed(
+        firstChunk = (await _completeRecapSanitized(
           provider: provider,
           settings: _recapSettings(settings),
           messages: turns,
-          debugTag: 'ltm', // Wave CY.18.214 diagnostics tag
         ))
             .trim();
         if (firstChunk.isNotEmpty) break;
@@ -502,11 +671,10 @@ Future<MemoryCheckpoint?> generateCheckpoint({
       // Append accumulated recap as assistant turn and ask to continue.
       continuationTurns.add(ChatTurn('assistant', accumulated));
       continuationTurns.add(ChatTurn('user', _kRecapContinuePrompt));
-      final chunk = await completeChatStreamed(
+      final chunk = await _completeRecapSanitized(
         provider: provider,
         settings: _recapSettings(settings),
         messages: continuationTurns,
-        debugTag: 'ltm', // Wave CY.18.214 diagnostics tag
       );
       final trimmedChunk = chunk.trim();
       if (trimmedChunk.isEmpty) break; // provider returned nothing — stop
@@ -557,7 +725,7 @@ Future<MemoryCheckpoint?> regenerateCheckpoint({
     endInclusive: cutoff,
     priorContext: priorCapped,
   );
-  final systemPrompt = _resolveSystemPrompt(
+  final systemPrompt = resolveSystemPrompt(
     hasPriorContext: priorCapped.isNotEmpty,
     memorySettings: memorySettings,
   );
@@ -569,11 +737,10 @@ Future<MemoryCheckpoint?> regenerateCheckpoint({
 
   try {
     // Wave CY.18.160: streaming transport (see generateCheckpoint).
-    final out = await completeChatStreamed(
+    final out = await _completeRecapSanitized(
       provider: provider,
       settings: _recapSettings(settings),
       messages: turns,
-      debugTag: 'ltm', // Wave CY.18.214 diagnostics tag
     );
     final summary = out.trim();
     if (summary.isEmpty) {
@@ -637,7 +804,7 @@ void wipeAllCheckpoints(Chat chat) {
 /// checkpoints are valid for the current branch.
 ///
 /// Wave CY.18.2: checkpoints are written as consecutive paragraphs of
-/// the SAME chapter (see _resolveSystemPrompt), so the runtime recap
+/// the SAME chapter (see resolveSystemPrompt), so the runtime recap
 /// concatenates them as pure prose separated by blank lines — no
 /// "Checkpoint X of Y" labels would only fight the model's continuity
 /// when reading the recap as the established story.
@@ -700,7 +867,15 @@ String recencyBoundedRecap(
 /// The index AFTER the last covered message — equivalent to the legacy
 /// `chat.memoryAnchor`. Used by the chat turn builder to decide where
 /// the replay window starts.
+///
+/// memory-livesheet-script-scene-01: when memory is OFF the recap is
+/// suppressed ([buildRecapBlock] returns ''), so honouring a stale anchor here
+/// would hide all pre-anchor messages — they'd be NEITHER summarised NOR
+/// replayed, silently dropping context. With memory disabled we clamp to 0 so
+/// the full history replays. (Gating here means every consumer — the chat
+/// builder AND the token-breakdown panel — stays consistent with the recap.)
 int firstUncoveredIndex(Chat chat) {
+  if (!chat.memoryEnabled) return 0;
   final valid = findValidCheckpoints(chat);
   if (valid.isEmpty) return 0;
   return valid.last.anchorMessageIdx + 1;

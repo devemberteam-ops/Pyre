@@ -25,11 +25,14 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
+import '../models/models.dart';
 import '../services/lan_client.dart';
 import '../services/sync_engine.dart';
+import '../services/sync_manifest.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
+import '../widgets/sync_status_pill.dart';
 
 bool get _supportsCameraScan {
   if (kIsWeb) return false;
@@ -48,6 +51,10 @@ class LanConnectScreen extends StatefulWidget {
 }
 
 class _LanConnectScreenState extends State<LanConnectScreen> {
+  /// SYNC W6 (verification): true while a "Check sync" request is in flight, so
+  /// the button shows a spinner + is disabled (no double-fire).
+  bool _checking = false;
+
   @override
   void initState() {
     super.initState();
@@ -143,6 +150,28 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
     );
   }
 
+  /// SYNC W6 (verification): run the read-only manifest check, then show the
+  /// result. On null (not paired / network error / bad body) a snackbar tells
+  /// the user it couldn't reach the PC rather than silently doing nothing.
+  Future<void> _checkSync() async {
+    setState(() => _checking = true);
+    SyncManifestDiff? diff;
+    try {
+      diff = await SyncEngine.instance.checkSync();
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+    if (!mounted) return;
+    if (diff == null) {
+      _snack('Could not check — is the PC reachable and the server on?');
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => _SyncCheckDialog(diff: diff!),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = LanClient.instance;
@@ -155,9 +184,13 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
           if (c.isPaired) ...[
+            _syncStatusCard(),
+            const SizedBox(height: 12),
             ..._pairedSection(c),
             const SizedBox(height: 12),
             _providerSyncCard(store),
+            const SizedBox(height: 12),
+            _conflictModeCard(store),
           ] else
             ..._unpairedSection(),
           const SizedBox(height: 20),
@@ -211,6 +244,94 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
     ];
   }
 
+  /// SYNC W5 (transparency UI): the headline status card. Makes the otherwise
+  /// invisible sync loop legible — a prominent live [SyncStatusPill], a plain-
+  /// language cadence explainer (so the user knows sync is automatic and WHEN
+  /// it fires), and a precise "Last synced" line with the last pull/push counts
+  /// when a tick has succeeded. Rebuilds on every SyncEngine notify via the
+  /// AnimatedBuilder so the relative time + counts stay live.
+  Widget _syncStatusCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        child: AnimatedBuilder(
+          animation: SyncEngine.instance,
+          builder: (context, _) {
+            final eng = SyncEngine.instance;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'Sync',
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                    const Spacer(),
+                    const SyncStatusPill(),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                // Plain-language cadence so the user knows it's automatic + when.
+                const Text(
+                  'Pyre syncs automatically every ~30s while open, when you '
+                  'reopen the app, and right after pairing. You can also force '
+                  'a sync below.',
+                  style: TextStyle(
+                    color: EmberColors.textMid,
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _lastSyncedLine(eng),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// SYNC W5: the precise "Last synced: <time>" line + last pull/push counts.
+  /// Falls back to a waiting/offline message when there's no successful tick.
+  Widget _lastSyncedLine(SyncEngine eng) {
+    String text;
+    final last = eng.lastSuccessAt;
+    if (last != null) {
+      text = 'Last synced: ${relativeSyncTime(DateTime.now(), last)} '
+          '(${_clockLabel(last)})';
+      // Only mention counts once we have a real tick to describe. "0 · 0" is a
+      // perfectly normal steady state (nothing changed) and worth showing so
+      // the user sees sync is alive even when idle.
+      text += '\nLast tick: pulled ${eng.lastPulledCount} · '
+          'pushed ${eng.lastPushedCount}';
+    } else if (eng.status == SyncStatus.offline ||
+        eng.status == SyncStatus.warning) {
+      text = 'Not synced yet — ${eng.lastError ?? 'the PC is unreachable'}.';
+    } else {
+      text = 'Waiting for the first sync…';
+    }
+    return Text(
+      text,
+      style: const TextStyle(
+        color: EmberColors.textDim,
+        fontSize: 11,
+        height: 1.4,
+      ),
+    );
+  }
+
+  /// A short HH:MM clock label for the precise timestamp next to the relative
+  /// time. Local time, zero-padded; no date (the relative phrase carries "how
+  /// long ago", this is just the exact minute for the curious).
+  String _clockLabel(DateTime t) {
+    final h = t.hour.toString().padLeft(2, '0');
+    final m = t.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
   List<Widget> _pairedSection(LanClient c) {
     return [
       Card(
@@ -253,11 +374,12 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
                 ),
               ],
               const SizedBox(height: 12),
-              // Wave 70 will wire this to SyncEngine.forceTick(); for
-              // now it's a visible stub so the screen is feature-
-              // complete from the user's perspective and the cron tick
-              // doesn't have to come back to add a button.
-              Row(
+              // Wrap so Force sync / Check sync / Disconnect reflow on a narrow
+              // phone instead of overflowing the row.
+              Wrap(
+                spacing: 4,
+                runSpacing: 0,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   TextButton.icon(
                     icon: const Icon(Icons.sync, size: 16),
@@ -276,7 +398,21 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
                       );
                     },
                   ),
-                  const Spacer(),
+                  // SYNC W6 (verification): read-only "are both sides actually
+                  // the same?" check. Compares a per-collection fingerprint
+                  // (counts + digest) of THIS device against the PC's /manifest
+                  // so the user can confirm convergence — no more black box.
+                  TextButton.icon(
+                    icon: _checking
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.fact_check_outlined, size: 16),
+                    label: const Text('Check sync'),
+                    onPressed: _checking ? null : _checkSync,
+                  ),
                   TextButton.icon(
                     icon: const Icon(Icons.link_off,
                         size: 16, color: Colors.redAccent),
@@ -313,8 +449,13 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
             SwitchListTile(
               value: store.uiPrefs.syncProviderKeys,
               onChanged: (v) async {
-                store.uiPrefs.syncProviderKeys = v;
-                store.notifyAndPersist();
+                // SYNC W4: route through the hardened setter (not a bare field
+                // write) so enabling restamps THIS device's provider mtimes too
+                // — defense-in-depth + consistent with the desktop toggle. The
+                // fullResync below still drives the actual re-pull from since=0;
+                // the restamp guarantees the phone's own providers (if any) also
+                // re-ship even if that watermark reset ever changes.
+                store.setSyncProviderKeys(v);
                 setState(() {});
                 if (!v) return;
                 // Newly enabled — pull the providers right now. They were
@@ -339,6 +480,61 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
               ),
               activeThumbColor: EmberColors.primary,
               contentPadding: EdgeInsets.zero,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Mega-audit 2026-06-05 (H-4): device-local choice for how the sync engine
+  /// resolves a GENUINE conflict — the same record edited on BOTH devices
+  /// since the last sync. Default "Newest wins" is exactly today's behavior;
+  /// the other options let the user pick a side, or be warned before anything
+  /// is applied. DEVICE-LOCAL — never synced.
+  Widget _conflictModeCard(AppStore store) {
+    String label(SyncConflictMode m) {
+      switch (m) {
+        case SyncConflictMode.newestWins:
+          return 'Newest wins (default)';
+        case SyncConflictMode.preferThisDevice:
+          return 'Always keep this device';
+        case SyncConflictMode.preferOtherDevice:
+          return 'Always take the other device';
+        case SyncConflictMode.ask:
+          return 'Ask me each time';
+      }
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 12, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Sync conflicts',
+                style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 2),
+            const Text(
+              'When the same item was changed on both devices since the last '
+              'sync, decide which side wins. "Newest wins" keeps today\'s '
+              'behavior.',
+              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+            ),
+            const SizedBox(height: 6),
+            DropdownButton<SyncConflictMode>(
+              value: store.uiPrefs.syncConflictMode,
+              isExpanded: true,
+              underline: const SizedBox.shrink(),
+              items: [
+                for (final m in SyncConflictMode.values)
+                  DropdownMenuItem(value: m, child: Text(label(m))),
+              ],
+              onChanged: (m) {
+                if (m == null) return;
+                store.setSyncConflictMode(m);
+                setState(() {});
+              },
             ),
           ],
         ),
@@ -636,6 +832,134 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
           child: const Text('Pair'),
         ),
       ],
+    );
+  }
+}
+
+/// SYNC W6 (verification): the result readout for "Check sync". When every
+/// collection matched it's a single reassuring "✓ Everything matches"; when
+/// something drifted it lists each collection with the two counts and a per-row
+/// ✓ / ✗ so the user sees EXACTLY what's out of sync ("characters: 9 here · 5
+/// on PC"). Read-only — closing it changes nothing.
+class _SyncCheckDialog extends StatelessWidget {
+  final SyncManifestDiff diff;
+  const _SyncCheckDialog({required this.diff});
+
+  /// Map an internal collection key to a friendly, capitalised label. Unknown
+  /// keys (a future server adding a collection this build doesn't know) fall
+  /// back to the raw key so the row is still informative.
+  static String _label(String key) {
+    switch (key) {
+      case 'characters':
+        return 'Characters';
+      case 'personas':
+        return 'Personas';
+      case 'chats':
+        return 'Chats';
+      case 'presets':
+        return 'Presets';
+      case 'lorebooks':
+        return 'Lorebooks';
+      case 'regexRules':
+        return 'Regex rules';
+      case 'folders':
+        return 'Folders';
+      case 'creatorPresets':
+        return 'Creator prompts';
+      case 'providers':
+        return 'AI providers';
+      case 'settings':
+        return 'Settings';
+      default:
+        return key;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final allMatch = diff.allInSync;
+    return AlertDialog(
+      title: Row(
+        children: [
+          Icon(
+            allMatch ? Icons.check_circle : Icons.sync_problem,
+            color: allMatch ? Colors.green : Colors.orangeAccent,
+            size: 22,
+          ),
+          const SizedBox(width: 8),
+          Text(allMatch ? 'Everything matches' : 'Some items differ'),
+        ],
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              allMatch
+                  ? 'This device and the PC hold the same library. Every '
+                      'collection has identical contents.'
+                  : 'These collections are not yet identical on both sides. '
+                      'A sync should reconcile them — force a sync, then check '
+                      'again.',
+              style: const TextStyle(
+                color: EmberColors.textMid,
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Flexible so a long library list scrolls inside the dialog rather
+            // than overflowing on a small screen.
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final c in diff.collections) _row(c),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+
+  Widget _row(SyncCollectionDiff c) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Icon(
+            c.inSync ? Icons.check : Icons.close,
+            size: 16,
+            color: c.inSync ? Colors.green : Colors.orangeAccent,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _label(c.name),
+              style: const TextStyle(fontSize: 13),
+            ),
+          ),
+          Text(
+            '${c.localCount} here · ${c.remoteCount} on PC',
+            style: TextStyle(
+              fontSize: 12,
+              color: c.inSync ? EmberColors.textDim : EmberColors.textMid,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

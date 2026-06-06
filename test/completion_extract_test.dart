@@ -125,4 +125,68 @@ void main() {
       expect(out, 'Ren and Vesna pressed on.');
     });
   });
+
+  // Wave CY.18.270: the STREAMING summariser path (completeChatStreamed used
+  // by the LTM checkpoint generator) wraps reasoning-channel tokens in
+  // `<think>…</think>`. For a reasoning-ONLY model (Venice's uncensored Qwen)
+  // the visible content is empty, so stripStreamArtifacts() returned '' and no
+  // checkpoint was ever produced. recoverReasoningFromRaw is the streaming
+  // twin of extractCompletionMessageText's reasoning fallback: visible content
+  // wins (the caller uses stripStreamArtifacts first), and only when THAT is
+  // empty does completeChatStreamed(allowReasoningFallback: true) recover this.
+  group('recoverReasoningFromRaw', () {
+    test('whole answer in the reasoning channel → recovered inner text', () {
+      expect(
+        recoverReasoningFromRaw('<think>full recap.</think>'),
+        'full recap.',
+      );
+    });
+
+    test('recovered text is trimmed', () {
+      expect(
+        recoverReasoningFromRaw('<think>\n  full recap.  \n</think>'),
+        'full recap.',
+      );
+    });
+
+    test('Pyre finish-reason sentinel removed before recovery', () {
+      expect(
+        recoverReasoningFromRaw(
+            '<think>They reached the keep.</think><<__PYRE_FINISH__:stop__>>'),
+        'They reached the keep.',
+      );
+    });
+
+    test('nested tags inside the reasoning are stripped', () {
+      // The block regex matches non-greedily up to the FIRST </think>, so the
+      // captured block is "<think>a <think>b</think>"; outer wrappers + any
+      // residual nested tag are removed, leaving the plain words.
+      expect(
+        recoverReasoningFromRaw('<think>a <think>b</think> c</think>'),
+        'a b',
+      );
+    });
+
+    test('no <think> block at all → null (nothing to recover)', () {
+      expect(recoverReasoningFromRaw('just plain visible prose.'), isNull);
+    });
+
+    test('empty reasoning block → null (no usable text)', () {
+      expect(recoverReasoningFromRaw('<think>   </think>'), isNull);
+    });
+
+    // Precedence documentation: when BOTH visible content and a reasoning
+    // block are present, the CALLER prefers the visible content
+    // (stripStreamArtifacts) and never falls back. recoverReasoningFromRaw
+    // itself only ever returns the reasoning — it is a fallback-only helper.
+    test('visible.<think>noise</think> — recovery is fallback-only', () {
+      const raw = 'visible.<think>noise</think>';
+      // Visible content survives the artifact strip — this is what the
+      // caller uses, so the reasoning fallback is never consulted.
+      expect(stripStreamArtifacts(raw), 'visible.');
+      // recoverReasoningFromRaw, if ever consulted, returns ONLY the
+      // reasoning channel ("noise") — never the visible content.
+      expect(recoverReasoningFromRaw(raw), 'noise');
+    });
+  });
 }

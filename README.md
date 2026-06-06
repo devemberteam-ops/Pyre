@@ -100,7 +100,7 @@ We're **Ember Team** — a small, independent group. We've put months into Pyre,
 > Pyre is **bring-your-own-key**: it does nothing until you add a provider. You'll need an API key from an OpenAI-compatible provider (OpenRouter, Venice, NanoGPT, a local server, etc.).
 
 **Android**
-1. Download `app-release.apk` from the [latest release](../../releases).
+1. Download `pyre-android.apk` from the [latest release](../../releases).
 2. Allow installs from your browser/files app, tap the APK.
 3. Open Pyre → **More → API Connections** → add your provider + key.
 
@@ -160,7 +160,9 @@ Found a bug or have an idea? **Open an issue** — that's the fastest way to sha
 
 ## License
 
-Pyre is intended to be released as **open source** (we're finalizing on **AGPL-3.0** — copyleft, so any hosted fork stays open). A `LICENSE` file lands with the first tagged release.
+Pyre is **open source**, licensed under **AGPL-3.0** — copyleft, so any hosted fork stays open. See the [`LICENSE`](LICENSE) file for the full text.
+
+Copyright (C) 2026 Ember Team.
 
 ---
 

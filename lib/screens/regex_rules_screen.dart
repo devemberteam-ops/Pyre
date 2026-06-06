@@ -17,7 +17,7 @@ import '../services/regex_rules.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
-import '../widgets/empty_state.dart';
+import '../widgets/how_it_works_card.dart';
 
 class RegexRulesScreen extends StatelessWidget {
   const RegexRulesScreen({super.key});
@@ -43,81 +43,120 @@ class RegexRulesScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: rules.isEmpty
-          ? EmptyState(
-              icon: Icons.find_replace,
-              title: 'No regex rules yet',
-              subtitle:
-                  'Regex rules rewrite chat text on the fly — strip a model\'s '
-                  'quirk, reformat names, or hide tokens. They are '
-                  'non-destructive: your stored messages never change, and '
-                  'toggling a rule off restores the original instantly.',
-              ctaLabel: 'Create',
-              ctaIcon: Icons.add,
-              onCta: () => _openEditor(context, null),
+      // Wave: the "How it works" explainer is now PERSISTENT at the top
+      // (it used to be an EmptyState that vanished once a rule existed).
+      // The screen is a single ListView: the card, then either an empty
+      // hint or the rule list.
+      body: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        children: [
+          const HowItWorksCard(
+            title: 'How regex rules work',
+            subtitle: 'On-the-fly find/replace, non-destructive.',
+            sections: [
+              HowItWorksSection('What it is', [
+                HowItWorksBlock.paragraph(
+                    'A **regex rule** is a find/replace that rewrites chat '
+                    'text on the fly — strip a model\'s quirk, reformat '
+                    'names, hide tokens, or clean up stray markup.'),
+              ]),
+              HowItWorksSection('Where it applies', [
+                HowItWorksBlock.bullet(
+                    '**Displayed text** — transforms only the chat bubble '
+                    'you see.'),
+                HowItWorksBlock.bullet(
+                    '**Prompt sent to the model** — transforms the history '
+                    'in-flight before it\'s sent.'),
+                HowItWorksBlock.bullet(
+                    'A rule can target **user input**, **AI output**, or '
+                    'both. Pick the streams and stages in the editor.'),
+              ]),
+              HowItWorksSection('Non-destructive', [
+                HowItWorksBlock.paragraph(
+                    'Your stored messages are **never changed**. Toggling a '
+                    'rule off — or deleting it — instantly reverts to the '
+                    'original text. It\'s always safe to experiment.'),
+              ]),
+              HowItWorksSection('Building & importing', [
+                HowItWorksBlock.bullet(
+                    'Tap **+** to write a rule, with a **live test box** so '
+                    'you see the effect as you type.'),
+                HowItWorksBlock.bullet(
+                    '**Import SillyTavern regex** scripts with the upload '
+                    'button.'),
+              ]),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (rules.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4, vertical: 16),
+              child: Text(
+                'No regex rules yet. Tap + to create one.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: EmberColors.textDim, fontSize: 13),
+              ),
             )
-          : ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              itemCount: rules.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 8),
-              itemBuilder: (context, i) {
-                final r = rules[i];
-                return Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.find_replace,
-                        color: EmberColors.textMid),
-                    title: Text(
-                      r.name.isEmpty ? '(unnamed rule)' : r.name,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    subtitle: Text(
-                      _subtitleFor(r),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: EmberColors.textMid),
-                    ),
-                    onTap: () => _openEditor(context, r),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Switch(
-                          value: r.enabled,
-                          onChanged: (v) {
-                            final edited = r.clone()..enabled = v;
-                            context.read<AppStore>().updateRegexRule(edited);
-                          },
-                        ),
-                        PopupMenuButton<String>(
-                          icon: const Icon(Icons.more_vert,
-                              color: EmberColors.textMid),
-                          onSelected: (choice) async {
-                            if (choice == 'edit') {
-                              _openEditor(context, r);
-                            } else if (choice == 'delete') {
-                              final ok = await confirmDelete(
-                                context,
-                                title: 'Delete rule?',
-                                message:
-                                    'Remove "${r.name}"? This only deletes the '
-                                    'rule — your messages are untouched.',
-                              );
-                              if (ok && context.mounted) {
-                                context.read<AppStore>().removeRegexRule(r.id);
-                              }
-                            }
-                          },
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(value: 'edit', child: Text('Edit')),
-                            PopupMenuItem(
-                                value: 'delete', child: Text('Delete')),
-                          ],
-                        ),
-                      ],
-                    ),
+          else
+            for (final r in rules) ...[
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.find_replace,
+                      color: EmberColors.textMid),
+                  title: Text(
+                    r.name.isEmpty ? '(unnamed rule)' : r.name,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
-                );
-              },
-            ),
+                  subtitle: Text(
+                    _subtitleFor(r),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: EmberColors.textMid),
+                  ),
+                  onTap: () => _openEditor(context, r),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Switch(
+                        value: r.enabled,
+                        onChanged: (v) {
+                          final edited = r.clone()..enabled = v;
+                          context.read<AppStore>().updateRegexRule(edited);
+                        },
+                      ),
+                      PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert,
+                            color: EmberColors.textMid),
+                        onSelected: (choice) async {
+                          if (choice == 'edit') {
+                            _openEditor(context, r);
+                          } else if (choice == 'delete') {
+                            final ok = await confirmDelete(
+                              context,
+                              title: 'Delete rule?',
+                              message:
+                                  'Remove "${r.name}"? This only deletes the '
+                                  'rule — your messages are untouched.',
+                            );
+                            if (ok && context.mounted) {
+                              context.read<AppStore>().removeRegexRule(r.id);
+                            }
+                          }
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'edit', child: Text('Edit')),
+                          PopupMenuItem(
+                              value: 'delete', child: Text('Delete')),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+        ],
+      ),
     );
   }
 

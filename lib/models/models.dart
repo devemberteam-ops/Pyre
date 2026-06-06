@@ -55,6 +55,27 @@ int? _jTimestamp(dynamic v) {
   return raw;
 }
 
+/// Audit datamodel-appstore-macros-slash-04: clamp a loaded `mtime` into
+/// `[0, now]`, defaulting a missing/junk value to 0. `mtime` decodes via raw
+/// [_jInt] (no clamp), unlike createdAt/updatedAt (which go through
+/// [_jTimestamp]) — so a restored backup carrying a future-dated mtime would
+/// win every local LWW conflict (sync_engine compares `existing.mtime >=
+/// incoming`) until wall-clock time passed it; the zero-only `stampMtimeIfZero`
+/// load pass never corrected an inflated value. This is applied in the
+/// load-time repair pass in `AppStore.load()` (the disk/restore path) — NOT in
+/// `fromJson`, so the sync-wire path keeps remote mtimes as-is (the server
+/// `/push` already clamps those to serverNow, and clamping a legitimately newer
+/// remote record to the receiver's clock could drop a real update under skew).
+/// Pure (takes `now`) so it is unit-testable; 0 (not null) is returned for a
+/// missing key to preserve the previous `_jInt(...) ?? 0` semantics.
+int clampMtime(dynamic v, int now) {
+  final raw = _jInt(v);
+  if (raw == null) return 0;
+  if (raw < 0) return 0;
+  if (raw > now) return now;
+  return raw;
+}
+
 /// Wave CY.18.44: tolerant string-list decoder. Pre-Wave the fromJson
 /// helpers used `(j['x'] as List?)?.cast<String>() ?? []` which returns a
 /// lazy CastList view — accessing a non-String element throws at READ
@@ -286,7 +307,15 @@ class Character {
   /// addressed so images are never byte-duplicated; the GC's referenced-
   /// set unions these. Defaults to `[]`; tolerates absent/null on parse.
   List<String> gallery;
-  String? avatar; // base64 data URL or null
+  String? avatar; // `pyre://attachment/<sha256>` ref, an inline data URL on web, or null
+  /// Non-destructive Recrop: the UNCROPPED full image. `avatar` holds the
+  /// DISPLAYED image (the crop after a recrop, or the full image when never
+  /// cropped); `avatarOriginal` preserves the original so the full picture
+  /// survives a recrop (usable as a chat background / viewable whole). Null
+  /// when the avatar was never cropped — in which case `avatar` IS the full
+  /// image. Same `pyre://attachment/<sha256>` shape as `avatar`. Omitted from
+  /// JSON when null (back-compat: pre-feature cards load with null).
+  String? avatarOriginal;
   int createdAt;
   int updatedAt;
   /// Wave CY.18.36: true when this character was built via the Pyre
@@ -335,6 +364,7 @@ class Character {
     List<String>? lorebookIds,
     List<String>? gallery,
     this.avatar,
+    this.avatarOriginal,
     int? createdAt,
     int? updatedAt,
     this.createdInPyre = false,
@@ -375,6 +405,8 @@ class Character {
         // Wave CY.18.127: tolerate absent/null gallery → [].
         gallery: _jStringList(j['gallery']),
         avatar: j['avatar'] as String?,
+        // Non-destructive Recrop: absent/null → null (pre-feature cards).
+        avatarOriginal: j['avatarOriginal'] as String?,
         createdAt: _jTimestamp(j['createdAt']),
         updatedAt: _jTimestamp(j['updatedAt']),
         // Wave CY.18.36: legacy chars (no field in JSON) default false —
@@ -412,6 +444,9 @@ class Character {
         'lorebookIds': lorebookIds,
         'gallery': gallery,
         'avatar': avatar,
+        // Non-destructive Recrop: emit only when a recrop preserved an
+        // original (omit-when-null keeps the common case + old backups lean).
+        if (avatarOriginal != null) 'avatarOriginal': avatarOriginal,
         'createdAt': createdAt,
         'updatedAt': updatedAt,
         if (createdInPyre) 'createdInPyre': true,
@@ -441,6 +476,11 @@ class Persona {
   /// authored from scratch or the source had no example dialogue.
   String dialogueExamples;
   String? avatar;
+  /// Non-destructive Recrop: the UNCROPPED full image. See
+  /// [Character.avatarOriginal] — identical semantics (`avatar` = displayed
+  /// crop or full; `avatarOriginal` = preserved original, null when never
+  /// cropped). Omitted from JSON when null.
+  String? avatarOriginal;
   /// Wave CA: lorebooks that auto-activate when this persona is the
   /// active user-side in a chat. Same semantics as Character.lorebookIds
   /// — additive with per-chat books and character-bound books, deduped
@@ -466,6 +506,7 @@ class Persona {
     this.description = '',
     this.dialogueExamples = '',
     this.avatar,
+    this.avatarOriginal,
     List<String>? lorebookIds,
     List<String>? gallery,
     int? createdAt,
@@ -500,6 +541,8 @@ class Persona {
         description: (j['description'] as String?) ?? '',
         dialogueExamples: (j['dialogueExamples'] as String?) ?? '',
         avatar: j['avatar'] as String?,
+        // Non-destructive Recrop: absent/null → null (pre-feature personas).
+        avatarOriginal: j['avatarOriginal'] as String?,
         lorebookIds: _jStringList(j['lorebookIds']),
         // Wave CY.18.127: tolerate absent/null gallery → [].
         gallery: _jStringList(j['gallery']),
@@ -518,6 +561,8 @@ class Persona {
         if (dialogueExamples.isNotEmpty)
           'dialogueExamples': dialogueExamples,
         'avatar': avatar,
+        // Non-destructive Recrop: emit only when a recrop preserved an original.
+        if (avatarOriginal != null) 'avatarOriginal': avatarOriginal,
         'lorebookIds': lorebookIds,
         'gallery': gallery,
         'createdAt': createdAt,
@@ -544,6 +589,14 @@ class Folder {
   List<String> characterIds;
   int createdAt;
   int updatedAt;
+  /// Mega-audit 2026-06-05 (F2): LAN sync metadata. See Character.mtime for
+  /// rationale — folders are user-authored content (id → name + membership)
+  /// and now ride the synced collection set. `deleted` is the tombstone
+  /// flag; the synced deletion log (AppStore.tombstones) is the primary
+  /// propagation channel, this mirror keeps the field shape uniform with the
+  /// other synced records.
+  int mtime;
+  bool deleted;
 
   Folder({
     required this.id,
@@ -551,6 +604,8 @@ class Folder {
     List<String>? characterIds,
     int? createdAt,
     int? updatedAt,
+    this.mtime = 0,
+    this.deleted = false,
   })  : characterIds = characterIds ?? [],
         createdAt = createdAt ?? DateTime.now().millisecondsSinceEpoch,
         updatedAt = updatedAt ?? DateTime.now().millisecondsSinceEpoch;
@@ -561,6 +616,8 @@ class Folder {
         characterIds: _jStringList(j['characterIds']),
         createdAt: _jTimestamp(j['createdAt']),
         updatedAt: _jTimestamp(j['updatedAt']),
+        mtime: _jInt(j['mtime']) ?? 0,
+        deleted: (j['deleted'] as bool?) ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -569,6 +626,8 @@ class Folder {
         'characterIds': characterIds,
         'createdAt': createdAt,
         'updatedAt': updatedAt,
+        'mtime': mtime,
+        if (deleted) 'deleted': true,
       };
 }
 
@@ -882,6 +941,11 @@ class Chat {
   // scene-background-only state — it is NEVER injected into the chat LLM
   // context, so it has no token cost.
   String sceneLocation;
+  // Wave: completeness-gaps — optional manual chat title. null/blank means the
+  // UI derives a label (character name / "N msgs · time"). Chats are otherwise
+  // the only top-level user-created entity with no name, so multiple chats of
+  // one character were indistinguishable. Mirrors CreatorSession.title.
+  String? title;
 
   Chat({
     required this.id,
@@ -895,7 +959,12 @@ class Chat {
     List<MemoryCheckpoint>? memoryCheckpoints,
     this.memoryEnabled = true,
     List<LiveSheetSnapshot>? liveSheetSnapshots,
-    this.liveSheetEnabled = false,
+    // Wave: Live Sheet is a strong feature — a freshly-CREATED chat (this
+    // constructor path: startChatWith, chat import) defaults it ON. Existing
+    // saved chats are NOT affected: [Chat.fromJson] still defaults the field to
+    // false when absent (an old chat persisted before this flip stays off), and
+    // a saved value is always honoured.
+    this.liveSheetEnabled = true,
     List<StoryBeat>? storyBeats,
     int? createdAt,
     int? updatedAt,
@@ -910,6 +979,7 @@ class Chat {
     this.sceneLastClassifyMsgCount = 0,
     this.sceneLastClassifyKey = '',
     this.sceneLocation = '',
+    this.title,
   })  : characterSnapshots = characterSnapshots ?? {},
         attachedLorebookIds = attachedLorebookIds ?? [],
         disabledInheritedLorebookIds = disabledInheritedLorebookIds ?? [],
@@ -922,6 +992,14 @@ class Chat {
 
   String? get primaryCharacterId =>
       characterIds.isNotEmpty ? characterIds.first : null;
+
+  /// The user-facing chat title: the manual [title] when set, else the
+  /// caller-supplied derived [fallback] (e.g. the character name or
+  /// "N msgs · time"). Blank/whitespace titles are treated as unset.
+  String displayTitle(String fallback) {
+    final t = title?.trim();
+    return (t != null && t.isNotEmpty) ? t : fallback;
+  }
 
   factory Chat.fromJson(Map<String, dynamic> j) {
     final snaps = <String, Character>{};
@@ -978,6 +1056,10 @@ class Chat {
           .whereType<Map>()
           .map((m) => LiveSheetSnapshot.fromJson(m.cast<String, dynamic>()))
           .toList(),
+      // Deserialization default stays false ON PURPOSE (differs from the
+      // constructor's true): a chat persisted before Live Sheet defaulted ON
+      // has no `liveSheetEnabled` key and must STAY off — only brand-new chats
+      // (constructor path) get the on-by-default. A stored value wins either way.
       liveSheetEnabled: (j['liveSheetEnabled'] as bool?) ?? false,
       storyBeats: ((j['storyBeats'] as List?) ?? const [])
           .whereType<Map>()
@@ -998,6 +1080,7 @@ class Chat {
       sceneLastClassifyMsgCount: _jInt(j['sceneLastClassifyMsgCount']) ?? 0,
       sceneLastClassifyKey: (j['sceneLastClassifyKey'] as String?) ?? '',
       sceneLocation: (j['sceneLocation'] as String?) ?? '',
+      title: (j['title'] as String?),
     );
   }
 
@@ -1037,6 +1120,9 @@ class Chat {
         if (sceneLastClassifyKey.isNotEmpty)
           'sceneLastClassifyKey': sceneLastClassifyKey,
         if (sceneLocation.isNotEmpty) 'sceneLocation': sceneLocation,
+        // Only persist a manual title when actually set (blank → omit so
+        // legacy/untitled chats stay byte-clean and unchanged).
+        if (title != null && title!.trim().isNotEmpty) 'title': title!.trim(),
       };
 }
 
@@ -1134,8 +1220,8 @@ class Preset {
   String name;
   /// System prompt sent BEFORE the chat history. Supports template tokens
   /// (`{{char}}`, `{{user}}`, `{{description}}`, `{{personality}}`,
-  /// `{{scenario}}`, `{{persona}}`, `{{mesExample}}`, `{{wiBefore}}`,
-  /// `{{wiAfter}}`) which are resolved at chat-send time.
+  /// `{{scenario}}`, `{{persona}}`, `{{mesExample}}`, `{{wiBefore}}`) which
+  /// are resolved at chat-send time.
   String mainPrompt;
   /// Block appended AFTER the chat history (jailbreak / reminder / prefill).
   String postHistoryInstructions;
@@ -1293,7 +1379,16 @@ You are {{char}}.
 # Example dialogue from the card
 {{mesExample}}''',
     postHistoryInstructions:
-'''[System reminder before you respond: continue the scene as {{char}} only. Write ONE message in their voice — third person, present tense, with rich sensory detail. Use *italics* for actions, "quotes" for dialogue. Do not write {{user}}'s actions, dialogue, or thoughts. Do not summarise or recap, do not break the fourth wall. End on a beat that fits where the scene is — mid-action if {{char}} is mid-decision, on a closing line when {{char}} has just committed to one. If {{char}}'s personality or the current moment calls for decisive action (violence, dominance, ruthless behavior, sexual escalation, a hard "no"), execute it this turn rather than circling the threat. Slow-burn is for buildup, never for a character who would act NOW.]''',
+'''[System reminder before you respond: continue the scene as {{char}} only. Write ONE message in their voice — third person, present tense, with rich sensory detail.
+
+FORMATTING — follow this EXACTLY, even if the card's example dialogue or earlier messages in this chat did it differently:
+- Spoken dialogue goes in "double quotes" only. NEVER wrap a spoken line in asterisks.
+- Actions, body language and inner thoughts go in *single asterisks* only. Close the asterisks at the end of the action, and NEVER put dialogue inside the asterisks.
+- Correct: *She lowers the spear a fraction, eyes flat.* "Bubbles do not stop hearts." *Her tail lashes once.*
+- Wrong: *She lowers the spear.* *"Bubbles do not stop hearts."* *Her tail lashes once.*  (← dialogue wrapped in asterisks)
+- Wrong: *She lowers the spear and murmurs "Bubbles do not stop hearts," tail lashing.*  (← dialogue trapped inside the asterisk block)
+
+Do not write {{user}}'s actions, dialogue, or thoughts. Do not summarise or recap, do not break the fourth wall. End on a beat that fits where the scene is — mid-action if {{char}} is mid-decision, on a closing line when {{char}} has just committed to one. If {{char}}'s personality or the current moment calls for decisive action (violence, dominance, ruthless behavior, sexual escalation, a hard "no"), execute it this turn rather than circling the threat. Slow-burn is for buildup, never for a character who would act NOW.]''',
     impersonationPrompt:
 '''[Write your next reply from the point of view of {{user}}, using the chat history so far as a guideline for the writing style of {{user}}. Write 1 reply only in internet RP style, italicize actions, and avoid quotation marks. Use markdown. Don't write as {{char}} or system. Don't describe actions of {{char}}.]''',
     continueNudgePrompt:
@@ -1337,6 +1432,12 @@ class CreatorPreset {
   /// Base architect prompt for the EDIT mode (seeds from
   /// [kCardEditorFreeFormPrompt]).
   String editPrompt;
+  /// Mega-audit 2026-06-05 (F2): LAN sync metadata. A forked Creator preset
+  /// is first-class user content (its own manager screen) and now rides the
+  /// synced set. The locked default is excluded from sync entirely (rebuilt
+  /// from the build on every load), so its mtime staying 0 is fine.
+  int mtime;
+  bool deleted;
 
   CreatorPreset({
     required this.id,
@@ -1345,6 +1446,8 @@ class CreatorPreset {
     this.characterPrompt = '',
     this.scenarioPrompt = '',
     this.editPrompt = '',
+    this.mtime = 0,
+    this.deleted = false,
   });
 
   factory CreatorPreset.fromJson(Map<String, dynamic> j) => CreatorPreset(
@@ -1354,6 +1457,8 @@ class CreatorPreset {
         characterPrompt: (j['characterPrompt'] as String?) ?? '',
         scenarioPrompt: (j['scenarioPrompt'] as String?) ?? '',
         editPrompt: (j['editPrompt'] as String?) ?? '',
+        mtime: _jInt(j['mtime']) ?? 0,
+        deleted: (j['deleted'] as bool?) ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -1363,6 +1468,8 @@ class CreatorPreset {
         'characterPrompt': characterPrompt,
         'scenarioPrompt': scenarioPrompt,
         'editPrompt': editPrompt,
+        'mtime': mtime,
+        if (deleted) 'deleted': true,
       };
 }
 
@@ -1862,6 +1969,9 @@ class MemorySettings {
   int memoryLimit;
   /// Prompt template used for the summariser. Supports `{{words}}`.
   String summaryPrompt;
+  /// The [kSummaryPromptVersion] this install last saw. Persisted so a default
+  /// change can force-reset [summaryPrompt] exactly once on the next launch.
+  int summaryPromptVersion;
 
   /// Wave CY.18.2: each checkpoint is the NEXT PARAGRAPH of an
   /// ongoing chapter, not a standalone synopsis. The prompt walks
@@ -1872,53 +1982,86 @@ class MemorySettings {
   /// turn builder sends explicitly tags the handoff text and the new
   /// events, so this template stays generic and works for both cases.
   static const _defaultPrompt =
-      'You are a story summariser keeping the running recap of an '
-      'unfolding roleplay. The recap is a SINGLE continuous '
-      'narrative — written across multiple paragraphs over time, each '
-      'one picking up exactly where the previous left off, like '
-      'consecutive paragraphs of the same chapter. Reading every '
-      'paragraph in order should produce one unbroken story a reader '
-      'could follow from the very first beat.\n\n'
+      'You are keeping the running "story so far" of an unfolding '
+      'roleplay — one continuous narrative arc told across paragraphs '
+      'over time, each picking up exactly where the previous left off. '
+      'Reading every paragraph in order should read as one unbroken '
+      'story, never a status report and never a bulleted log of '
+      'events.\n\n'
       'If the user prompt includes a "Story so far" block AND a '
-      'handoff paragraph: write ONE next paragraph that flows directly '
-      'out of the handoff line. Open with a connective ("From there", '
-      '"In the days that followed", "Soon after", "Meanwhile", "By '
-      'the time…") — never restart, never re-introduce characters or '
-      'places already named, never repeat or rephrase the prior text. '
-      'Cover only the new events listed, in chronological order, '
-      'closing on whatever stays unresolved so the next paragraph has '
-      'a thread to pick up.\n\n'
-      'If there is no prior recap: write the FIRST paragraph of the '
-      'chapter. Open with the ACTUAL inciting situation of THIS '
-      'roleplay as it appears in the conversation below — whatever '
-      'scenario, location, or first beat literally happened — then '
-      'walk forward through the opening events in order using '
-      'connectives (then, after, eventually, meanwhile). Do NOT '
-      'borrow scenarios, settings, or names from this instruction; '
-      'lift everything from the conversation itself. Leave a thread '
-      'hanging on the final line.\n\n'
-      'Always: third person, present tense; concrete names of people '
-      'and places when the story names them; preserve relationship '
-      'shifts and stakes; roughly {{words}} words; raw prose only — '
-      'no labels, headers, bullet points, or commentary outside the '
+      'handoff line: write ONE next paragraph that flows directly out '
+      'of that handoff. Open with a connective ("From there", "In the '
+      'hours that followed", "Soon after", "Meanwhile", "By the '
+      'time…") — never restart, never re-introduce characters or '
+      'places already named, never repeat or rephrase what the prior '
+      'recap already covered. Carry the new events forward as a shaped '
+      'continuation — what they did, how it shifted things between '
+      'them, what it cost or meant — and close on whatever was left '
+      'unresolved so the next paragraph has a thread to pick up.\n\n'
+      'If there is no prior recap: write the OPENING of the arc. '
+      'First ground the reader in who these people were, where they '
+      'were, and the situation that set things in motion — the actual '
+      'inciting circumstance of THIS roleplay as it appears in the '
+      'conversation below. Then carry the opening beats forward as a '
+      'shaped arc — setup, what happened, where things stood — not a '
+      '"then… then… then" list of moments strung together. This '
+      'opening sets the voice for every paragraph that follows, so '
+      'leave a clear thread hanging on the final line. Do NOT borrow '
+      'scenarios, settings, or names from this instruction; lift '
+      'everything from the conversation itself.\n\n'
+      'Always: third person, PAST tense; the real names of people and '
+      'places exactly as the story names them; preserve relationship '
+      'shifts and stakes; roughly {{words}} words; flowing prose only '
+      '— no labels, headers, bullet points, or commentary outside the '
       'narrative.';
+
+  /// The CURRENT default summary prompt (exposed for the Checkpoints screen's
+  /// "Restore" action and for migration tests).
+  static String get defaultSummaryPrompt => _defaultPrompt;
+
+  /// Bumped whenever [_defaultPrompt] changes. Existing installs persist the
+  /// version they last saw; when the shipped version is newer, [fromJson]
+  /// FORCE-RESETS the stored prompt to the current default — for EVERY install,
+  /// customised or not (Gui's call: simplest + guarantees everyone is on the
+  /// new prompt, instead of stranding upgraders on the old one until they hit
+  /// "Restore"). After the one reset the prompt is editable again as normal.
+  ///   v0/absent — pre-1.1 (the original "story summariser" default)
+  ///   v2        — Pyre 1.1 ("story so far / next paragraph" default)
+  /// BUMP THIS the next time you change [_defaultPrompt].
+  static const int kSummaryPromptVersion = 2;
 
   MemorySettings({
     this.autoEvery = 20,
     this.memoryLimit = 1000,
     this.summaryPrompt = _defaultPrompt,
+    this.summaryPromptVersion = kSummaryPromptVersion,
   });
 
-  factory MemorySettings.fromJson(Map<String, dynamic> j) => MemorySettings(
-        autoEvery: _jInt(j['autoEvery']) ?? 20,
-        memoryLimit: _jInt(j['memoryLimit']) ?? 1000,
-        summaryPrompt: (j['summaryPrompt'] as String?) ?? _defaultPrompt,
-      );
+  factory MemorySettings.fromJson(Map<String, dynamic> j) {
+    final storedVersion = _jInt(j['summaryPromptVersion']) ?? 0;
+    final stored = j['summaryPrompt'] as String?;
+    // FORCE-RESET on a version bump: if this install last saw an OLDER prompt
+    // version (or none — a pre-1.1 install), overwrite whatever is stored with
+    // the CURRENT default, for everyone (customised or not). A blank stored
+    // prompt also falls back to the default. Otherwise keep what's stored
+    // (so edits made after the reset stick).
+    final mustReset = storedVersion < kSummaryPromptVersion ||
+        stored == null ||
+        stored.trim().isEmpty;
+    return MemorySettings(
+      autoEvery: _jInt(j['autoEvery']) ?? 20,
+      memoryLimit: _jInt(j['memoryLimit']) ?? 1000,
+      summaryPrompt: mustReset ? _defaultPrompt : stored,
+      // Stamp the current version so the reset happens exactly once.
+      summaryPromptVersion: kSummaryPromptVersion,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
         'autoEvery': autoEvery,
         'memoryLimit': memoryLimit,
         'summaryPrompt': summaryPrompt,
+        'summaryPromptVersion': summaryPromptVersion,
       };
 }
 
@@ -2094,6 +2237,116 @@ class ScriptSettings {
   Map<String, dynamic> toJson() => {'beatsCap': beatsCap};
 }
 
+/// Where the one-shot Guide instruction is injected into the assembled chat
+/// turns. A guide is ephemeral — it steers a SINGLE generation and is never
+/// saved to history (see [GuideSettings]).
+enum GuideInjectionPosition {
+  /// As a system note appended AFTER the last chat turn (default). Closest to
+  /// the model's "next" focus.
+  systemNoteAtEnd,
+
+  /// As a system note inserted immediately BEFORE the last user turn, so the
+  /// model reads the guidance then the user's message it answers.
+  beforeLastUserTurn,
+}
+
+/// Enum ↔ JSON name for [GuideInjectionPosition]. Stable string keys so the
+/// serialized value survives enum reordering. Mirrors [chatBgFitToName].
+String guideInjectionPositionToName(GuideInjectionPosition p) {
+  switch (p) {
+    case GuideInjectionPosition.systemNoteAtEnd:
+      return 'systemNoteAtEnd';
+    case GuideInjectionPosition.beforeLastUserTurn:
+      return 'beforeLastUserTurn';
+  }
+}
+
+GuideInjectionPosition guideInjectionPositionFromName(dynamic v) {
+  switch (v) {
+    case 'beforeLastUserTurn':
+      return GuideInjectionPosition.beforeLastUserTurn;
+    case 'systemNoteAtEnd':
+    default:
+      return GuideInjectionPosition.systemNoteAtEnd;
+  }
+}
+
+/// Narrative perspective the guided-impersonation ("Guide my message") writer
+/// uses when expanding an outline into a full message in the user's voice.
+enum GuidePerspective {
+  /// "I walk to the door…"
+  first,
+
+  /// "You walk to the door…" — default; most RP is second-person.
+  second,
+
+  /// "Ren walks to the door…"
+  third,
+}
+
+/// Enum ↔ JSON name for [GuidePerspective]. Stable string keys.
+String guidePerspectiveToName(GuidePerspective p) {
+  switch (p) {
+    case GuidePerspective.first:
+      return 'first';
+    case GuidePerspective.second:
+      return 'second';
+    case GuidePerspective.third:
+      return 'third';
+  }
+}
+
+GuidePerspective guidePerspectiveFromName(dynamic v) {
+  switch (v) {
+    case 'first':
+      return GuidePerspective.first;
+    case 'third':
+      return GuidePerspective.third;
+    case 'second':
+    default:
+      return GuidePerspective.second;
+  }
+}
+
+/// Global "Guide" (guided generations) configuration — stored alongside
+/// [LiveSheetSettings] / [ScriptSettings]. Mirrors their persist/sync wiring
+/// in AppStore. Guides THEMSELVES are never stored — they are transient,
+/// one-shot per generation; only these knobs persist.
+///   - [enabled]: master switch for the in-chat Guide affordances (default ON
+///     — low-risk and discoverable; the actions just sit in existing menus).
+///   - [injectionPosition]: where the one-shot guide note lands in the prompt.
+///   - [defaultPerspective]: the narrative perspective the guided-impersonation
+///     ("Guide my message") writer uses by default (overridable per call).
+///   - [mtime]: last-modified time for sync LWW (mirrors the synced records).
+class GuideSettings {
+  bool enabled;
+  GuideInjectionPosition injectionPosition;
+  GuidePerspective defaultPerspective;
+  int mtime;
+
+  GuideSettings({
+    this.enabled = true,
+    this.injectionPosition = GuideInjectionPosition.systemNoteAtEnd,
+    this.defaultPerspective = GuidePerspective.second,
+    this.mtime = 0,
+  });
+
+  factory GuideSettings.fromJson(Map<String, dynamic> j) => GuideSettings(
+        enabled: (j['enabled'] as bool?) ?? true,
+        injectionPosition:
+            guideInjectionPositionFromName(j['injectionPosition']),
+        defaultPerspective: guidePerspectiveFromName(j['defaultPerspective']),
+        mtime: _jInt(j['mtime']) ?? 0,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'enabled': enabled,
+        'injectionPosition': guideInjectionPositionToName(injectionPosition),
+        'defaultPerspective': guidePerspectiveToName(defaultPerspective),
+        'mtime': mtime,
+      };
+}
+
 /// Per-app chat behaviour preferences — independent of model sampling.
 class ChatSettings {
   /// Whether "Delete just this" removes only the targeted message or
@@ -2203,6 +2456,51 @@ class ChatSettings {
 
   bool get cascadeDelete => deleteBehavior == DeleteBehavior.thisAndAfter;
 
+  /// Return a copy of this settings object with the given fields overridden
+  /// and EVERY other field carried forward. Used by the settings sub-screens
+  /// so a per-screen edit can never silently drop a field it doesn't manage
+  /// (audit presets-regex-appearance-01: the Behaviors screen used to rebuild
+  /// a partial ChatSettings, wiping all bubble/background customization on
+  /// `updateChatSettings`'s full replace). Nullable fields keep their current
+  /// value when the argument is omitted; the editing screens clear a color by
+  /// mutating their own draft field directly, not through copyWith.
+  ChatSettings copyWith({
+    DeleteBehavior? deleteBehavior,
+    bool? hideReasoning,
+    double? bubbleAlpha,
+    ChatBackgroundSource? backgroundSource,
+    String? customBackgroundDataUrl,
+    double? backgroundOpacity,
+    ChatBackgroundFit? backgroundFit,
+    bool? askPersonaOnNewChat,
+    int? userBubbleColor,
+    int? aiBubbleColor,
+    double? bubbleCornerRadius,
+    double? bubbleBorderWidth,
+    int? bubbleBorderColor,
+    double? bubbleBlurSigma,
+    double? bubbleTextScale,
+  }) {
+    return ChatSettings(
+      deleteBehavior: deleteBehavior ?? this.deleteBehavior,
+      hideReasoning: hideReasoning ?? this.hideReasoning,
+      bubbleAlpha: bubbleAlpha ?? this.bubbleAlpha,
+      backgroundSource: backgroundSource ?? this.backgroundSource,
+      customBackgroundDataUrl:
+          customBackgroundDataUrl ?? this.customBackgroundDataUrl,
+      backgroundOpacity: backgroundOpacity ?? this.backgroundOpacity,
+      backgroundFit: backgroundFit ?? this.backgroundFit,
+      askPersonaOnNewChat: askPersonaOnNewChat ?? this.askPersonaOnNewChat,
+      userBubbleColor: userBubbleColor ?? this.userBubbleColor,
+      aiBubbleColor: aiBubbleColor ?? this.aiBubbleColor,
+      bubbleCornerRadius: bubbleCornerRadius ?? this.bubbleCornerRadius,
+      bubbleBorderWidth: bubbleBorderWidth ?? this.bubbleBorderWidth,
+      bubbleBorderColor: bubbleBorderColor ?? this.bubbleBorderColor,
+      bubbleBlurSigma: bubbleBlurSigma ?? this.bubbleBlurSigma,
+      bubbleTextScale: bubbleTextScale ?? this.bubbleTextScale,
+    );
+  }
+
   factory ChatSettings.fromJson(Map<String, dynamic> j) {
     // Migrate from the older `cascadeDelete` bool if present.
     DeleteBehavior db;
@@ -2297,6 +2595,35 @@ class ChatSettings {
       };
 }
 
+/// Mega-audit 2026-06-05 (H-4): how the sync engine resolves a record that
+/// changed on BOTH this device and the peer since the last successful sync
+/// (a genuine conflict, detected via [detectSyncConflicts]). DEVICE-LOCAL —
+/// this setting is never itself synced; each device picks its own policy.
+///
+///   * [newestWins]      — the current/default behavior: pure last-writer-wins
+///                         by mtime. No prompt, no change for existing users.
+///   * [preferThisDevice]— on a conflict, keep THIS device's copy (its push
+///                         wins; an incoming conflicting record is skipped).
+///   * [preferOtherDevice]— on a conflict, take the PEER's copy.
+///   * [ask]             — surface a warning listing the conflicts and let the
+///                         user choose before anything is applied.
+///
+/// Non-conflicting (one-sided) edits always merge normally regardless of the
+/// mode — the mode only governs the both-sides-changed case.
+enum SyncConflictMode { newestWins, preferThisDevice, preferOtherDevice, ask }
+
+/// Parse the persisted enum name back to a [SyncConflictMode], defaulting to
+/// [SyncConflictMode.newestWins] (today's behavior) on any unknown / legacy /
+/// missing value so an old or hand-edited blob never changes behavior.
+SyncConflictMode parseSyncConflictMode(dynamic v) {
+  if (v is String) {
+    for (final m in SyncConflictMode.values) {
+      if (m.name == v) return m;
+    }
+  }
+  return SyncConflictMode.newestWins;
+}
+
 class UiPrefs {
   String activeTab;
   String charactersSegment; // 'characters' | 'personas'
@@ -2348,6 +2675,12 @@ class UiPrefs {
   /// the LAN. OFF by default; the web view never receives provider keys.
   bool syncProviderKeys;
 
+  /// Mega-audit 2026-06-05 (H-4): how genuine sync conflicts resolve on THIS
+  /// device. DEVICE-LOCAL (never synced). Default [SyncConflictMode.newestWins]
+  /// = exactly today's last-writer-wins behavior — existing users see no change
+  /// unless they opt into a different policy.
+  SyncConflictMode syncConflictMode;
+
   /// Pyre 1.1 (F5): global UI text-scale multiplier. `1.0` (default) =
   /// the app's text renders exactly as before. The settings slider lets
   /// users enlarge or shrink ALL text app-wide; reported by a user
@@ -2390,6 +2723,7 @@ class UiPrefs {
     Map<String, dynamic>? desktopShortcuts,
     this.askToSwitchOnFailure = true,
     this.syncProviderKeys = false,
+    this.syncConflictMode = SyncConflictMode.newestWins,
     this.uiScale = 1.0,
   }) : desktopShortcuts = desktopShortcuts ?? <String, dynamic>{};
 
@@ -2418,6 +2752,8 @@ class UiPrefs {
             (j['askToSwitchOnFailure'] as bool?) ?? true,
         // Wave CY.18.258: opt-in, default OFF.
         syncProviderKeys: (j['syncProviderKeys'] as bool?) ?? false,
+        // Mega-audit 2026-06-05 (H-4): default newestWins (today's behavior).
+        syncConflictMode: parseSyncConflictMode(j['syncConflictMode']),
         // Pyre 1.1 (F5): missing key → 1.0 (unchanged). A bad / wrong
         // -typed value also falls back to 1.0 (note `is num`, not a
         // `as num?` cast, so a stored String can't throw); the value is
@@ -2478,6 +2814,10 @@ class UiPrefs {
         if (!askToSwitchOnFailure) 'askToSwitchOnFailure': false,
         // Wave CY.18.258: persist only the non-default `true` opt-in.
         if (syncProviderKeys) 'syncProviderKeys': true,
+        // Mega-audit 2026-06-05 (H-4): persist only when the user opted away
+        // from the default newestWins, keeping blobs clean for the common case.
+        if (syncConflictMode != SyncConflictMode.newestWins)
+          'syncConflictMode': syncConflictMode.name,
         // Pyre 1.1 (F5): persist only when the user changed it away from
         // 1.0 — keeps backups clean for the common (unchanged) case.
         if (uiScale != 1.0) 'uiScale': uiScale,

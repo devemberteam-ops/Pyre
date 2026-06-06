@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/models.dart';
 import '../services/chat_api.dart';
+import '../services/resolvers.dart' show isProviderHostAllowed;
 import '../theme.dart';
 
 /// Bottom sheet that lists models from an OpenAI-compatible provider's
@@ -31,6 +32,19 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
   }
 
   Future<void> _fetch() async {
+    // Mega-audit 2026-06-05 (H-7): SSRF gate. A synced/imported External
+    // provider could point baseUrl at an internal host; refuse to Browse it.
+    // The explicit localhost kind (LM Studio/Ollama) stays allowed.
+    if (!isProviderHostAllowed(widget.provider.baseUrl,
+        isLocalhostKind: widget.provider.kind == ProviderKind.localhost)) {
+      if (!mounted) return;
+      setState(() {
+        _error = "This provider's URL points at a private or internal "
+            'address. For a local server, set its type to Localhost.';
+        _loading = false;
+      });
+      return;
+    }
     final url = buildChatUrl(widget.provider.baseUrl, 'models');
     try {
       final resp = await http.get(
@@ -42,7 +56,10 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
         },
       );
       if (resp.statusCode >= 400) {
-        throw 'HTTP ${resp.statusCode}: ${resp.body}';
+        // Audit 2026-06-04 [providers-01]: scrub any reflected key/token from
+        // the surfaced body before it lands in the on-screen error Text.
+        throw 'HTTP ${resp.statusCode}: '
+            '${scrubProviderBody(resp.body, apiKey: widget.provider.apiKey)}';
       }
       final body = jsonDecode(resp.body);
       final list = (body is Map && body['data'] is List)

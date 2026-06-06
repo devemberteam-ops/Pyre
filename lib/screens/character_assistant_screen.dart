@@ -10,13 +10,13 @@
 //   - Single chat screen with a CANVAS toggle in the app bar. The
 //     canvas reflects the current chara_card_v2 `data` block AT ALL
 //     TIMES — empty fields are shown so the user can see what's still
-//     missing. There is no "Generate card now" button: the LLM fills
-//     the sheet organically.
+//     missing. There is no "Generate card now" button.
 //
-//   - After every chat turn we make a SECOND, structured call
-//     (`kCardUpdaterPrompt`) that merges newly-revealed info into the
-//     canvas. This doubles token cost but gives reliable progressive
-//     fills without needing the chat model to emit JSON inline.
+//   - The conversational architect phase only chats; the card itself is
+//     produced by the deterministic structured-JSON build pipeline
+//     (`creator_build.dart`), fired by the `[[BUILD_SHEET]]` marker or
+//     the `/build` command. (The old per-turn `kCardUpdaterPrompt`
+//     canvas-updater was retired with the structured build.)
 //
 //   - Single `+` button replaces the three separate attach icons. Tap
 //     it to pick image / card / document. Same handlers as before.
@@ -37,6 +37,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 import '../models/models.dart';
+import '../services/attachment_store.dart';
 import '../services/chat_api.dart';
 import '../services/chat_prompt_builder.dart';
 import '../services/creator_cascade.dart';
@@ -50,7 +51,8 @@ import '../services/creator_schema.dart' as cs;
 import '../services/creator_render.dart';
 import '../services/creator_build.dart';
 import '../services/creator_build_prompts.dart';
-import '../services/creator_json.dart' show extractJsonObject;
+import '../services/creator_json.dart'
+    show extractJsonObject, extractJsonAfterReasoning;
 import '../services/card_import.dart';
 import '../services/image_describe.dart';
 import '../services/image_resize.dart';
@@ -62,11 +64,30 @@ import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/chat_text.dart';
 import '../widgets/confirm_dialog.dart';
+import '../widgets/lorebook_binding_section.dart';
 // Wave CQ: avatar_crop_screen + character_edit_screen no longer
 // referenced from this file. The forced crop was removed (image goes
 // in as-is) and the "Save & open editor" save-action was retired.
 import 'character_creator_help_screen.dart';
 import 'chat_picker_screens.dart';
+
+/// Whether the Creator chat input should be LOCKED for a session in the
+/// given ([mode], [flow]) state.
+///
+/// The input is locked while the user hasn't chosen what to build yet:
+///   - `mode == null`            → still on the greeting / mode picker.
+///   - non-'edit' mode, no flow  → mode chosen but flow not yet picked.
+///
+/// 'edit' mode (character "Edit with AI", and — post creator-01 fix —
+/// persona "Edit with AI", which seeds `flow = 'freeform'`) is NEVER
+/// locked: the user types a change immediately. Pure + unit-tested so the
+/// persona-edit dead-end (mode='persona', flow=null → permanently locked)
+/// can't silently regress.
+bool creatorInputLocked({required String? mode, required String? flow}) {
+  if (mode == null) return true;
+  if (mode != 'edit' && flow == null) return true;
+  return false;
+}
 
 class CharacterAssistantScreen extends StatefulWidget {
   /// Wave CS: when set, the screen opens a fresh Creator session
@@ -218,12 +239,16 @@ class _CharacterAssistantScreenState
       "it.";
 
   /// Persona Creator: greeting when EDITING an existing persona with AI.
+  // creator-01 (mega audit 2026-06-04): dropped the "tap Apply changes"
+  // instruction — that button was removed in Wave 242 and never existed
+  // on this screen. Point at conversational readiness / /build, mirroring
+  // the character Edit-with-AI greeting.
   static const String _personaEditGreeting =
       "I've loaded your persona — every field's in the Sheet. Tell me what "
       "you want to change (\"make me more sarcastic\", \"add that I'm a "
-      "night-shift nurse\", \"rewrite how I talk\"), then tap **Apply "
-      "changes** and I'll rebuild the sheet with your change applied — "
-      "everything else stays put.";
+      "night-shift nurse\", \"rewrite how I talk\"). When you're ready, just "
+      "say so (or type **/build**) and I'll rebuild the sheet with your "
+      "change applied — everything else stays put.";
 
   final _scrollCtl = ScrollController();
   final _inputCtl = TextEditingController();
@@ -236,6 +261,28 @@ class _CharacterAssistantScreenState
   bool _showCanvas = false;
 
   bool _generating = false;
+
+  /// H-1: this screen's own outstanding GenerationKeepAlive(heavy) refs.
+  /// Bumped by [_keepAliveStart] and dropped by [_keepAliveStop] so
+  /// dispose() can release exactly what's still held when the user
+  /// navigates away mid-stream. Cancelling the architect `async*`
+  /// subscription fires neither onDone nor onError (the only places stop
+  /// runs for it), so without this drain the global heavy refcount —
+  /// and on Android the foreground service + notification — would stay
+  /// up forever. The creator only ever uses the heavy keepalive.
+  int _keepAliveHeld = 0;
+  Future<void> _keepAliveStart() {
+    _keepAliveHeld++;
+    return GenerationKeepAlive.start(heavy: true);
+  }
+
+  void _keepAliveStop() {
+    if (_keepAliveHeld > 0) {
+      _keepAliveHeld--;
+      unawaited(GenerationKeepAlive.stop(heavy: true));
+    }
+  }
+
   /// True while the structured canvas-update call is in flight (kicked
   /// off after every chat turn). Doesn't block the user from chatting,
   /// just shows a subtle indicator on the canvas tab.
@@ -307,9 +354,7 @@ class _CharacterAssistantScreenState
     final store = context.read<AppStore>();
 
     // Persona Creator — EDIT an existing persona with AI. Fresh session,
-    // mode='persona', canvas pre-loaded from the persona. flow=null so
-    // the completeness cascade does NOT auto-fire — edits apply per-turn
-    // like the character "Edit with AI" path.
+    // mode='persona', canvas pre-loaded from the persona.
     final personaEditId = widget.editingPersonaId;
     if (personaEditId != null) {
       Persona? persona;
@@ -323,7 +368,15 @@ class _CharacterAssistantScreenState
         final s = store.newCreatorSession();
         s.mode = 'persona';
         s.editingPersonaId = personaEditId;
-        // flow stays null → no auto-cascade; edits are per-turn.
+        // creator-01 (mega audit 2026-06-04): seed flow='freeform' so the
+        // input is NOT locked. `creatorInputLocked` locks any non-'edit'
+        // mode whose flow is null, so leaving flow null here (the old
+        // behaviour) made persona "Edit with AI" a permanent dead end —
+        // greyed-out input, no flow chips (chips only render when mode is
+        // null), no reachable unlock path. Like the character Edit-with-AI
+        // session, edits are conversational + applied per-turn via /build;
+        // freeform is the right flow (there is no cascade to auto-fire).
+        s.flow = 'freeform';
         store.renameCreatorSession(s.id, persona.name);
         store.updateCreatorSessionCanvas(s.id, _personaToCanvas(persona));
         store.updateCreatorSessionMessages(s.id, [
@@ -399,7 +452,8 @@ class _CharacterAssistantScreenState
         });
         return;
       }
-      // Character missing (deleted between tap and screen mount) —       // fall through to default behaviour.
+      // Character missing (deleted between tap and screen mount) —
+      // fall through to default behaviour.
     }
     var s = store.activeCreatorSession;
     if (s == null) {
@@ -514,6 +568,15 @@ class _CharacterAssistantScreenState
 
   @override
   void dispose() {
+    // H-1: release any heavy keepalive refs this screen still holds.
+    // Cancelling the architect subscription below never fires
+    // onDone/onError (the only places _keepAliveStop runs for it), so
+    // drain the counter here — otherwise the global heavy refcount + the
+    // Android foreground service would stay alive forever. The loop drops
+    // exactly what's outstanding (no over-decrement).
+    while (_keepAliveHeld > 0) {
+      _keepAliveStop();
+    }
     _streamSub?.cancel();
     _changedHighlightTimer?.cancel();
     _scrollCtl.removeListener(_onScroll);
@@ -561,10 +624,26 @@ class _CharacterAssistantScreenState
       ..maxTokens = base.creatorMaxTokens;
   }
 
+  /// H-11: vision output-token FLOOR. A clinical single-character profile
+  /// runs ~1-1.5k tokens, but a 3-character ENSEMBLE (GROUP COMPOSITION +
+  /// CHARACTER A/B/C + GROUP DYNAMICS + UNCERTAINTIES + NEXT) can run
+  /// 2.5-4k, and on a reasoning model the separated `<think>` channel adds
+  /// more on top. The vision call borrows `creatorMaxTokens`, which the
+  /// user can drag as low as 1024 — well under an ensemble's needs — and
+  /// there is DELIBERATELY no continuation loop (reverted in Wave 117). So
+  /// we clamp vision's cap UP to a generous floor while still honouring a
+  /// higher user setting. 8192 comfortably covers a 3-char ensemble plus
+  /// reasoning overhead without capping a user who set creatorMaxTokens
+  /// higher for heavy-reasoning models.
+  static const int _kVisionMaxTokensFloor = 8192;
+
   ModelSettings _visionSettings(ModelSettings base) {
+    final cap = base.creatorMaxTokens < _kVisionMaxTokensFloor
+        ? _kVisionMaxTokensFloor
+        : base.creatorMaxTokens;
     return ModelSettings.fromJson(base.toJson())
       ..temperature = base.visionTemperature
-      ..maxTokens = base.creatorMaxTokens;
+      ..maxTokens = cap;
   }
 
   void _scrollToBottom({bool force = false}) {
@@ -714,6 +793,17 @@ class _CharacterAssistantScreenState
     if (mode == null) return;
     if (_structuredBuilding || _generating) return;
 
+    // Audit 2026-06-04 (Creator M2): a session switch/delete during this
+    // (long, multi-pass) build must abort it cleanly — otherwise its
+    // progress-status + image-prompt bubbles land in the WRONG (now-active)
+    // session, and the merged canvas read from the now-active session would
+    // be written onto this build's session id. Capture the generation token
+    // up front; `_abortInFlightStream()` bumps `_streamGen` on a switch/delete,
+    // so a `myGen != _streamGen` mismatch means "the session changed — bail".
+    // Every write site below (pass-status update, final canvas + done-status,
+    // image-prompt offer) is gated on `myGen == _streamGen`.
+    final myGen = _streamGen;
+
     // EDIT MODE: decompose the loaded card's Description back into the schema
     // field map so the build can carry each field's CURRENT value forward and
     // preserve everything the user didn't ask to change. Empty for create.
@@ -745,6 +835,22 @@ class _CharacterAssistantScreenState
         final recognised =
             existing.keys.where(knownKeys.contains).length;
         if (recognised < 2) foreignDescription = existingDesc;
+      }
+      // Audit 2026-06-04 (High): seed the top-level `scenario` from the canvas
+      // so an edit REFINES it in place instead of inventing a fresh one. Adding
+      // `scenario` to the character schema (the "Creator didn't produce a
+      // Scenario" fix) put it in the edit batches, but `existing` is built only
+      // from the decomposed Description — which never carries the top-level
+      // scenario — so the model got no current value and regenerated from
+      // scratch, silently discarding the user's scenario on every edit.
+      // (Character mode only; scenario mode round-trips it via the merge
+      // branch and isn't affected.)
+      if (mode == cs.CreatorMode.character) {
+        final curScenario =
+            (_sessionCanvas(store)['scenario'] ?? '').toString();
+        if (curScenario.trim().isNotEmpty) {
+          existing['scenario'] = curScenario;
+        }
       }
     } else {
       existing = <String, String>{};
@@ -778,6 +884,13 @@ class _CharacterAssistantScreenState
         'couple of minutes. Keep the app open.');
 
     var batchIndex = 0;
+    // BLOCKER 1: latch when a provider rejects `response_format`. The transport
+    // already retries-without-extras on a param-shape 4xx, so the build never
+    // dies — but without this latch EVERY batch would pay that wasted 4xx +
+    // retry round-trip. Once we see one rejection, drop `response_format` for
+    // the rest of THIS build (extractJsonObject tolerates prose/fenced JSON, so
+    // structured mode degrades gracefully, not fatally).
+    var jsonModeUnsupported = false;
     try {
       final fields = await runStructuredBuild(
         batches: batches,
@@ -791,8 +904,13 @@ class _CharacterAssistantScreenState
               b.length == keys.length && b.every((k) => keys.contains(k)));
           if (isFreshBatch) {
             batchIndex++;
-            _updateBuildStatus(store,
-                '⏳  Filling the sheet… pass $batchIndex of ${batches.length}.');
+            // Creator M2: only update the on-screen status if THIS build's
+            // session is still active — otherwise the pass counter would
+            // write into whatever session the user switched to.
+            if (myGen == _streamGen) {
+              _updateBuildStatus(store,
+                  '⏳  Filling the sheet… pass $batchIndex of ${batches.length}.');
+            }
           }
           return buildBatchTurns(
             mode: mode,
@@ -824,11 +942,17 @@ class _CharacterAssistantScreenState
             provider: provider,
             settings: settings,
             messages: turns,
-            extraBody: const {
-              'response_format': {'type': 'json_object'}
-            },
+            // BLOCKER 1: skip `response_format` once a provider has rejected it
+            // on THIS build (the latch below), so we don't 4xx every batch.
+            extraBody: jsonModeUnsupported
+                ? null
+                : const {
+                    'response_format': {'type': 'json_object'}
+                  },
             debugTag: 'creator-structured',
             rawSink: rawSink,
+            // Latch the param fallback so subsequent batches stop sending it.
+            onParamFallback: () => jsonModeUnsupported = true,
           );
           if (extractJsonObject(text) != null) return text;
           // The JSON lived in the reasoning channel (wrapped in <think>…). The
@@ -836,18 +960,39 @@ class _CharacterAssistantScreenState
           // return — which would strip those <think> tags and lose the object
           // again — so return the EXTRACTED object re-encoded as a bare JSON
           // string (no <think>), which survives the strip and re-parses.
-          final fromReasoning = extractJsonObject(rawSink.toString());
+          // HIGH 5: prefer the object AFTER the final </think> so we recover the
+          // model's FINAL answer, never a half-formed chain-of-thought DRAFT
+          // object it sketched inside the reasoning channel.
+          final fromReasoning = extractJsonAfterReasoning(rawSink.toString());
           if (fromReasoning != null) return jsonEncode(fromReasoning);
           return text; // nothing parseable either way — let the build retry
         },
       );
 
       if (!mounted) return;
+      // Creator M2: if the user switched/deleted the session while the build
+      // ran, bail BEFORE touching the canvas. The merge below reads
+      // `_sessionCanvas(store)` (the LIVE active session) and would otherwise
+      // write the now-active session's canvas onto the build's session id —
+      // corrupting both. Dropping the result is the safe choice (the
+      // instruction accepts "lost if the session changed"); a re-run rebuilds.
+      if (myGen != _streamGen) return;
+
+      // CRITICAL 4: a scenario card with a duplicate `<Tag>` (e.g. two
+      // `<World>` blocks → world / world#2) decomposes `#N` variants into
+      // `existing`, but the edit batches only re-request BASE keys, so the model
+      // never returns world#2. Carry those duplicate-suffix keys forward so the
+      // edit re-render reproduces the duplicate instead of dropping it.
+      final buildFields = (_isEditSession(session) &&
+              mode == cs.CreatorMode.scenario &&
+              existing.isNotEmpty)
+          ? carryForwardDuplicateTags(fields, existing)
+          : fields;
 
       // Render deterministically → canvas. Merge non-null rendered keys into
       // the current session canvas (preserve anything already there, e.g. a
       // user-typed name or an attached avatar).
-      final rendered = renderCard(fields, mode);
+      final rendered = renderCard(buildFields, mode);
       final canvas = Map<String, dynamic>.from(_sessionCanvas(store));
       final editing = _isEditSession(session);
       rendered.forEach((k, v) {
@@ -885,11 +1030,37 @@ class _CharacterAssistantScreenState
               'by hand in the Sheet tab.';
       _updateBuildStatus(store, doneMsg);
       if (mounted) setState(() => _showCanvas = true); // surface the Sheet
+
+      // After a CLEAN build of a fresh card (not an edit), proactively offer to
+      // draft an image prompt. The architect's existing "image prompt"
+      // affordance generates it when the user replies — no extra LLM call here.
+      // A SEPARATE real assistant bubble (kind null) so it renders normally and
+      // is NOT swallowed by `_updateBuildStatus`'s single tracked status line.
+      if (missing.isEmpty && !editing) {
+        final offer = mode == cs.CreatorMode.scenario
+            ? 'Want a **key-art image prompt** for the card thumbnail? Say the '
+                'word and I\'ll draft one (natural-language + danbooru tags) you '
+                'can paste into your image generator.'
+            : 'Want an **image prompt** to make an avatar? Just ask — I\'ll '
+                'draft one: a natural-language version (for GPT Image / '
+                'Midjourney / Flux) plus danbooru tags (for SDXL / Pony / '
+                'Illustrious). Portrait works best.';
+        final messages = List<CreatorMessage>.from(_sessionMessages(store));
+        messages.add(CreatorMessage(role: 'assistant', content: offer));
+        _persistMessages(store, messages);
+        store.flushPersist();
+        if (mounted) setState(() {});
+        _scrollToBottom();
+      }
     } catch (e) {
-      _updateBuildStatus(
-          store,
-          '⚠ The build hit a problem (${e.toString()}). Whatever was filled '
-          'is in the Sheet tab — you can re-run the build.');
+      // Creator M2: don't write the error bubble into a session the user
+      // switched to mid-build.
+      if (myGen == _streamGen) {
+        _updateBuildStatus(
+            store,
+            '⚠ The build hit a problem (${e.toString()}). Whatever was filled '
+            'is in the Sheet tab — you can re-run the build.');
+      }
     } finally {
       if (mounted) setState(() => _structuredBuilding = false);
     }
@@ -906,7 +1077,19 @@ class _CharacterAssistantScreenState
   /// triggered the "empty response" errors before.
   Future<void> _send() async {
     final text = _inputCtl.text.trim();
-    if ((text.isEmpty && _pendingAttachments.isEmpty) || _generating) {
+    // C-2 (CRITICAL): a normal send during an in-flight structured build must
+    // NOT proceed. `_runConversation` bumps `_streamGen`, which makes the build
+    // bail at its `myGen != _streamGen` guard BEFORE writing the canvas /
+    // done-status, silently discarding the whole build (the "pass N of M"
+    // bubble freezes forever, the sheet stays empty). Block the send outright
+    // while building (the input bar is also disabled — belt and suspenders).
+    // Predicate lives in creator_cascade.dart so it's unit-testable.
+    if (creatorSendBlocked(
+      trimmedText: text,
+      hasPendingAttachments: _pendingAttachments.isNotEmpty,
+      generating: _generating,
+      structuredBuilding: _structuredBuilding,
+    )) {
       return;
     }
 
@@ -1270,7 +1453,7 @@ class _CharacterAssistantScreenState
     // Wave CY.18.35: heavy:true — Creator block emissions take 1-2 min
     // each (3-5 min for a Freeform cascade). The notification is
     // necessary here; chat streams skip it.
-    await GenerationKeepAlive.start(heavy: true);
+    await _keepAliveStart();
 
     // Wave CY.18.44: capture stream-generation token so onData / onError
     // / onDone callbacks can detect if a NEWER stream has superseded
@@ -1295,11 +1478,13 @@ class _CharacterAssistantScreenState
         // a sampling-only change — mirrors the sheet-update + vision paths.
         preset: null,
         messages: turns,
-        // HARD STOP at block boundaries. The Character Architect prompt
-        // tells the model to emit `<<BLOCK_END>>` after each block;
-        // the OpenAI-compat `stop` parameter forces the server to cut
-        // generation off at that token.
-        stop: const <String>['<<BLOCK_END>>'],
+        // creator-07 (mega audit 2026-06-04): dropped the vestigial
+        // `stop: ['<<BLOCK_END>>']`. The freeform architect appendix is
+        // conversation-only and no longer instructs the model to emit
+        // `<<BLOCK_END>>` (the deterministic JSON build owns formatting),
+        // so the stop sequence never fired — dead + misleading. The
+        // _sanitiseBlockMarker scrub below still strips any stray marker a
+        // model emits on its own, so removing the server-side stop is safe.
         debugTag: 'creator-architect', // Wave CY.18.214 diagnostics tag
       ).listen(
         (chunk) {
@@ -1345,7 +1530,7 @@ class _CharacterAssistantScreenState
           _persistMessages(store, messages);
           setState(() => _generating = false);
           context.read<AppStore>().flushPersist();
-          unawaited(GenerationKeepAlive.stop(heavy: true));
+          _keepAliveStop();
 
           // Auto-fire the structured build when the architect emitted the
           // marker. `_runStructuredBuildFlow` self-guards (it returns early on
@@ -1403,7 +1588,8 @@ class _CharacterAssistantScreenState
   /// partial marker (the SSE chunk that completes it hasn't arrived
   /// yet). If we only stripped the full literal, we'd flash `<<BLO`
   /// in the UI for one frame before the next chunk lands.
-  /// Strip every complete `<<BLOCK_END>>` and `<<SHEET>>` occurrence —   /// these are control tokens and shouldn't appear in the chat-visible
+  /// Strip every complete `<<BLOCK_END>>` and `<<SHEET>>` occurrence —
+  /// these are control tokens and shouldn't appear in the chat-visible
   /// brief at all. Both get replaced with a newline so adjacent prose
   /// stays separated.
   static final RegExp _blockEndMarker = RegExp(
@@ -1695,7 +1881,8 @@ class _CharacterAssistantScreenState
 
   /// Inline edit on a single Sheet field. String fields get a
   /// multi-line text editor, list fields get a textarea (one item per
-  /// line). The bypass goes straight to the canvas — no LLM call —   /// for surgical fixes when the updater got something subtly wrong.
+  /// line). The bypass goes straight to the canvas — no LLM call —
+  /// for surgical fixes when the updater got something subtly wrong.
   Future<void> _editCanvasField(String key, dynamic current) async {
     final id = _sessionId;
     if (id == null) return;
@@ -1815,7 +2002,8 @@ class _CharacterAssistantScreenState
   }
 
   /// Wave BD: dedicated editor for `alternate_greetings`. Renders one
-  /// multi-line textarea per greeting with add/delete affordances —   /// the user never has to think about `---` separators, JSON arrays,
+  /// multi-line textarea per greeting with add/delete affordances —
+  /// the user never has to think about `---` separators, JSON arrays,
   /// or any other plumbing.
   Future<void> _editAlternateGreetings(List<String> initial) async {
     final id = _sessionId;
@@ -2086,7 +2274,7 @@ class _CharacterAssistantScreenState
     // cancelled stream (or its pending continuations / canvas updater)
     // become no-ops if they fire after this point.
     _streamGen++;
-    unawaited(GenerationKeepAlive.stop(heavy: true));
+    _keepAliveStop();
     setState(() => _generating = false);
     context.read<AppStore>().flushPersist();
     _streamBuffer = '';
@@ -2104,7 +2292,16 @@ class _CharacterAssistantScreenState
   /// drops the keep-alive, and clears the generating flag + stream
   /// buffer + continuation counter so the new session starts clean.
   void _abortInFlightStream() {
-    if (_streamSub == null && !_generating) return;
+    // Audit 2026-06-04 (Creator M2): a structured build is ALSO in-flight
+    // work that a session switch/delete must tear down — but it doesn't use
+    // `_streamSub` (it runs through `completeChatStreamed` internally) and
+    // leaves `_generating` false (it tracks `_structuredBuilding` instead).
+    // So the old `_streamSub == null && !_generating` early-return skipped it
+    // entirely: the build kept running and its status/offer bubbles landed in
+    // the now-active session. Treat an in-flight build as a reason NOT to
+    // early-return so we bump `_streamGen` (tripping the build's `myGen` guard)
+    // and clear `_structuredBuilding` (so the new session isn't locked out).
+    if (_streamSub == null && !_generating && !_structuredBuilding) return;
     _streamSub?.cancel();
     _streamSub = null;
     // Wave CY.18.44: bump generation — abort means we're tearing down
@@ -2112,13 +2309,17 @@ class _CharacterAssistantScreenState
     // stream that fires after this point must not touch state belonging
     // to whatever session is now active.
     _streamGen++;
-    unawaited(GenerationKeepAlive.stop(heavy: true));
+    _keepAliveStop();
     // Flush whatever's been streamed so far so it survives — that
     // belongs to the FORMER session (the one we're about to leave).
     context.read<AppStore>().flushPersist();
     _streamBuffer = '';
     _generating = false;
     _updatingCanvas = false;
+    // Creator M2: drop the build lock so `_canStructuredBuild` / the
+    // `[[BUILD_SHEET]]` marker can start a fresh build in the new session.
+    // The aborted build's `finally` will also set this false — harmless.
+    _structuredBuilding = false;
   }
 
   // ---------------------------------------------------------------------------
@@ -2255,6 +2456,7 @@ class _CharacterAssistantScreenState
         ],
       ),
     );
+    ctl.dispose(); // H-3: dispose the edit-message controller on dialog close.
     if (newText == null || newText.isEmpty) return;
     if (!mounted) return;
     // Truncate everything after this user message, then update its
@@ -2363,7 +2565,8 @@ class _CharacterAssistantScreenState
   /// from the preceding user turn. Decodes the bytes back out of the
   /// stored data URL, fires `describeCharacterImage` with the dedicated
   /// vision provider (falls back to creator → activeProvider), and
-  /// appends the resulting profile as a fresh assistant message —   /// same shape as the original successful path. Keep-alive wraps the
+  /// appends the resulting profile as a fresh assistant message —
+  /// same shape as the original successful path. Keep-alive wraps the
   /// call so a background-minimised retry doesn't get killed mid-way.
   Future<void> _retryVisionTurn({
     required AppStore store,
@@ -2390,7 +2593,7 @@ class _CharacterAssistantScreenState
     final placeholder = CreatorMessage(role: 'assistant', content: '');
     final newMessages = List<CreatorMessage>.from(messages)..add(placeholder);
     _persistMessages(store, newMessages);
-    await GenerationKeepAlive.start(heavy: true);
+    await _keepAliveStart();
     try {
       final profile = await describeCharacterImage(
         provider: visionProv,
@@ -2414,7 +2617,7 @@ class _CharacterAssistantScreenState
       _persistMessages(store, newMessages);
       setState(() => _generating = false);
     } finally {
-      unawaited(GenerationKeepAlive.stop(heavy: true));
+      _keepAliveStop();
     }
   }
 
@@ -2434,7 +2637,7 @@ class _CharacterAssistantScreenState
     // Wave BM: drop the keep-alive refcount — stream is dead, no
     // reason to keep the foreground notification up. Safe even if
     // start() was never called (refcount clamps at zero).
-    unawaited(GenerationKeepAlive.stop(heavy: true));
+    _keepAliveStop();
     if (!mounted) return;
     final store = context.read<AppStore>();
     final messages = List<CreatorMessage>.from(_sessionMessages(store));
@@ -2544,10 +2747,12 @@ class _CharacterAssistantScreenState
     if (isPersona) {
       final editPersonaId = session?.editingPersonaId;
       String? personaAvatarUrl;
+      List<String> personaLorebookIds = const <String>[];
       if (editPersonaId != null) {
         for (final p in store.personas) {
           if (p.id == editPersonaId) {
             personaAvatarUrl = p.avatar;
+            personaLorebookIds = List<String>.from(p.lorebookIds);
             break;
           }
         }
@@ -2574,12 +2779,17 @@ class _CharacterAssistantScreenState
           canvas: canvas,
           existingAvatarDataUrl: personaAvatarUrl,
           personaMode: true,
-          onSubmit:
-              ({required Uint8List? avatarPng, required _SaveAction action}) =>
-                  _commitSavePersona(
+          initialLorebookIds: personaLorebookIds,
+          onSubmit: ({
+            required Uint8List? avatarPng,
+            required _SaveAction action,
+            required List<String> lorebookIds,
+          }) =>
+              _commitSavePersona(
             canvas: canvas,
             avatarPng: avatarPng,
             saveAsCopy: saveMode == _SaveMode.copy,
+            lorebookIds: lorebookIds,
           ),
         ),
       );
@@ -2589,10 +2799,14 @@ class _CharacterAssistantScreenState
     // save-sheet avatar slot from the original card so the user isn't
     // asked to re-pick. The save-sheet still allows replacing it.
     final editTargetId = store.activeCreatorSession?.editingCharacterId;
-    final existingAvatarUrl = editTargetId != null
-        ? store.characterById(editTargetId)?.avatar
-        : null;
-    // Wave CY.18.217: editing an existing character (or scenario card —     // scenario cards ARE Characters) prompts for overwrite vs save-as-copy
+    final existingChar =
+        editTargetId != null ? store.characterById(editTargetId) : null;
+    final existingAvatarUrl = existingChar?.avatar;
+    final existingCharLorebookIds = existingChar != null
+        ? List<String>.from(existingChar.lorebookIds)
+        : const <String>[];
+    // Wave CY.18.217: editing an existing character (or scenario card —
+    // scenario cards ARE Characters) prompts for overwrite vs save-as-copy
     // BEFORE the save sheet. Create-from-scratch (editTargetId == null)
     // always adds new, so no prompt.
     _SaveMode charSaveMode = _SaveMode.copy;
@@ -2612,12 +2826,18 @@ class _CharacterAssistantScreenState
       builder: (_) => _SaveCardSheet(
         canvas: canvas,
         existingAvatarDataUrl: existingAvatarUrl,
-        onSubmit: ({required Uint8List? avatarPng, required _SaveAction action}) =>
+        initialLorebookIds: existingCharLorebookIds,
+        onSubmit: ({
+          required Uint8List? avatarPng,
+          required _SaveAction action,
+          required List<String> lorebookIds,
+        }) =>
             _commitSave(
           canvas: canvas,
           avatarPng: avatarPng,
           action: action,
           saveAsCopy: charSaveMode == _SaveMode.copy,
+          lorebookIds: lorebookIds,
         ),
       ),
     );
@@ -2665,6 +2885,10 @@ class _CharacterAssistantScreenState
   Future<void> _commitSavePersona({
     required Map<String, dynamic> canvas,
     required Uint8List? avatarPng,
+    // Lorebook bindings chosen in the save sheet — the single source of truth
+    // for ALL paths (fresh create now CAN bind; edit is seeded with the
+    // original's bindings so default behaviour is preserved + editable).
+    required List<String> lorebookIds,
     // Wave CY.18.217: when true (edit mode + user chose "Save as a copy"),
     // fork a brand-new persona instead of updating the original in place.
     bool saveAsCopy = false,
@@ -2683,9 +2907,10 @@ class _CharacterAssistantScreenState
     final dialogue = canvasText(canvas['mes_example']).trim();
     final taglineRaw = canvasText(canvas['tagline']).trim();
     final tagline = taglineRaw.isEmpty ? null : taglineRaw;
-    final avatarUrl = avatarPng != null
-        ? 'data:image/png;base64,${base64Encode(avatarPng)}'
-        : null;
+    // B-2 / H-6: externalise the chosen avatar into the AttachmentStore so the
+    // persona persists a pyre:// ref, not inline base64 (web → data: fallback).
+    final avatarUrl =
+        avatarPng != null ? await externalizeImageBytes(avatarPng) : null;
 
     final editTargetId = session?.editingPersonaId;
     Persona? existing;
@@ -2711,7 +2936,7 @@ class _CharacterAssistantScreenState
         description: description,
         dialogueExamples: dialogue,
         avatar: avatarUrl ?? existing.avatar,
-        lorebookIds: List<String>.from(existing.lorebookIds),
+        lorebookIds: List<String>.from(lorebookIds),
         gallery: List<String>.from(existing.gallery),
       );
       store.addPersona(created);
@@ -2741,7 +2966,7 @@ class _CharacterAssistantScreenState
         description: description,
         dialogueExamples: dialogue,
         avatar: avatarUrl ?? existing.avatar,
-        lorebookIds: List<String>.from(existing.lorebookIds),
+        lorebookIds: List<String>.from(lorebookIds),
         gallery: List<String>.from(existing.gallery),
         createdAt: existing.createdAt,
         favorite: existing.favorite,
@@ -2756,6 +2981,7 @@ class _CharacterAssistantScreenState
         description: description,
         dialogueExamples: dialogue,
         avatar: avatarUrl,
+        lorebookIds: List<String>.from(lorebookIds),
       );
       store.addPersona(created);
       store.markCreatorSessionSaved(id, created.id);
@@ -2785,6 +3011,11 @@ class _CharacterAssistantScreenState
     required Map<String, dynamic> canvas,
     required Uint8List? avatarPng,
     required _SaveAction action,
+    // Lorebook bindings chosen in the save sheet — the single source of truth
+    // for ALL paths. Fresh builds can now bind a world (the gap this closes);
+    // edit/copy are seeded with the original's bindings so default behaviour
+    // is preserved and the user can re-bind in the same sheet.
+    required List<String> lorebookIds,
     // Wave CY.18.217: when true (edit mode + user chose "Save as a copy"),
     // mint a brand-new character instead of overwriting the original. The
     // original card (and any chats pointing at it) are left untouched.
@@ -2828,7 +3059,9 @@ class _CharacterAssistantScreenState
           ? creatorName
           : c.creator.replaceAll('{{creator}}', creatorName);
     if (avatarPng != null) {
-      c.avatar = 'data:image/png;base64,${base64Encode(avatarPng)}';
+      // B-2 / H-6: externalise the chosen avatar into the AttachmentStore so
+      // the character persists a pyre:// ref, not inline base64 (web → data:).
+      c.avatar = await externalizeImageBytes(avatarPng);
     }
     // Wave CY.18.36: mark this character as Pyre-built so the Profile
     // screen's "Cards created" stat counts it. Skipped on Edit-with-AI
@@ -2837,6 +3070,11 @@ class _CharacterAssistantScreenState
     // imported card edited via the AI editor doesn't become "created
     // in Pyre"; it was still imported).
     c.createdInPyre = true;
+    // Lorebook bindings from the save sheet apply to EVERY path (fresh create,
+    // overwrite, copy, and the deleted-mid-session fallback). The canvas never
+    // carries lorebookIds, so this is the only place they're set — closing the
+    // gap where a fresh Creator build could never bind a world.
+    c.lorebookIds = List<String>.from(lorebookIds);
     // Wave CS: "Edit with AI" session — UPDATE the existing character
     // in place rather than creating a new one. Preserves the original
     // character id (so existing chats keep pointing at it), the original
@@ -2848,7 +3086,7 @@ class _CharacterAssistantScreenState
       if (original != null) {
         c.id = original.id;
         c.createdAt = original.createdAt;
-        c.lorebookIds = List<String>.from(original.lorebookIds);
+        // (lorebookIds already set from the save sheet above.)
         // Wave CY.18.36: Edit-with-AI doesn't change provenance — if
         // the original was imported, it stays imported (createdInPyre
         // = false). My new-card-default of true above gets overwritten
@@ -2859,6 +3097,14 @@ class _CharacterAssistantScreenState
         if (avatarPng == null && c.avatar == null) {
           c.avatar = original.avatar;
         }
+        // Audit 2026-06-05: the canvas rebuild drops gallery / favorite /
+        // talkativeness (none round-trip through the chara_card `data` block),
+        // so without restoring them an AI overwrite silently WIPED the card's
+        // extra gallery images, un-starred a favourited card, and dropped
+        // talkativeness. The persona edit path already restored its extras
+        // from `existing`; mirror that here. keepFavorite: true — an in-place
+        // overwrite IS the same record, so its star carries over.
+        restoreCanvasDroppedExtras(c, original, keepFavorite: true);
         store.updateCharacter(c);
         store.markCreatorSessionSaved(id, c.id);
       } else {
@@ -2874,11 +3120,15 @@ class _CharacterAssistantScreenState
       // a new one) so the copy is faithful, suffix the name with
       // " (copy)", and ADD it (NOT update).
       final original = store.characterById(editTarget);
+      // (lorebookIds already set from the save sheet above.)
       if (original != null) {
-        c.lorebookIds = List<String>.from(original.lorebookIds);
         if (avatarPng == null && c.avatar == null) {
           c.avatar = original.avatar;
         }
+        // A faithful fork carries the original's extra art + talkativeness
+        // (dropped by the canvas rebuild). keepFavorite: false — a fresh copy
+        // is its own new record and intentionally starts unstarred.
+        restoreCanvasDroppedExtras(c, original, keepFavorite: false);
       }
       c.name = withCopyNameSuffix(c.name);
       // A forked copy made in Pyre is genuinely a new Pyre-built card,
@@ -3058,6 +3308,7 @@ class _CharacterAssistantScreenState
         ],
       ),
     );
+    ctl.dispose(); // H-3: dispose the session-rename controller on dialog close.
     if (renamed == null) return;
     if (!mounted) return;
     final store = context.read<AppStore>();
@@ -3324,7 +3575,8 @@ class _CharacterAssistantScreenState
                         onPickCharacter: () => _chooseMode('character'),
                         onPickScenario: () => _chooseMode('scenario'),
                       ),
-                    // Wave CY.18.101: stage-2 flow picker removed —                     // _chooseMode locks freeform directly.
+                    // Wave CY.18.101: stage-2 flow picker removed —
+                    // _chooseMode locks freeform directly.
                     // Footer row — token count (assistant only) +
                     // Retry (last assistant with prior user) + the
                     // overflow "⋯" button that opens the message
@@ -3457,7 +3709,12 @@ class _CharacterAssistantScreenState
         _InputBar(
           controller: _inputCtl,
           focusNode: _inputFocus,
-          generating: _generating,
+          // C-2 (CRITICAL): treat an in-flight structured build like a normal
+          // generation for the input bar — disable Enter-to-send + the send
+          // button (shows the Stop control) so a mid-build send can't bump
+          // `_streamGen` and make the build discard its result. `onStop` /
+          // `_abortInFlightStream` already clears `_structuredBuilding`.
+          generating: _generating || _structuredBuilding,
           // Wave CV: lock the input until the user picks character vs
           // scenario via the buttons in the opening greeting. Doesn't
           // apply to edit-mode sessions (which start with mode='edit'
@@ -3469,9 +3726,7 @@ class _CharacterAssistantScreenState
           modeLocked: () {
             final s = store.activeCreatorSession;
             if (s == null) return true;
-            if (s.mode == null) return true;
-            if (s.mode != 'edit' && s.flow == null) return true;
-            return false;
+            return creatorInputLocked(mode: s.mode, flow: s.flow);
           }(),
           pending: _pendingAttachments,
           onRemovePending: _removePending,
@@ -3829,7 +4084,8 @@ class _CanvasFieldsViewState extends State<_CanvasFieldsView> {
     // VISIBLE by default — the fields the user actually fills.
     // Wave BC: `tagline` added (Block 5).
     // Wave BH: tagline moved to AFTER tags. It's card-listing
-    // metadata (one-liner pitch for the catalog), not core identity —     // grouping it with tags + creator_notes reads as a coherent
+    // metadata (one-liner pitch for the catalog), not core identity —
+    // grouping it with tags + creator_notes reads as a coherent
     // "card metadata" block at the bottom of the sheet.
     const mainOrder = <String>[
       'name',
@@ -3916,7 +4172,8 @@ class _CanvasFieldsViewState extends State<_CanvasFieldsView> {
 
   /// Wave AZ item 4: inject blank lines before top-level section
   /// headers in the description field so the dense label dump renders
-  /// with visual breathing room. The on-disk content is unchanged —   /// this is purely presentational.
+  /// with visual breathing room. The on-disk content is unchanged —
+  /// this is purely presentational.
   static const _descriptionSectionHeaders = <String>[
     'Detailed Features:',
     'Clothing:',
@@ -4251,7 +4508,8 @@ class _FreeformWarningCard extends StatelessWidget {
 // Input bar — single `+` popup for attachments, then text field + send
 
 /// True on desktop platforms (Windows/Linux/macOS); false on web and
-/// mobile. Gates the Creator's desktop-only Enter-to-send shortcut — /// on Android, Enter must insert a newline, never send.
+/// mobile. Gates the Creator's desktop-only Enter-to-send shortcut —
+/// on Android, Enter must insert a newline, never send.
 bool get _isDesktop {
   if (kIsWeb) return false;
   return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
@@ -4399,7 +4657,8 @@ class _InputBar extends StatelessWidget {
             ),
             const SizedBox(width: 6),
             if (generating)
-              // Stop button (replaces send) while a stream is alive —               // tap aborts the request, partial reply stays in the
+              // Stop button (replaces send) while a stream is alive —
+              // tap aborts the request, partial reply stays in the
               // bubble. Without this the user has no way to cancel a
               // generation that's clearly going off the rails.
               IconButton.filled(
@@ -5246,7 +5505,8 @@ class _SheetStatusPill extends StatelessWidget {
 
   // The visible-by-default chara_card_v2 keys used for the "X/Y fields"
   // pill counter. Wave BB realignment: only the seven main fields the
-  // user actually fills are counted. Advanced-tray fields (personality —   // always empty by spec — system_prompt, post_history_instructions,
+  // user actually fills are counted. Advanced-tray fields (personality —
+  // always empty by spec — system_prompt, post_history_instructions,
   // alternate_greetings, creator, character_version, extensions) are
   // excluded so the pill reaches `7/7` on a complete card instead of
   // capping at `7/14`.
@@ -5311,9 +5571,17 @@ class _SaveCardSheet extends StatefulWidget {
   /// helper text) and the action passed to [onSubmit] is always
   /// [_SaveAction.library] (the persona save path ignores the action).
   final bool personaMode;
+
+  /// Bindings to pre-select. Seeded from the card/persona being EDITED (so the
+  /// existing bindings are preserved + shown), or empty for a fresh build —
+  /// which is the gap this closes: a brand-new Creator card can now bind a
+  /// lorebook at save time instead of having to reopen the manual editor.
+  final List<String> initialLorebookIds;
+
   final Future<void> Function({
     required Uint8List? avatarPng,
     required _SaveAction action,
+    required List<String> lorebookIds,
   }) onSubmit;
 
   const _SaveCardSheet({
@@ -5321,6 +5589,7 @@ class _SaveCardSheet extends StatefulWidget {
     required this.onSubmit,
     this.existingAvatarDataUrl,
     this.personaMode = false,
+    this.initialLorebookIds = const <String>[],
   });
 
   @override
@@ -5337,6 +5606,12 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
   /// Wave CV.16: decode the existing avatar URL to bytes for preview.
   /// Cached so we don't decode on every rebuild.
   Uint8List? _existingAvatarBytes;
+
+  /// Lorebook bindings chosen in this sheet. Seeded from
+  /// [widget.initialLorebookIds] (existing card on edit; empty on a fresh
+  /// build) and the single source of truth handed to the commit path.
+  late List<String> _lorebookIds =
+      List<String>.from(widget.initialLorebookIds);
 
   @override
   void initState() {
@@ -5391,7 +5666,8 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
       // present), pass the existing bytes through so the save path
       // and PNG export both have the image without the user having
       // to re-pick.
-      await widget.onSubmit(avatarPng: _previewBytes, action: action);
+      await widget.onSubmit(
+          avatarPng: _previewBytes, action: action, lorebookIds: _lorebookIds);
       // Wave CV.16: the library / startChat actions handle navigation
       // themselves (popping sheet + assistant screen). Only attempt
       // the sheet pop if we're still mounted AND the route is still
@@ -5534,6 +5810,25 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                 ],
               ),
             ),
+            // Lorebook binding — closes the gap where a fresh Creator build
+            // could never bind a world (you had to save, then reopen the
+            // manual editor). Shown only when lorebooks exist; seeded with the
+            // card's current bindings on edit. Hidden when there's nothing to
+            // bind to keep the sheet uncluttered.
+            if (context.watch<AppStore>().lorebooks.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: LorebookBindingSection(
+                  selectedIds: _lorebookIds,
+                  label: widget.personaMode
+                      ? 'Persona lorebooks'
+                      : 'Linked lorebooks',
+                  sublabel:
+                      'Bind a world so it travels with this ${widget.personaMode ? 'persona' : 'card'} '
+                      '(optional — you can change this later in the editor).',
+                  onChanged: (ids) => setState(() => _lorebookIds = ids),
+                ),
+              ),
             const Divider(color: EmberColors.stroke, height: 1),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),

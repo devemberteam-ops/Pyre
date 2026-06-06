@@ -783,6 +783,12 @@ Map<String, dynamic> _creatorFields(CreatorMode mode) {
         'first_mes':
             '*Mina freezes mid-pour, ears pinning back.* "O-oh — you\'re '
             'still here. Sorry, I didn\'t— what can I get you?"',
+        'alternate_greetings': <String>[
+          '*The cafe is empty; Mina is wiping a cup she has already dried '
+              'three times.* "We... we don\'t usually get anyone this late."',
+          '*She doesn\'t hear the bell over the rain, and startles when she '
+              'turns.* "Oh! I — sorry, I thought we were closed."',
+        ],
         'dialogueExamples': [
           {
             'action': 'twisting her apron',
@@ -812,6 +818,11 @@ Map<String, dynamic> _creatorFields(CreatorMode mode) {
         'first_mes':
             '*The bell over the door has long since stopped ringing.* The last '
             'song fades, and Mina looks up from the counter.',
+        'alternate_greetings': <String>[
+          '*The rain has stopped; the cafe holds that after-storm hush.* Mina '
+              'is stacking the last chairs when she notices {{user}} has not '
+              'moved.',
+        ],
         'dialogueExamples': [
           {
             'action': 'wiping the same spot twice',
@@ -860,12 +871,26 @@ CreatorScenario buildCreatorBatch(CreatorMode mode) {
   final rendered = renderCard(fields, mode);
   final renderedDescription = (rendered['description'] as String?) ?? '';
 
+  // Wave CY.18.270: surface the rendered chara_card_v2 `alternate_greetings`
+  // (a List<String>) in the dump too, so the golden carries proof the closing
+  // batch's greetings flow through `renderCard` to the card (not just the
+  // Description). Appended under a clear header; empty for persona (no
+  // greetings by design) and absent when the fixture has none.
+  final greetings =
+      (rendered['alternate_greetings'] as List?)?.cast<String>() ??
+          const <String>[];
+  final renderBody = greetings.isEmpty
+      ? renderedDescription
+      : '$renderedDescription\n\n'
+          '--- alternate_greetings (${greetings.length}) ---\n'
+          '${greetings.join('\n--- next greeting ---\n')}';
+
   // A synthetic, non-model turn so the golden + report carry the deterministic
   // render alongside the structured request. The role `render` is never sent to
   // a provider — the LIVE path uses `buildBatchTurns` only.
   final allTurns = <ChatTurn>[
     ...turns,
-    ChatTurn('render', renderedDescription),
+    ChatTurn('render', renderBody),
   ];
 
   return CreatorScenario(

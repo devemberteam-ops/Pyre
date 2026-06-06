@@ -51,6 +51,19 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // Pyre crash-hardening (2026-06-05): decline WM_GETOBJECT BEFORE the engine sees it,
+  // so Flutter's reactive accessibility bridge never auto-enables. That bridge has an
+  // unguarded weak_ptr deref (present in engine 3.44.0 through master) that null-derefs on
+  // ordinary interaction once ANY UIA/MSAA probe (Narrator idle-probe, touch keyboard,
+  // TSF/IME, in-box UIA client (not just a screen reader) flips semantics on. It is an
+  // ALL-USERS 0xc0000005 crash (flutter_windows.dll +0x1d7b0 / +0x3a9fa). See
+  // docs/superpowers/mega-audit-2026-06-05-crash-rootcause.md. TRADEOFF: this turns OFF the
+  // Windows accessibility tree (screen readers can't read widgets; the window stays
+  // focusable/usable). Accepted to stop the crash; revisit when the engine guards the deref.
+  if (message == WM_GETOBJECT) {
+    return 0;
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
@@ -63,7 +76,13 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   switch (message) {
     case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
+      // Guard against a teardown race: a stray WM_FONTCHANGE can arrive after
+      // OnDestroy() has reset flutter_controller_ to null, in which case the
+      // stock `flutter_controller_->engine()` would be a null deref. Cheap
+      // defense-in-depth (flutter/flutter#183313 spirit).
+      if (flutter_controller_) {
+        flutter_controller_->engine()->ReloadSystemFonts();
+      }
       break;
   }
 

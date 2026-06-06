@@ -309,6 +309,22 @@ class DeviceRegistry {
     return match;
   }
 
+  /// Mega-audit 2026-06-05 (Item 3 / Finding 2): self-heal a LEGACY native
+  /// device's `isNative` flag. A phone paired BEFORE the native flag existed
+  /// (Wave CY.18.259) has no `isNative` in `lan_devices.json`, so it migrates
+  /// to `false` and is then permanently excluded from key-sync — even though
+  /// it IS a native peer. Native clients now advertise `x-pyre-native: 1` on
+  /// every authenticated request (web never sends it); the server upgrades the
+  /// stored record the first time it sees that header, so the legacy device
+  /// starts receiving keys without forcing a re-pair. Idempotent + persists
+  /// once on the transition. Returns true iff it flipped the flag.
+  Future<bool> markNative(PairedDevice d) async {
+    if (d.isNative) return false;
+    d.isNative = true;
+    await _save();
+    return true;
+  }
+
   /// Derive a paired device's key-sync secret (AES-256-GCM key) from its
   /// stored bearer-hash (Wave CY.18.259). The server never holds the raw
   /// bearer, so it derives the shared secret from the hash it persisted;

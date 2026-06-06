@@ -68,6 +68,7 @@ void main() {
       // Top-level card fields present.
       for (final k in [
         'tagline',
+        'scenario',
         'first_mes',
         'dialogueExamples',
         'tags',
@@ -75,6 +76,34 @@ void main() {
       ]) {
         expect(keys.contains(k), isTrue, reason: 'missing top-level field $k');
       }
+    });
+
+    test('includes the alternate_greetings field, NOT required, batched once',
+        () {
+      final keys = _topLevelKeys(CreatorMode.character);
+      expect(keys.contains('alternate_greetings'), isTrue,
+          reason: 'character build must request alternate_greetings');
+      // Optional — extra greetings beyond first_mes are never mandatory.
+      expect(requiredKeysFor(CreatorMode.character)
+          .contains('alternate_greetings'),
+          isFalse);
+      // Lives in exactly one batch (the closing batch, with first_mes).
+      final count = batchesFor(CreatorMode.character)
+          .expand((b) => b)
+          .where((k) => k == 'alternate_greetings')
+          .length;
+      expect(count, 1);
+    });
+
+    test('includes the top-level scenario field as a required key', () {
+      final keys = _topLevelKeys(CreatorMode.character);
+      expect(keys.contains('scenario'), isTrue,
+          reason: 'character build must request the top-level scenario field');
+      expect(_field(CreatorMode.character, 'scenario').kind,
+          CardFieldKind.topLevel);
+      expect(requiredKeysFor(CreatorMode.character).contains('scenario'), isTrue,
+          reason: 'scenario should gate completeness so an empty fill is '
+              'flagged by the soft missing-required note');
     });
 
     test('detailedFeatures / clothing / intimateDetails are nestedBullets '
@@ -178,6 +207,20 @@ void main() {
       // Scenario does NOT carry character Description labels.
       expect(keys.contains('fullName'), isFalse);
       expect(keys.contains('detailedFeatures'), isFalse);
+    });
+
+    test('includes alternate_greetings (optional, batched once)', () {
+      final keys = _topLevelKeys(CreatorMode.scenario);
+      expect(keys.contains('alternate_greetings'), isTrue,
+          reason: 'scenario build must request alternate_greetings');
+      expect(requiredKeysFor(CreatorMode.scenario)
+          .contains('alternate_greetings'),
+          isFalse);
+      final count = batchesFor(CreatorMode.scenario)
+          .expand((b) => b)
+          .where((k) => k == 'alternate_greetings')
+          .length;
+      expect(count, 1);
     });
   });
 

@@ -1,14 +1,15 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../services/attachment_store.dart';
 import '../services/scene_background.dart' as scenebg;
 import '../state/app_store.dart';
 import '../theme.dart';
+import '../widgets/lightbox.dart';
 
 /// Wave CY.18.195: this sheet now hosts ONLY the per-chat background controls
 /// (source + opacity + the scene-aware "Set background now" action). The
@@ -63,7 +64,7 @@ class CustomizeChatSheet extends StatelessWidget {
               ),
             ),
             const Text(
-              'Customize chat',
+              'Chat background',
               style: TextStyle(
                   fontSize: 17, fontWeight: FontWeight.w600),
             ),
@@ -182,9 +183,10 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
     final bytes = result.files.single.bytes;
     if (bytes == null) return;
     chat.backgroundSource = ChatBackgroundSource.custom;
-    chat.customBackgroundDataUrl =
-        'data:image/png;base64,${base64Encode(bytes)}';
-    store.notifyAndPersist();
+    // B-2 / H-6: externalise into the AttachmentStore (pyre:// ref) instead of
+    // inline base64 (web falls back to a data URL).
+    chat.customBackgroundDataUrl = await externalizeImageBytes(bytes);
+    store.touchChat(chat); // F1: custom background syncs
   }
 
   /// Wave CY.18.185: manually trigger a scene classify from the current chat
@@ -299,7 +301,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
           }
         }
       }
-      store.notifyAndPersist();
+      store.touchChat(chat); // F1: scene fields + watermarks sync
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(changed
@@ -351,7 +353,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
     if (text == chat.sceneLocation.trim()) return; // no change → no work
     chat.sceneLocation = text;
     _locationSynced = text;
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: location edit syncs
     if (text.isEmpty) return; // cleared → just persist, nothing to classify
     // Combine the chat's real recent window with an authoritative hint so the
     // classifier has both the world cues AND the user's intent. The recent
@@ -416,7 +418,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
           groupValue: chat.backgroundSource,
           onChanged: (v) {
             chat.backgroundSource = v;
-            store.notifyAndPersist();
+            store.touchChat(chat); // F1: background source syncs
           },
           child: Column(
             children: [
@@ -436,7 +438,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
                   ),
                   onTap: () {
                     chat.backgroundSource = s;
-                    store.notifyAndPersist();
+                    store.touchChat(chat); // F1: background source syncs
                   },
                 ),
             ],
@@ -444,14 +446,19 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
         ),
         if (chat.backgroundSource == ChatBackgroundSource.custom) ...[
           const SizedBox(height: 4),
-          if (chat.customBackgroundDataUrl != null)
+          // B-2 / H-6: the custom background is now usually a `pyre://` ref
+          // (externalised on pick), so resolve it via the shared image
+          // resolver rather than a raw base64Decode (which would throw on a
+          // non-data: URL).
+          if (chat.customBackgroundDataUrl != null &&
+              Lightbox.resolveImage(chat.customBackgroundDataUrl) != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.memory(
-                  base64Decode(
-                      chat.customBackgroundDataUrl!.split(',').last),
+                child: Image(
+                  image:
+                      Lightbox.resolveImage(chat.customBackgroundDataUrl)!,
                   height: 120,
                   width: double.infinity,
                   fit: BoxFit.cover,
@@ -477,7 +484,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
                       style: TextStyle(color: EmberColors.danger)),
                   onPressed: () {
                     chat.customBackgroundDataUrl = null;
-                    store.notifyAndPersist();
+                    store.touchChat(chat); // F1: clear custom bg syncs
                   },
                 ),
             ],
@@ -583,7 +590,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
                   onPressed: () {
                     setState(() => _dragOpacity = null);
                     chat.backgroundOpacity = null;
-                    store.notifyAndPersist();
+                    store.touchChat(chat); // F1: opacity reset syncs
                   },
                   child: const Text('Reset'),
                 ),
@@ -605,7 +612,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
               onChangeEnd: (v) {
                 _dragOpacity = null;
                 chat.backgroundOpacity = v;
-                store.notifyAndPersist();
+                store.touchChat(chat); // F1: opacity change syncs
               },
             ),
           ),
@@ -620,7 +627,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
                 TextButton(
                   onPressed: () {
                     chat.backgroundFit = null;
-                    store.notifyAndPersist();
+                    store.touchChat(chat); // F1: fit reset syncs
                   },
                   child: const Text('Reset'),
                 ),
@@ -636,7 +643,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
             globalFit: settings.backgroundFit,
             onChanged: (f) {
               chat.backgroundFit = f;
-              store.notifyAndPersist();
+              store.touchChat(chat); // F1: fit change syncs
             },
           ),
         ],

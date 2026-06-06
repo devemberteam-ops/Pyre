@@ -1,8 +1,56 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pyre/services/device_registry.dart';
+import 'package:pyre/services/pyre_server.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  group('markNative — legacy isNative self-heal (Item 3 / Finding 2)', () {
+    test('flips a legacy non-native device to native and is idempotent',
+        () async {
+      // A device paired before the native flag existed migrates to false.
+      final legacy = PairedDevice(
+        id: 'legacy-1',
+        name: 'Old phone',
+        bearerHash: 'e' * 64,
+        pairedAt: 1,
+        lastSeen: 1,
+        // isNative defaults to false.
+      );
+      expect(legacy.isNative, isFalse);
+      // Before the heal the provider gate excludes it even with the host
+      // opted in — exactly the reported "keys not syncing" trap.
+      expect(shouldSyncProviders(true, legacy.isNative), isFalse);
+
+      // The header-driven heal flips the flag (persist failure in the test
+      // env is swallowed by _save's try/catch; the in-memory flag still flips).
+      final changed = await DeviceRegistry.instance.markNative(legacy);
+      expect(changed, isTrue);
+      expect(legacy.isNative, isTrue);
+      // Now the gate passes — the legacy device receives keys.
+      expect(shouldSyncProviders(true, legacy.isNative), isTrue);
+
+      // Idempotent: a second call is a no-op (already native).
+      final again = await DeviceRegistry.instance.markNative(legacy);
+      expect(again, isFalse);
+      expect(legacy.isNative, isTrue);
+    });
+
+    test('already-native device is never re-saved (returns false)', () async {
+      final native = PairedDevice(
+        id: 'native-1',
+        name: 'New phone',
+        bearerHash: 'f' * 64,
+        pairedAt: 1,
+        lastSeen: 1,
+        isNative: true,
+      );
+      expect(await DeviceRegistry.instance.markNative(native), isFalse);
+      expect(native.isNative, isTrue);
+    });
+  });
+
   group('PairedDevice — isNative round-trip (Wave CY.18.259)', () {
     test('isNative round-trips through toJson/fromJson', () {
       final d = PairedDevice(

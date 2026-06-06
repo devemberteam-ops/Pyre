@@ -91,7 +91,7 @@ class _ScriptScreenState extends State<ScriptScreen> {
       _controllers[beat.id]?.selection =
           TextSelection.collapsed(offset: trimmed.length);
     }
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: beat edit/remove syncs
   }
 
   void _markDone(AppStore store, Chat chat, StoryBeat beat) {
@@ -108,7 +108,7 @@ class _ScriptScreenState extends State<ScriptScreen> {
     setState(() {
       beat.done = true;
     });
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: beat done toggle syncs
   }
 
   void _reactivate(AppStore store, Chat chat, StoryBeat beat) {
@@ -116,7 +116,7 @@ class _ScriptScreenState extends State<ScriptScreen> {
       beat.done = false;
     });
     // Controller will be created lazily on next build via _controllerFor.
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: beat reactivate syncs
   }
 
   void _deleteBeat(AppStore store, Chat chat, StoryBeat beat) {
@@ -125,7 +125,7 @@ class _ScriptScreenState extends State<ScriptScreen> {
     setState(() {
       chat.storyBeats.removeWhere((b) => b.id == beat.id);
     });
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: beat delete syncs
   }
 
   // ─── options ─────────────────────────────────────────────────────────────
@@ -149,7 +149,7 @@ class _ScriptScreenState extends State<ScriptScreen> {
     }
     if (added) {
       _addCtl.clear();
-      store.notifyAndPersist();
+      store.touchChat(chat); // F1: beat add syncs
     }
   }
 

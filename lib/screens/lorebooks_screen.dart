@@ -25,8 +25,9 @@ class LorebooksScreen extends StatelessWidget {
     // import and live solely to back that character's bound list; we
     // still show their count in the empty-state copy so the user
     // doesn't think their card lost its lore.
-    final visibleBooks =
-        store.lorebooks.where((b) => !b.hidden).toList(growable: false);
+    final visibleBooks = store.lorebooks
+        .where((b) => !b.hidden && !b.deleted)
+        .toList(growable: false);
     final hiddenCount = store.lorebooks.length - visibleBooks.length;
     return Scaffold(
       appBar: AppBar(
@@ -289,55 +290,74 @@ Future<void> _editLorebook(BuildContext context, Lorebook? existing) async {
   final nameCtl =
       TextEditingController(text: existing?.name ?? 'New lorebook');
   final descCtl = TextEditingController(text: existing?.description ?? '');
+  // Completeness-gaps: inline blank-name error (was a silent no-op). Tracked
+  // via StatefulBuilder so the dialog can rebuild with the error / clear it.
+  String? nameError;
   await showDialog<void>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      backgroundColor: EmberColors.bgPanel,
-      title: Text(existing == null ? 'New lorebook' : 'Rename lorebook'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            controller: nameCtl,
-            decoration: const InputDecoration(labelText: 'Name'),
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setLocal) => AlertDialog(
+        backgroundColor: EmberColors.bgPanel,
+        title: Text(existing == null ? 'New lorebook' : 'Rename lorebook'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: nameCtl,
+              decoration: InputDecoration(
+                labelText: 'Name',
+                errorText: nameError,
+              ),
+              onChanged: (_) {
+                if (nameError != null && nameCtl.text.trim().isNotEmpty) {
+                  setLocal(() => nameError = null);
+                }
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: descCtl,
+              maxLines: 2,
+              decoration: const InputDecoration(labelText: 'Description'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: descCtl,
-            maxLines: 2,
-            decoration: const InputDecoration(labelText: 'Description'),
+          ElevatedButton(
+            onPressed: () {
+              final name = nameCtl.text.trim();
+              if (name.isEmpty) {
+                setLocal(() => nameError = 'Name is required');
+                return;
+              }
+              if (existing == null) {
+                store.addLorebook(Lorebook(
+                  id: newId('lore'),
+                  name: name,
+                  description: descCtl.text.trim(),
+                ));
+              } else {
+                existing
+                  ..name = name
+                  ..description = descCtl.text.trim();
+                store.updateLorebook(existing);
+              }
+              Navigator.pop(ctx);
+            },
+            child: Text(existing == null ? 'Create' : 'Save'),
           ),
         ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            final name = nameCtl.text.trim();
-            if (name.isEmpty) return;
-            if (existing == null) {
-              store.addLorebook(Lorebook(
-                id: newId('lore'),
-                name: name,
-                description: descCtl.text.trim(),
-              ));
-            } else {
-              existing
-                ..name = name
-                ..description = descCtl.text.trim();
-              store.updateLorebook(existing);
-            }
-            Navigator.pop(ctx);
-          },
-          child: Text(existing == null ? 'Create' : 'Save'),
-        ),
-      ],
     ),
   );
+  // H-3: dispose the lorebook name/description controllers on dialog close.
+  nameCtl.dispose();
+  descCtl.dispose();
 }
 
 class LorebookEditScreen extends StatelessWidget {
@@ -449,7 +469,17 @@ class LorebookEditScreen extends StatelessWidget {
                                 IconButton(
                                   icon: const Icon(Icons.delete_outline,
                                       color: EmberColors.danger),
-                                  onPressed: () {
+                                  tooltip: 'Delete entry',
+                                  // Completeness-gaps: confirm like every other
+                                  // delete in the app (was an immediate remove).
+                                  onPressed: () async {
+                                    final ok = await confirmDelete(
+                                      context,
+                                      title: 'Delete entry?',
+                                      message:
+                                          'This lorebook entry will be removed.',
+                                    );
+                                    if (!ok) return;
                                     lore.entries.removeWhere(
                                         (e) => e.id == entry.id);
                                     store.updateLorebook(lore);
@@ -687,4 +717,8 @@ Future<void> _editEntry(
       ),
     ),
   );
+  // H-3: dispose the entry-editor controllers once the dialog closes.
+  keysCtl.dispose();
+  secondaryCtl.dispose();
+  contentCtl.dispose();
 }

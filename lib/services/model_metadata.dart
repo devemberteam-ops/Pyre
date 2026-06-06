@@ -23,7 +23,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 
 import '../models/models.dart';
-import 'chat_api.dart' show buildChatUrl;
+import 'chat_api.dart' show buildChatUrl, scrubProviderBody;
 
 /// Extract a context-window size (tokens) from a single `/models` entry,
 /// scanning provider-specific field names in priority order. Pure; no
@@ -102,7 +102,11 @@ Future<int?> fetchContextWindow(ApiProvider provider) async {
       }
     }
   } catch (e) {
-    debugPrint('[ModelMetadata] context-window fetch failed: $e');
+    // Audit 2026-06-04 [providers-01]: a jsonDecode failure echoes a body
+    // snippet into `e.toString()`; scrub any reflected key/token before it
+    // reaches the debug log.
+    debugPrint('[ModelMetadata] context-window fetch failed: '
+        '${scrubProviderBody(e.toString(), apiKey: provider.apiKey)}');
   }
   _cache[cacheKey] = result;
   return result;

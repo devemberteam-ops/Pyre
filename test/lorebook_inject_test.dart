@@ -317,4 +317,117 @@ void main() {
       );
     });
   });
+
+  group('H-9: deterministic, stable injection order', () {
+    Message msg(String t) =>
+        Message(id: t, kind: MessageKind.user, variants: [t]);
+
+    test('equal order (all-zero) preserves scan order, stable across repeats',
+        () {
+      // Three constant entries across two books, all order:0 (the common
+      // hand-made case). The documented stable sequence is SCAN ORDER:
+      // book A entry a1, a2, then book B entry b1.
+      final bookA = Lorebook(id: 'A', name: 'A', entries: [
+        LoreEntry(id: 'a1', content: 'A1', constant: true),
+        LoreEntry(id: 'a2', content: 'A2', constant: true),
+      ]);
+      final bookB = Lorebook(id: 'B', name: 'B', entries: [
+        LoreEntry(id: 'b1', content: 'B1', constant: true),
+      ]);
+      const expected = ['a1', 'a2', 'b1'];
+      // Repeat many times: the order must be identical every build.
+      for (var i = 0; i < 25; i++) {
+        final res = scanLorebookHits([bookA, bookB], [msg('window $i')]);
+        expect(res.hits.map((e) => e.id).toList(), expected,
+            reason: 'equal-order entries must inject in stable scan order');
+      }
+    });
+
+    test('explicit higher order still wins over scan order', () {
+      final book = Lorebook(id: 'b', name: 'b', entries: [
+        LoreEntry(id: 'low', content: 'low', constant: true, order: 1),
+        LoreEntry(id: 'high', content: 'high', constant: true, order: 5),
+        LoreEntry(id: 'mid', content: 'mid', constant: true, order: 3),
+      ]);
+      final res = scanLorebookHits([book], [msg('anything')]);
+      // Descending by order: high(5), mid(3), low(1).
+      expect(res.hits.map((e) => e.id).toList(), ['high', 'mid', 'low']);
+    });
+
+    test('equal-order ties tie-break on scan order, not on the unstable sort',
+        () {
+      // Two order:2 entries bracketing an order:5: high must lead, then the
+      // two order:2 entries IN SCAN ORDER (t1 before t2).
+      final book = Lorebook(id: 'b', name: 'b', entries: [
+        LoreEntry(id: 't1', content: 't1', constant: true, order: 2),
+        LoreEntry(id: 'high', content: 'high', constant: true, order: 5),
+        LoreEntry(id: 't2', content: 't2', constant: true, order: 2),
+      ]);
+      for (var i = 0; i < 25; i++) {
+        final res = scanLorebookHits([book], [msg('x $i')]);
+        expect(res.hits.map((e) => e.id).toList(), ['high', 't1', 't2']);
+      }
+    });
+
+    test('trace stays aligned with the reordered hits', () {
+      final book = Lorebook(id: 'b', name: 'World', entries: [
+        LoreEntry(id: 'low', content: 'low', constant: true, order: 1),
+        LoreEntry(id: 'high', content: 'high', constant: true, order: 9),
+      ]);
+      final res = scanLorebookHits([book], [msg('anything')]);
+      expect(res.hits.length, 2);
+      expect(res.trace.length, 2);
+      // Both are constant entries from "World" → trace text identical, but the
+      // count/alignment invariant must hold post-sort.
+      expect(res.trace.every((t) => t.startsWith('World')), isTrue);
+    });
+  });
+
+  group('compiled keyword-RegExp cache (perf-at-scale #5)', () {
+    Message msg(String t) =>
+        Message(id: t, kind: MessageKind.user, variants: [t]);
+
+    setUp(debugClearKeyRegexCache);
+
+    test('repeated scans of the same key compile its regex once', () {
+      final book = Lorebook(
+        id: 'b',
+        name: 'World',
+        entries: [LoreEntry(id: 'e', keys: const ['Gate'])],
+      );
+      expect(debugKeyRegexCacheSize, 0);
+      // Simulate many prompt builds over the same lorebook.
+      for (var i = 0; i < 20; i++) {
+        scanLorebookHits([book], [msg('window text $i')]);
+      }
+      // One key → exactly one cached compiled regex (default flags).
+      expect(debugKeyRegexCacheSize, 1);
+    });
+
+    test('distinct keys / flag combos get distinct entries', () {
+      final book = Lorebook(
+        id: 'b',
+        name: 'World',
+        entries: [
+          LoreEntry(id: 'a', keys: const ['Gate']),
+          LoreEntry(id: 'b', keys: const ['Vael']),
+          LoreEntry(id: 'c', keys: const ['Gate'], caseSensitive: true),
+        ],
+      );
+      scanLorebookHits([book], [msg('nothing matches here')]);
+      // 'Gate'(default), 'Vael'(default), 'Gate'(caseSensitive) → 3 distinct.
+      expect(debugKeyRegexCacheSize, 3);
+    });
+
+    test('caching does not change match results', () {
+      final book = Lorebook(
+        id: 'b',
+        name: 'World',
+        entries: [LoreEntry(id: 'e', keys: const ['Gate'])],
+      );
+      // Whole-word boundary still applies from cache: "Gateway" must NOT hit.
+      expect(scanLorebookHits([book], [msg('Through the Gate')]).hits.length, 1);
+      expect(scanLorebookHits([book], [msg('Gateway open')]).hits, isEmpty);
+    });
+  });
 }

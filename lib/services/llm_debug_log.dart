@@ -170,6 +170,54 @@ class LlmDebugLog {
     }
   }
 
+  /// Lightweight, export-only TRACE breadcrumbs (no LLM payload — just a
+  /// short tagged string + timestamp). Rides the SAME daily JSONL file +
+  /// export path as [record], so a user who has the diagnostics toggle ON
+  /// gets these breadcrumbs in "Export logs" / "Copy logs" for free. Used
+  /// to pin down SILENT control-flow decisions (e.g. why the LTM
+  /// auto-summariser did or didn't fire) that produce no LLM call to log.
+  ///
+  /// Bounded by a small in-memory ring buffer (last [_maxTraces]) so a
+  /// reader can also inspect the most-recent breadcrumbs without parsing
+  /// the file, and so it can never grow unbounded in RAM. STRICT NO-OP
+  /// when [enabled] is false — same opt-in discipline as [record].
+  static const int _maxTraces = 200;
+  final List<String> _traceRing = <String>[];
+
+  /// The most-recent trace breadcrumbs (oldest-first), capped at
+  /// [_maxTraces]. Exposed for tests / in-memory inspection.
+  List<String> get recentTraces => List.unmodifiable(_traceRing);
+
+  /// Record ONE concise breadcrumb. STRICT NO-OP when disabled or on web
+  /// (disk path), but the in-memory ring is also gated on [enabled] so
+  /// behaviour is identical whether or not a file system is present.
+  Future<void> trace(String message) async {
+    if (!_enabled) return; // strict no-op when disabled — stays silent
+    // In-memory ring (bounded), useful for tests + quick inspection.
+    _traceRing.add(message);
+    if (_traceRing.length > _maxTraces) {
+      _traceRing.removeRange(0, _traceRing.length - _maxTraces);
+    }
+    if (kIsWeb) return; // no file system in the browser
+    if (_queued >= _maxQueued) return; // drop on overflow rather than balloon
+    _queued++;
+    String line;
+    try {
+      line = jsonEncode(<String, dynamic>{
+        'ts': DateTime.now().millisecondsSinceEpoch,
+        'trace': message,
+      });
+    } catch (e) {
+      _queued--;
+      debugPrint('[LlmDebugLog] trace encode failed: $e');
+      return;
+    }
+    _inflight = _inflight
+        .then((_) => _appendLine(line))
+        .whenComplete(() => _queued--);
+    return _inflight;
+  }
+
   /// Append one captured call as a JSONL line to today's file.
   ///
   /// STRICT NO-OP when [enabled] is false OR on web — returns immediately

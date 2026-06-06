@@ -121,7 +121,11 @@ StImportResult parseSillyTavernPreset(String jsonText) {
       case 'worldInfoBefore':
         return '{{wiBefore}}';
       case 'worldInfoAfter':
-        return '{{wiAfter}}';
+        // Pyre has no after-history lore slot, so `{{wiAfter}}` is a dead
+        // token (always resolves to ''). Rather than emit a no-op the user is
+        // promised will work, drop the marker entirely — all lorebook hits
+        // inject before history via `{{wiBefore}}`. (datamodel-...-02)
+        return '';
       case 'enhanceDefinitions':
       case 'nsfw':
       case 'jailbreak':
@@ -169,13 +173,26 @@ StImportResult parseSillyTavernPreset(String jsonText) {
   // result feeds preset.promptBlocks; if no authored content survives the list
   // stays empty and the preset behaves exactly like a flat one.
   final blocks = <PromptBlock>[];
+  // Track the chatHistory-marker split exactly as the flat path does (line
+  // 92-101): any block whose ORDER is AFTER the `chatHistory` marker is a
+  // post-history block (jailbreak / final reminder / prefill), regardless of
+  // `injection_position`. Without this the modular path put authored
+  // post-history prompts into the SYSTEM prompt (real ST presets either omit
+  // `injection_position` or set it to 0 on a post-history prompt — neither of
+  // which is 1 — so the chatHistory split is the authoritative signal). See
+  // audit finding import-2-01.
+  var blockPastHistory = false;
   for (final item in orderList) {
     final id = item['identifier'] as String?;
     if (id == null) continue;
+    if (id == 'chatHistory') {
+      blockPastHistory = true;
+      continue;
+    }
     final p = promptsById[id];
     if (p == null) continue;
-    // Structural placeholder (chatHistory / charDescription / ...) — no
-    // authored content to toggle.
+    // Structural placeholder (charDescription / ...) — no authored content to
+    // toggle. (chatHistory is handled above so it still flips pastHistory.)
     if (p['marker'] == true) continue;
     final content = p['content'];
     if (content is! String || content.trim().isEmpty) continue;
@@ -186,10 +203,13 @@ StImportResult parseSillyTavernPreset(String jsonText) {
     final role = (p['role'] is String && (p['role'] as String).isNotEmpty)
         ? p['role'] as String
         : 'system';
-    // ST `injection_position`: 0 = relative (rendered in prompt order, before
-    // history) · 1 = in-chat at depth (a post-history reminder / jailbreak).
-    final injectionPosition = item['injection_position'] ?? p['injection_position'];
-    final position = injectionPosition == 1
+    // Position = post-history if EITHER (a) the block sits after the
+    // `chatHistory` marker in prompt_order (the dominant real-world signal,
+    // matching the flat split), OR (b) ST flags it as in-chat injection
+    // (`injection_position: 1` — rendered at depth as a reminder/jailbreak).
+    final injectionPosition =
+        item['injection_position'] ?? p['injection_position'];
+    final position = (blockPastHistory || injectionPosition == 1)
         ? PromptBlockPosition.afterHistory
         : PromptBlockPosition.beforeHistory;
     // `enabled` from the order entry; default true (the prompts[] fallback path
@@ -204,6 +224,23 @@ StImportResult parseSillyTavernPreset(String jsonText) {
       role: role,
       position: position,
     ));
+  }
+
+  // datamodel-...-03: `PromptBlock.role` round-trips on the model but assembly
+  // flattens every enabled block into system / post-history TEXT — it does NOT
+  // yet inject user/assistant-role blocks as separate chat turns. If any enabled
+  // block carries a non-system role (e.g. an assistant prefill or a user-role
+  // nudge), surface a one-line note in the import summary so the fidelity loss
+  // isn't silent. (`role` is preserved, so a future role-as-turn assembly can
+  // honour it without re-importing.)
+  final rolefulCount = blocks
+      .where((b) => b.enabled && b.role.toLowerCase() != 'system')
+      .length;
+  if (rolefulCount > 0) {
+    skipped.add(
+      '$rolefulCount block${rolefulCount == 1 ? "" : "s"} with a non-system '
+      'role flattened to system text (role not honored yet)',
+    );
   }
 
   // Pull sampling settings — ST uses snake_case + openai-prefix.

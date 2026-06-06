@@ -14,8 +14,10 @@ QUALITY RULES (apply to every value you write):
 a moody late-night cafe where the barista and the last customer are the only two left
 ----------------------------------------
 [user]
-The full character sheet has these sections (filled across several passes): Name, Narrator, Reading the Persona, Scene Setup, Tone, World, NPCs, Scenario, First Message, Dialogue Examples, Tags, Post-History Instructions, Creator Notes, Tagline.
+The full character sheet has these sections (filled across several passes): Name, Narrator, Reading the Persona, Scene Setup, Tone, World, NPCs, Scenario, First Message, Alternate Greetings, Dialogue Examples, Tags, Post-History Instructions, Creator Notes, Tagline.
 RIGHT NOW you are filling ONLY: Name, Scenario, Narrator, Reading the Persona, Scene Setup, Tone. The other sections WILL be filled separately — so keep each field strictly scoped to itself: do NOT cram another field's content here, and do NOT repeat what belongs in another section.
+
+SECTION LENGTH — keep each section focused. Write each `<Tag>` section at a comfortable length: a tight paragraph or two of concrete, specific detail, not a sprawling essay. Favour vivid specifics over padding, and do NOT restate what another section already covers (Scene Setup / Tone / World / NPCs overlap — keep each to its own job). first_mes and the dialogue examples are written at their natural length and are NOT subject to this aim.
 
 Fill EXACTLY the following fields for the character defined above. For each field, write a rich, specific English value following the quality rules.
 
@@ -58,3 +60,6 @@ A single late-night cafe on a rain-slick corner; the city beyond is closed and d
 <NPCs>
 Mina (22, the barista, shy) is the only other presence; the owner left hours ago.
 </NPCs>
+
+--- alternate_greetings (1) ---
+*The rain has stopped; the cafe holds that after-storm hush.* Mina is stacking the last chairs when she notices {{user}} has not moved.

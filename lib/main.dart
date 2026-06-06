@@ -39,6 +39,7 @@ import 'screens/onboarding_screen.dart';
 import 'screens/web_pair_first_screen.dart';
 import 'widgets/card_import_confirm.dart';
 import 'widgets/command_palette.dart';
+import 'widgets/sync_conflict_dialog.dart';
 
 /// Global Navigator key — lets the bookmarklet hand-off path show a
 /// confirmation dialog before committing an imported card, even though
@@ -73,6 +74,17 @@ const double _kPhoneContentMaxWidth = 480;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // BATCH P2-ui (J): bound Flutter's global decoded-image cache. The
+  // framework default is 1000 images / 100 MB of DECODED bitmaps — and
+  // because list-row avatars are now decoded to thumbnail size (see
+  // `thumbnailProvider` in widgets/avatar.dart), this 40 MB / 400-entry
+  // ceiling comfortably holds hundreds of thumbnails instead of a dozen
+  // full-res card textures. Defense-in-depth against the many-cards OOM:
+  // even if a full-res image slips through (lightbox, vision), the cache
+  // can no longer pin ~100 MB of bitmaps.
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 40 << 20; // 40 MB
+  PaintingBinding.instance.imageCache.maximumSize = 400;
 
   // Wave CY.18.77: single-instance check on desktop. The close-to-tray
   // behavior (Wave 55) means clicking X hides the window — but Windows
@@ -214,7 +226,7 @@ Future<void> main() async {
     // default OS close-kills-app behaviour intact. Worst case the
     // user loses the close-to-tray nicety; best case nothing
     // changes. Either way, the window is always restorable.
-    final trayOk = await _SystemTray.install();
+    final trayOk = await _SystemTray.install(store);
     if (trayOk) {
       await windowManager.setPreventClose(true);
       windowManager.addListener(_SystemTray.instance);
@@ -406,7 +418,10 @@ void _scheduleImport(AppStore store, String input, Uri cleanedHomeUri) {
         }
         pngBytes = resp.bodyBytes;
       }
-      final card = parseCharaCardPng(pngBytes);
+      // Audit 2026-06-04 [import-1-01]: sniff PNG-vs-JSON rather than
+      // hard-assuming PNG, so an allowlisted `.json` / RisuRealm `json-v2`
+      // card handed off via `?import=` imports instead of failing "Not a PNG".
+      final card = parseCharaCard(pngBytes);
       final character = characterFromCharaCard(card);
       // Wave CY.1: even the bookmarklet handoff now confirms before
       // committing. The Navigator key may not be ready on the very
@@ -447,6 +462,9 @@ void _scheduleImport(AppStore store, String input, Uri cleanedHomeUri) {
         store.addLorebook(lorebook);
         character.lorebookIds.add(lorebook.id);
       }
+      // B-2 / H-6: externalise the inline avatar into the AttachmentStore so
+      // it persists as a pyre:// ref, not inline base64.
+      await externalizeCharacterImages(character);
       store.addCharacter(character);
       store.setActiveTab('characters');
     } catch (_) {/* swallow — UI still works */}
@@ -522,6 +540,15 @@ class _PyreAppState extends State<PyreApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Mega-audit 2026-06-05 (H-4): give the SyncEngine a way to surface the
+    // conflict warning dialog (SyncConflictMode.ask) using the root navigator.
+    // If no navigator context is available the engine falls back to keep-this-
+    // device, so this never blocks the sync loop.
+    SyncEngine.instance.conflictPrompt = (conflicts) async {
+      final ctx = _rootNavKey.currentContext;
+      if (ctx == null) return false;
+      return showSyncConflictDialog(ctx, conflicts);
+    };
   }
 
   @override
@@ -668,6 +695,47 @@ Future<void> _toggleFullScreen() async {
   } catch (_) {}
 }
 
+/// BATCH P2-ui (F): keeps an off-screen bottom-nav tab MOUNTED (state, scroll,
+/// text-field contents preserved) while preventing it from REBUILDING on
+/// unrelated `AppStore.notifyListeners()` — e.g. the per-token notifies during
+/// generation, which previously rebuilt every still-mounted tab in the
+/// `IndexedStack`.
+///
+/// Mechanism (verified by `tab_gate_test.dart`): the gated tab does NOT do its
+/// own root `context.watch<AppStore>()`; instead it is built INSIDE this
+/// `Selector`'s builder. The selector returns:
+///   * a FRESH `Object()` on each evaluation while [active] → never equal to
+///     the previous value → the body rebuilds on every notify, exactly like
+///     the old `context.watch` did; and
+///   * a constant sentinel while inactive → equal every time → `Selector`
+///     short-circuits and reuses the cached subtree → the body is FROZEN.
+///
+/// This only helps tabs whose ROOT does not independently `context.watch` the
+/// store (a self-watching screen would be marked dirty by the InheritedWidget
+/// directly, bypassing the gate). The Chats and Characters tabs were converted
+/// to `context.read` at their roots for exactly this reason; the Discover/More
+/// tabs are out of this batch's scope and still self-watch (wrapping them here
+/// is harmless but a no-op for them).
+class ActiveTabGate extends StatelessWidget {
+  final bool active;
+  final WidgetBuilder childBuilder;
+  const ActiveTabGate({
+    super.key,
+    required this.active,
+    required this.childBuilder,
+  });
+
+  static const Object _frozen = Object();
+
+  @override
+  Widget build(BuildContext context) {
+    return Selector<AppStore, Object?>(
+      selector: (_, _) => active ? Object() : _frozen,
+      builder: (context, _, _) => childBuilder(context),
+    );
+  }
+}
+
 class RootShell extends StatefulWidget {
   const RootShell({super.key});
 
@@ -796,11 +864,28 @@ class _RootShellState extends State<RootShell> {
           }()
         : const <ShortcutActivator, VoidCallback>{};
 
-    const screens = <Widget>[
-      ChatsScreen(),
-      CharactersScreen(),
-      DiscoverScreen(),
-      MoreScreen(),
+    // BATCH P2-ui (F): each tab is wrapped in an `ActiveTabGate` so an
+    // off-screen tab stays mounted (state preserved) but does NOT rebuild on
+    // unrelated store notifies. The screen is constructed inside the gate's
+    // builder (lazily, only when the gate decides to (re)build it). Chats and
+    // Characters read the store via `context.read` at their roots so the gate
+    // fully governs their rebuilds; Discover/More still self-watch (out of
+    // scope) — the gate is a harmless no-op for them.
+    // NOTE: the screen instances are deliberately NOT `const`. The gate
+    // forces the active tab to rebuild by re-invoking `childBuilder` (which
+    // yields a fresh, non-const screen widget) so the existing screen Element
+    // updates + rebuilds while keeping its State (scroll/search). A `const`
+    // child would be an identical instance and short-circuit the rebuild,
+    // leaving the active tab unable to reflect store changes.
+    final screens = <Widget>[
+      ActiveTabGate(
+          active: index == 0, childBuilder: (_) => ChatsScreen()),
+      ActiveTabGate(
+          active: index == 1, childBuilder: (_) => CharactersScreen()),
+      ActiveTabGate(
+          active: index == 2, childBuilder: (_) => DiscoverScreen()),
+      ActiveTabGate(
+          active: index == 3, childBuilder: (_) => MoreScreen()),
     ];
     const labels = ['Chats', 'Characters', 'Discover', 'More'];
     const icons = [
@@ -931,6 +1016,29 @@ class _RootShellState extends State<RootShell> {
             )
           : navBar,
     );
+    // Mega-audit 2026-06-05 (M-3): surface a persist failure ONCE. A failed
+    // save (disk full / unwritable storage) latches `hasUnshownPersistError`
+    // on the store and notifies; we watch the store above, so this build runs.
+    // Show a single non-blocking warning and acknowledge it so a burst of
+    // failed saves doesn't spam the banner. The latch (and acknowledgement)
+    // clears automatically on the next successful save.
+    if (store.hasUnshownPersistError) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (!store.hasUnshownPersistError) return; // recovered before frame
+        store.acknowledgePersistError();
+        final ctx = _rootNavKey.currentContext ?? context;
+        ScaffoldMessenger.of(ctx).showSnackBar(
+          const SnackBar(
+            duration: Duration(seconds: 8),
+            content: Text(
+                "Couldn't save your changes — check that the device isn't "
+                'out of storage. Your work is still here for now, but it '
+                'may not survive a restart until a save succeeds.'),
+          ),
+        );
+      });
+    }
     // Wave CY.18.53: install desktop shortcuts at the shell. Empty
     // map on mobile so this is a zero-cost pass-through.
     return CallbackShortcuts(
@@ -987,11 +1095,17 @@ class _SystemTray extends WindowListener with tray.TrayListener {
   _SystemTray._();
   static final _SystemTray instance = _SystemTray._();
 
+  /// The app store, set at [install]. Lets the explicit "Quit" path flush
+  /// any pending debounced save (600ms) before the process exits, so a change
+  /// made right before quitting isn't lost.
+  AppStore? store;
+
   /// Wave CY.18.59: returns true on success, false if anything in the
   /// install sequence threw. Caller gates the close-to-tray
   /// behaviour on this — if tray init failed, the OS close button
   /// stays as kill-the-app instead of hiding-with-no-restore-path.
-  static Future<bool> install() async {
+  static Future<bool> install(AppStore store) async {
+    instance.store = store;
     // Tray icon = same .ico used by the .exe (rebrand wave 47 wired
     // it through flutter_launcher_icons). We point at the runtime
     // copy under the build folder; tray_manager accepts either an
@@ -1056,11 +1170,23 @@ class _SystemTray extends WindowListener with tray.TrayListener {
         await _showWindow();
         break;
       case 'quit':
-        // Explicit quit — actually shut down. windowManager.destroy()
-        // bypasses the preventClose hook.
-        await tray.trayManager.destroy();
-        await windowManager.destroy();
-        break;
+        // Explicit quit — actually shut down.
+        //
+        // We deliberately do NOT call windowManager.destroy() here. With
+        // setPreventClose(true) still active, destroy() re-enters the close
+        // intercept (onWindowClose → windowManager.hide()) on a window that's
+        // being torn down — a native use-after-free that crashed with
+        // "Pyre stopped working", often shown twice (the close event dispatches
+        // to both registered WindowListeners). Instead: flush any pending
+        // debounced save, remove the tray icon, and exit the process directly.
+        // exit(0) is a single, clean shutdown with no native window teardown.
+        try {
+          await store?.flushPersist();
+        } catch (_) {/* best-effort — exit anyway */}
+        try {
+          await tray.trayManager.destroy();
+        } catch (_) {/* drop the tray icon; ignore if already gone */}
+        exit(0);
     }
   }
 }

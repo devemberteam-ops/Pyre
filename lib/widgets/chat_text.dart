@@ -82,10 +82,44 @@ class ChatText extends StatelessWidget {
       return const Text('…', style: TextStyle(color: EmberColors.textDim));
     }
     return Text.rich(
-      TextSpan(children: _parse(visible, base)),
+      TextSpan(children: _parseMemo(visible, base)),
       softWrap: true,
     );
   }
+
+  // ── Parse memo ─────────────────────────────────────────────────────────
+  //
+  // Audit 2026-06-05 (perf-at-scale, finding #6): a visible-but-not-streaming
+  // bubble (a long completed reply / card greeting) is re-parsed char-by-char
+  // on EVERY ~16ms coalesced rebuild while another message streams or the user
+  // scrolls. The parse output is a pure function of (cleaned body text, base
+  // style), and both are stable for an unchanged bubble — so we memoize the
+  // produced spans. The streaming bubble's text changes each frame, so it
+  // misses the cache and re-parses (correct); every OTHER visible bubble hits
+  // it. The cached spans are immutable (TextSpan / a const-friendly WidgetSpan
+  // child) and safe to reuse across builds — _InlineImage reads MediaQuery at
+  // ITS own build time, so layout still adapts. Bounded LRU-ish (clear on cap).
+  static const _kParseCacheMax = 256;
+  static final Map<_ParseKey, List<InlineSpan>> _parseCache =
+      <_ParseKey, List<InlineSpan>>{};
+
+  static List<InlineSpan> _parseMemo(String src, TextStyle base) {
+    final key = _ParseKey(src, base);
+    final hit = _parseCache[key];
+    if (hit != null) return hit;
+    final spans = _parse(src, base);
+    if (_parseCache.length >= _kParseCacheMax) _parseCache.clear();
+    _parseCache[key] = spans;
+    return spans;
+  }
+
+  /// Test-only: number of distinct (text, style) parses currently memoized.
+  @visibleForTesting
+  static int get debugParseCacheSize => _parseCache.length;
+
+  /// Test-only: drop the parse memo.
+  @visibleForTesting
+  static void debugClearParseCache() => _parseCache.clear();
 
   static List<InlineSpan> _parse(String src, TextStyle base) {
     final spans = <InlineSpan>[];
@@ -224,6 +258,24 @@ class ChatText extends StatelessWidget {
     }
     return best;
   }
+}
+
+/// Composite cache key for [ChatText]'s parse memo: the cleaned body text
+/// plus the base [TextStyle] (which folds in caller-passed `baseStyle` + the
+/// computed font size). `TextStyle` has a value `==`/`hashCode`, so two
+/// bubbles with identical text + style share a cache entry.
+@immutable
+class _ParseKey {
+  final String src;
+  final TextStyle base;
+  const _ParseKey(this.src, this.base);
+
+  @override
+  bool operator ==(Object other) =>
+      other is _ParseKey && other.src == src && other.base == base;
+
+  @override
+  int get hashCode => Object.hash(src, base);
 }
 
 /// Inline image for [ChatText]'s markdown `![](url)` support — common in

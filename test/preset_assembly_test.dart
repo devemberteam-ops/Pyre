@@ -128,4 +128,28 @@ void main() {
       expect(asm.postHistory, '');
     });
   });
+
+  group('H-8: presetSupportsMainPromptQuickEdit predicate', () {
+    test('FLAT preset (no blocks) supports the quick-edit', () {
+      final flat = Preset(id: 'p', name: 'Flat', mainPrompt: 'body');
+      expect(presetSupportsMainPromptQuickEdit(flat), isTrue);
+    });
+
+    test('FLAT preset with empty mainPrompt still supports it', () {
+      final empty = Preset(id: 'p', name: 'Empty');
+      expect(presetSupportsMainPromptQuickEdit(empty), isTrue);
+    });
+
+    test('MODULAR preset (has blocks) does NOT support it — quick-edit would '
+        'be a no-op', () {
+      final modular = Preset(
+        id: 'p',
+        name: 'Modular',
+        // Even a mainPrompt set here is ignored by assembly once blocks exist.
+        mainPrompt: 'IGNORED',
+        promptBlocks: [PromptBlock(id: 'a', name: 'A', content: 'alpha')],
+      );
+      expect(presetSupportsMainPromptQuickEdit(modular), isFalse);
+    });
+  });
 }

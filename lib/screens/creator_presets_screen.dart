@@ -460,4 +460,9 @@ Future<void> _editCreatorPreset(
       ],
     ),
   );
+  // H-3: dispose the creator-preset editor controllers on dialog close.
+  nameCtl.dispose();
+  charCtl.dispose();
+  scenCtl.dispose();
+  editCtl.dispose();
 }

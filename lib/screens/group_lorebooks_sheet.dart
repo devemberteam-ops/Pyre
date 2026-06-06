@@ -254,8 +254,16 @@ List<Widget> _buildLorebookSections(
                 size: 16, color: EmberColors.textMid),
             tooltip: 'Detach from this chat',
             onPressed: () {
-              chat.attachedLorebookIds.remove(l.id);
-              store.notifyAndPersist();
+              // Mega-audit 2026-06-05 (F5): detaching a per-chat lorebook
+              // edits chat sub-state that rides a chat sync, but a bare
+              // notifyAndPersist() never bumps chat.mtime — so the change
+              // saved locally but never propagated. Route through touchChat
+              // so the detach reaches the paired device (mirrors the
+              // inherited-toggle path, which already bumps via
+              // enable/disableInheritedLorebookForChat).
+              if (chat.attachedLorebookIds.remove(l.id)) {
+                store.touchChat(chat);
+              }
             },
           ),
         ));

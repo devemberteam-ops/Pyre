@@ -51,11 +51,22 @@ const _scenarioFilter = String.fromEnvironment('scenario');
 // Empty = use whatever local.json specifies (default none).
 const _postprocOverride = String.fromEnvironment('postproc');
 
+// Mega-audit reasoning test (2026-06-04): pass --dart-define=reasoning=off to
+// inject {"reasoning":{"effort":"none"}} into the request body so we can A/B a
+// reasoning model with/without thinking. This NEVER touches local.json — the key
+// stays untouched. Empty / anything-else = provider default (reasoning ON).
+const _reasoningMode = String.fromEnvironment('reasoning');
+
 void main() {
   final cfg = _loadConfigOrSkip();
   if (cfg == null) return; // missing/placeholder config → graceful no-op above.
 
   final provider = providerFromConfig(cfg);
+  if (_reasoningMode == 'off') {
+    provider.extraParams['reasoning'] = {'effort': 'none'};
+    // ignore: avoid_print
+    print('Prompt Lab LIVE: reasoning OFF → injected reasoning={effort:none}');
+  }
   if (_postprocOverride.isNotEmpty) {
     provider.promptPostProcessing =
         promptPostProcessingFromString(_postprocOverride);
@@ -204,6 +215,7 @@ Future<void> _fireOne(
       description: it.description,
       promptSummary: summary,
       response: response,
+      rawUnstripped: rawText,
       finishReason: finishReason,
       parseOutcome: parseOutcome,
     );

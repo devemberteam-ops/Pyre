@@ -18,6 +18,52 @@ String? hashFromPyreUrl(String? url) =>
         ? url.substring(AttachmentStore.urlPrefix.length)
         : null;
 
+/// SYNC W7 (attachment volume): given the attachment hashes a client
+/// REFERENCES and the set the server already HAS, return only the ones the
+/// server is MISSING. The push uploads exactly this set, so each blob transfers
+/// at most once — never re-sending gigabytes of images the peer already holds.
+/// Blank, whitespace, and path-unsafe hashes (containing `/` or `..`) are
+/// dropped so a hostile/garbled hash can never reference a file outside the
+/// content-addressed store.
+Set<String> attachmentHashesMissing(
+    Iterable<String> requested, Set<String> present) {
+  final out = <String>{};
+  for (final h in requested) {
+    final clean = h.trim();
+    if (clean.isEmpty || clean.contains('/') || clean.contains('..')) continue;
+    if (!present.contains(clean)) out.add(clean);
+  }
+  return out;
+}
+
+/// SYNC (pull-side reconcile): the `pyre://attachment/<hash>` refs a freshly
+/// applied character/persona record contributes to the blob fetch the puller
+/// runs after a merge. Covers the displayed [avatar], the preserved UNCROPPED
+/// [avatarOriginal] (non-destructive recrop — WITHOUT this a synced recrop's
+/// full image renders broken when tapped, because the bytes never get pulled),
+/// and every [gallery] image. Nulls and non-pyre URLs (inline `data:`, `http`)
+/// are ignored; a ref shared between fields de-dupes via the returned `Set`.
+///
+/// Pure (no AppStore, no I/O) so the engine's pull reconcile delegates here and
+/// the avatarOriginal coverage can't silently regress.
+Set<String> incomingRecordAttachmentRefs({
+  String? avatar,
+  String? avatarOriginal,
+  List<String> gallery = const [],
+}) {
+  final out = <String>{};
+  void add(String? url) {
+    if (url != null && AttachmentStore.isPyreUrl(url)) out.add(url);
+  }
+
+  add(avatar);
+  add(avatarOriginal);
+  for (final g in gallery) {
+    add(g);
+  }
+  return out;
+}
+
 /// Union of every attachment hash referenced anywhere in the store. The GC
 /// keeps a `.bin` alive as long as its hash is in this set, so a blob shared
 /// by (say) a character's gallery AND a persona's avatar survives until the
@@ -31,10 +77,15 @@ Set<String> collectReferencedAttachmentHashes(AppStore s) {
 
   for (final c in s.characters) {
     add(c.avatar);
+    // Non-destructive Recrop: keep the UNCROPPED original blob alive too —
+    // both so the GC never frees it AND so the LAN sync attachment-push (which
+    // uses this same set) ships it to paired devices. No-op when null.
+    add(c.avatarOriginal);
     c.gallery.forEach(add);
   }
   for (final p in s.personas) {
     add(p.avatar);
+    add(p.avatarOriginal);
     p.gallery.forEach(add);
   }
   // Wave CY.18.255 (FIX 2): include the resumable character DRAFTS. A draft
@@ -43,9 +94,18 @@ Set<String> collectReferencedAttachmentHashes(AppStore s) {
   // would let the GC free a blob an open draft still points at.
   for (final d in s.characterDrafts) {
     add(d.avatar);
+    // Non-destructive Recrop: a draft can be recropped in the manual editor
+    // too, so guard its preserved original from premature collection.
+    add(d.avatarOriginal);
     d.gallery.forEach(add);
   }
   add(s.chatSettings.customBackgroundDataUrl);
+  // Non-destructive Recrop: the BotBooru profile avatar is now externalised
+  // to a `pyre://` ref on recrop, and keeps an uncropped original. Both are
+  // added so neither blob is GC'd (and so the LAN sync push ships them). The
+  // `add` helper ignores legacy inline `data:` profile avatars (no hash).
+  add(s.botbooruAvatar);
+  add(s.botbooruAvatarOriginal);
   // Wave CY.18.255 (FIX 2): include each chat's PER-CHAT custom background
   // override (models.dart Chat.customBackgroundDataUrl) in addition to the
   // GLOBAL chatSettings background above. Today both are still inline

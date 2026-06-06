@@ -33,6 +33,12 @@ String? formatTokenCount(int n) {
 /// Wave CM: total token weight of a character — sum of every field
 /// that the runtime sends to the LLM during chat (descriptions,
 /// scenarios, dialogue, etc.). Avatar / metadata fields are skipped.
+///
+/// datamodel-...-01: `depthPrompt` is deliberately EXCLUDED. It round-trips on
+/// the model and re-exports to PNG, but Pyre's prompt builder never injects it
+/// into the assembled prompt (no depth/author's-note path exists). Counting it
+/// here over-stated the on-screen token estimate by a field the model never
+/// sees, so the estimate now aligns with what `buildChatPrompt` actually sends.
 int approxTokensForCharacter(Character c) {
   return approxTokens(c.description) +
       approxTokens(c.personality) +
@@ -41,8 +47,33 @@ int approxTokensForCharacter(Character c) {
       approxTokens(c.mesExample) +
       approxTokens(c.systemPrompt) +
       approxTokens(c.postHistoryInstructions) +
-      approxTokens(c.depthPrompt) +
       c.alternateGreetings.fold<int>(0, (n, g) => n + approxTokens(g));
+}
+
+/// Cheap content fingerprint over exactly the fields [approxTokensForCharacter]
+/// sums. Used as the cache key (alongside the character id) for the memoized
+/// per-character token estimate on AppStore — when nothing the estimate
+/// depends on has changed, the hash is stable and the cached value is reused.
+///
+/// Why lengths, not the full strings: the estimate itself is purely
+/// length-driven (chars/4), so the only thing that can change the result is a
+/// field's length. A list of the relevant field lengths is therefore a precise
+/// (collision-free for THIS estimate) and O(1)-per-field fingerprint — no need
+/// to walk or copy the multi-KB body text. Folded into a single int via the
+/// standard 31x rolling hash.
+int characterTokenContentHash(Character c) {
+  var h = 17;
+  h = 31 * h + c.description.length;
+  h = 31 * h + c.personality.length;
+  h = 31 * h + c.scenario.length;
+  h = 31 * h + c.firstMes.length;
+  h = 31 * h + c.mesExample.length;
+  h = 31 * h + c.systemPrompt.length;
+  h = 31 * h + c.postHistoryInstructions.length;
+  for (final g in c.alternateGreetings) {
+    h = 31 * h + g.length;
+  }
+  return h;
 }
 
 /// Wave CM: total token weight of a persona — description is the only

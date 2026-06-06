@@ -96,6 +96,22 @@ String _brevityDirectiveFor(CreatorDescriptionSize size) {
       'length and do NOT count them toward the ~$tok.';
 }
 
+// ── Scenario section-length aim (LOW 13) ──────────────────────────────────
+//
+// Scenario `<Tag>` prose (esp. <World>/<NPCs>) has no length discipline and can
+// balloon — the same bloat the character brevity directive fights, and the long
+// sections are also the ones most likely to truncate (→ continuation churn).
+// This is a SOFT, size-agnostic aim (not a token budget) addressing the same
+// root cause on the scenario path.
+const String _kScenarioLengthAim =
+    'SECTION LENGTH — keep each section focused. Write each `<Tag>` section at a '
+    'comfortable length: a tight paragraph or two of concrete, specific detail, '
+    'not a sprawling essay. Favour vivid specifics over padding, and do NOT '
+    'restate what another section already covers (Scene Setup / Tone / World / '
+    'NPCs overlap — keep each to its own job). first_mes and the dialogue '
+    'examples are written at their natural length and are NOT subject to this '
+    'aim.';
+
 // ── Public API ────────────────────────────────────────────────────────────
 
 /// Build the turns that request ONE batch of card fields from the model as a
@@ -190,7 +206,8 @@ String _buildBatchRequest(
         f.kind == CardFieldKind.bulletList ||
         f.kind == CardFieldKind.topLevel ||
         f.kind == CardFieldKind.tags ||
-        f.kind == CardFieldKind.dialogueExamples) {
+        f.kind == CardFieldKind.dialogueExamples ||
+        f.kind == CardFieldKind.greetingsList) {
       allLabels.add(f.label);
     }
   }
@@ -207,11 +224,17 @@ String _buildBatchRequest(
       'to itself: do NOT cram another field\'s content here, and do NOT repeat '
       'what belongs in another section.');
 
-  // BREVITY — CHARACTER + PERSONA only (the Description fields fold into one
-  // `description`; scenario assembles differently and is left untouched).
+  // BREVITY — CHARACTER + PERSONA get the token-budget directive (their
+  // Description fields fold into one `description`). SCENARIO assembles
+  // differently (XML `<Tag>` sections), so it gets a looser, size-agnostic
+  // section-length aim (LOW 13) — keeping <World>/<NPCs> prose focused without
+  // the per-Description token budget.
   if (mode == CreatorMode.character || mode == CreatorMode.persona) {
     buf.writeln();
     buf.writeln(_brevityDirectiveFor(descriptionSize));
+  } else if (mode == CreatorMode.scenario) {
+    buf.writeln();
+    buf.writeln(_kScenarioLengthAim);
   }
   buf.writeln();
 
@@ -227,7 +250,7 @@ String _buildBatchRequest(
     final guidance = field?.guidance ?? '';
     final guidanceSuffix = guidance.isEmpty ? '' : ' $guidance';
     buf.writeln('"$key" — $label:$guidanceSuffix');
-    buf.writeln('   JSON shape: ${_shapeHint(field)}');
+    buf.writeln('   JSON shape: ${_shapeHint(field, mode)}');
   }
 
   // FIX G — CONTINUITY (create-consistency): the facts decided in earlier
@@ -336,7 +359,7 @@ String _stringifyExisting(dynamic value) {
 /// nestedBullets parent with canonical children, the hint ENUMERATES those
 /// sub-labels so the model produces the full, consistent breakdown (Ren-depth)
 /// instead of one or two generic bullets.
-String _shapeHint(CardField? field) {
+String _shapeHint(CardField? field, [CreatorMode? mode]) {
   switch (field?.kind) {
     case CardFieldKind.nestedBullets:
       // An array of label/value objects, ideally covering the schema's
@@ -359,11 +382,28 @@ String _shapeHint(CardField? field) {
           'per element (each a tight phrase, not a paragraph).';
     case CardFieldKind.dialogueExamples:
       // Action = *italic* stage direction, dialogue = the spoken line, beat =
-      // optional mood tag. Include at least one charged/intimate beat.
+      // optional mood tag. Include at least one charged/intimate beat. For a
+      // PERSONA these are the USER's own lines (a persona is the user's
+      // self-insert), so the action/dialogue must be written in the user's
+      // voice — what {{user}} does and says, NOT the character.
+      final personaVoice = mode == CreatorMode.persona
+          ? ' These are the USER\'s own lines (this is the user\'s persona): '
+              'write each action and dialogue as what {{user}} does and says, '
+              'NOT a character speaking to them.'
+          : '';
       return 'a JSON array of objects '
           '[{"action":"…","dialogue":"…","beat":"…"}, …] — action is an '
           '*italic* stage direction, dialogue is the spoken line, beat is an '
-          'optional mood tag; include at least one charged/intimate beat.';
+          'optional mood tag; include at least one charged/intimate beat.'
+          '$personaVoice';
+    case CardFieldKind.greetingsList:
+      // chara_card_v2 alternate_greetings: a flat array of FULL standalone
+      // opening messages — each the same shape/voice/formatting as first_mes,
+      // not a one-liner and not a rewrite of first_mes. 0-3; empty array if none.
+      return 'a JSON array of 0-3 strings ["…", "…"], each a COMPLETE '
+          'standalone opening message in the same voice, tense and formatting '
+          'as first_mes (full message, action-interlaced), offering a DIFFERENT '
+          'entry into the scene. Use an empty array [] if no good alternate fits.';
     case CardFieldKind.tags:
       // FIX E — tags must be real, searchable discovery tags, not invented
       // snake_case prose phrases.

@@ -105,7 +105,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       Icons.auto_awesome,
                       'Experimental power tools',
                       'AI Character Creator for characters, scenarios & '
-                          'personas, branch-aware Long-term Memory, Live '
+                          'personas, branch-aware Checkpoints, Live '
                           'Sheet state tracking, Script story-direction, and '
                           'scene-aware dynamic backgrounds. Heavier features, '
                           'tuned but evolving.',

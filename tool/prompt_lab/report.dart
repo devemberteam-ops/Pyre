@@ -273,6 +273,7 @@ void writeLiveReport(
   required String description,
   required String promptSummary,
   String? response,
+  String? rawUnstripped,
   String? finishReason,
   String? parseOutcome,
   String? error,
@@ -310,6 +311,19 @@ void writeLiveReport(
         ? '(empty response)'
         : response!));
     buf.writeln();
+
+    if (rawUnstripped != null && rawUnstripped != (response ?? '')) {
+      buf.writeln('## Raw (un-stripped — reasoning channel preserved)');
+      buf.writeln();
+      buf.writeln('_Pyre wraps a provider-SEPARATED reasoning field '
+          '(`reasoning_content`/`reasoning`) in `<think>…</think>`. If the '
+          'reasoning shows up here INSIDE `<think>` tags → the provider returned '
+          'it in a separate field (Pyre handles it). If reasoning prose shows up '
+          'OUTSIDE any tag → it is inline, no-delimiter CoT (the hard case)._');
+      buf.writeln();
+      buf.writeln(_fence(rawUnstripped.isEmpty ? '(empty)' : rawUnstripped));
+      buf.writeln();
+    }
 
     buf.writeln('## Parse outcome');
     buf.writeln();

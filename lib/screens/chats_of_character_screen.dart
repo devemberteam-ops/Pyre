@@ -144,6 +144,20 @@ class _ChatRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Completeness-gaps: when the chat has a manual title, show it
+                  // as the headline so multiple chats of one character are
+                  // distinguishable. Untitled chats are unchanged.
+                  if (chat.title != null && chat.title!.trim().isNotEmpty) ...[
+                    Text(
+                      chat.title!.trim(),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                  ],
                   Row(
                     children: [
                       Flexible(
@@ -245,6 +259,14 @@ void _showRowKebab(BuildContext context, AppStore store, Chat chat) {
             },
           ),
           ListTile(
+            leading: const Icon(Icons.drive_file_rename_outline),
+            title: const Text('Rename chat'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _renameChatPrompt(context, store, chat);
+            },
+          ),
+          ListTile(
             leading: const Icon(Icons.delete_outline,
                 color: EmberColors.danger),
             title: const Text('Delete chat',
@@ -265,6 +287,43 @@ void _showRowKebab(BuildContext context, AppStore store, Chat chat) {
       ),
     ),
   );
+}
+
+/// Completeness-gaps: rename (or clear) a chat's manual title from the
+/// per-character chat list. Mirrors the chat-screen rename dialog
+/// (Cancel / Reset / Save).
+Future<void> _renameChatPrompt(
+    BuildContext context, AppStore store, Chat chat) async {
+  final ctl = TextEditingController(text: chat.title ?? '');
+  final renamed = await showDialog<String?>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: EmberColors.bgPanel,
+      title: const Text('Rename chat'),
+      content: TextField(
+        controller: ctl,
+        autofocus: true,
+        decoration: const InputDecoration(hintText: 'Chat title'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, null),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, ''),
+          child: const Text('Reset'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
+          child: const Text('Save'),
+        ),
+      ],
+    ),
+  );
+  ctl.dispose(); // H-3: dispose the rename controller once the dialog closes.
+  if (renamed == null) return;
+  store.renameChat(chat.id, renamed.isEmpty ? null : renamed);
 }
 
 String _relative(int ms) {

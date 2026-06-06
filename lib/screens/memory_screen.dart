@@ -85,7 +85,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
       return;
     }
     ltm.applyCheckpoint(chat, ckpt);
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: checkpoint add syncs
     setState(() {});
   }
 
@@ -131,7 +131,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
       return false;
     }
     ltm.replaceCheckpoint(chat, replacement);
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: checkpoint retry syncs
     setState(() {});
     return true;
   }
@@ -244,7 +244,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
         createdAt: target.createdAt,
       ),
     );
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: checkpoint edit syncs
     setState(() {});
     return true;
   }
@@ -281,7 +281,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
         false;
     if (!ok || !mounted) return false;
     ltm.deleteCheckpoint(chat, target.id);
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: checkpoint delete syncs
     setState(() {});
     return true;
   }
@@ -294,10 +294,10 @@ class _MemoryScreenState extends State<MemoryScreen> {
           context: context,
           builder: (d) => AlertDialog(
             backgroundColor: EmberColors.bgPanel,
-            title: const Text('Wipe all memory?'),
+            title: const Text('Wipe all checkpoints?'),
             content: const Text(
               'Every checkpoint on every branch of this chat will be '
-              'erased. The model will lose its long-term recap until you '
+              'erased. The model will lose its recap until you '
               're-summarise.',
               style: TextStyle(color: EmberColors.textMid),
             ),
@@ -318,7 +318,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
         false;
     if (!ok || !mounted) return;
     ltm.wipeAllCheckpoints(chat);
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: wipe-all syncs
     setState(() {});
   }
 
@@ -352,7 +352,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Long-term memory'),
+        title: const Text('Checkpoints'),
         actions: [
           if (chat.memoryCheckpoints.isNotEmpty)
             IconButton(
@@ -391,7 +391,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
             activeThumbColor: EmberColors.primary,
             onChanged: (v) {
               chat.memoryEnabled = v;
-              store.notifyAndPersist();
+              store.touchChat(chat); // F1: memoryEnabled toggle syncs
               setState(() {});
             },
           ),

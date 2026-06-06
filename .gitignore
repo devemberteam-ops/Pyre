@@ -81,3 +81,18 @@ outreach/
 DEPLOY.md
 docs/LAUNCH_CHECKLIST.md
 docs/superpowers/
+# More internal planning / strategy / ideas docs — same rule (local-only, never
+# ship publicly). Marketing/listing copy, the internal launch-announcement draft
+# (incl. its "for us" posting notes), the internal feature inventory, design
+# briefs, and the dated audit / live-test working reports.
+docs/STORE_LISTING.md
+docs/COMMUNITY.md
+docs/FEATURE_INVENTORY.md
+docs/ANNOUNCEMENT.md
+docs/SMOKE_TEST.md
+docs/scene-background-library-brief.md
+docs/prompt-pipeline-audit-2026-05-31.md
+docs/live-test-findings-2026-05-31.md
+# Per-release announcement DRAFT — local until the release is finalized
+# (placeholder links + "DRAFT — not for publication" header).
+docs/RELEASE_NOTES_1.1.0-DRAFT.md

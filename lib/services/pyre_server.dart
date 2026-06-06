@@ -40,6 +40,7 @@ import 'key_crypto.dart';
 import 'rate_limit.dart';
 import 'regex_rules.dart';
 import 'secure_keys.dart';
+import 'sync_manifest.dart';
 
 /// True only on platforms that can actually open a listener socket.
 bool get _supportsServer {
@@ -285,6 +286,29 @@ class PyreServer {
       );
     });
 
+    // SYNC W6 (verification): GET /manifest
+    // Read-only. Returns a per-collection fingerprint of THIS server's library
+    // — `{collections: {name: {count, digest}}}` — computed via the shared
+    // buildSyncManifest. The phone fetches it, builds its OWN manifest the same
+    // way, and diffs the two so the user can CONFIRM both sides converged after
+    // a sync (the "there should be a hash to compare the two versions" ask).
+    // Never mutates anything; the digest is over id+mtime only (no API keys,
+    // no content), so it leaks nothing beyond what /pull already exposes.
+    r.get('/manifest', (Request req) {
+      final store = _store;
+      if (store == null) {
+        return Response.internalServerError(body: '{"error":"no store"}');
+      }
+      final manifest = buildSyncManifest(store);
+      final collections = <String, dynamic>{
+        for (final e in manifest.entries) e.key: e.value.toJson(),
+      };
+      return Response.ok(
+        jsonEncode({'collections': collections}),
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
     // Wave CY.18.66: GET /pull?since=<ms>&collections=<csv>
     // Returns every synced record with mtime > since, grouped by
     // collection. Clients persist response.serverTime as their next
@@ -353,6 +377,21 @@ class PyreServer {
             .map((r) => r.toJson())
             .toList();
       }
+      // Mega-audit 2026-06-05 (F2): library folders.
+      if (wanted.contains('folders')) {
+        updates['folders'] = store.folders
+            .where((f) => f.mtime > since)
+            .map((f) => f.toJson())
+            .toList();
+      }
+      // Mega-audit 2026-06-05 (F2): forkable Creator presets — locked default
+      // excluded (rebuilt-from-build on every load), same as locked Preset.
+      if (wanted.contains('creatorPresets')) {
+        updates['creatorPresets'] = store.creatorPresets
+            .where((p) => p.mtime > since && !p.locked)
+            .map((p) => p.toJson())
+            .toList();
+      }
 
       // Wave CY.18.260: providers carry the API key (as an encrypted
       // envelope), so they only ride the pull when the host opted in AND the
@@ -374,6 +413,21 @@ class PyreServer {
           }
         }
         updates['providers'] = out;
+      }
+
+      // SYNC W3: the settings UNIT — a single record under `settingsMtime`.
+      // Ship it only when ours is newer than the puller's watermark (same
+      // `mtime > since` gate as every collection). The record carries no `id`
+      // (it's a singleton) and excludes the chat background image.
+      if (wanted.contains('settings') && store.settingsMtime > since) {
+        updates['settings'] = [store.syncedSettingsToJson()];
+      }
+
+      // The BotBooru PROFILE unit — a single record under `botbooruProfileMtime`
+      // (same `mtime > since` gate + no-`id` singleton shape as `settings`).
+      if (wanted.contains('botbooruProfile') &&
+          store.botbooruProfileMtime > since) {
+        updates['botbooruProfile'] = [store.syncedBotbooruProfileToJson()];
       }
 
       // Wave CY.18.256: ship deletion tombstones recorded after `since` so
@@ -411,7 +465,28 @@ class PyreServer {
       // device fails the provider gate closed. All other collections ignore it.
       final device = req.context['pyreDevice'] as PairedDevice?;
       try {
-        final body = await req.readAsString();
+        // Mega-audit 2026-06-05 (M-12): cap the /push body. Previously this
+        // was an unbounded `readAsString()`, so a paired device could send a
+        // multi-GB body and OOM the host (the whole body is buffered in
+        // memory before jsonDecode). A push carries a delta of the library
+        // (chats + characters + lorebooks etc.), which can be large for a
+        // big library, so the cap is generous — 128 MB, double the
+        // /attachments image ceiling — comfortably above any legitimate
+        // sync delta while still bounding the DoS. Reject early on a
+        // declared Content-Length and abort mid-stream if it lies.
+        const maxPushBytes = 128 * 1024 * 1024; // 128 MB
+        final declaredLen = int.tryParse(req.headers['content-length'] ?? '');
+        if (declaredLen != null && declaredLen > maxPushBytes) {
+          return Response(413, body: '{"error":"push body too large"}');
+        }
+        final buf = <int>[];
+        await for (final chunk in req.read()) {
+          buf.addAll(chunk);
+          if (buf.length > maxPushBytes) {
+            return Response(413, body: '{"error":"push body too large"}');
+          }
+        }
+        final body = utf8.decode(buf, allowMalformed: true);
         final json = body.isEmpty ? const {} : jsonDecode(body);
         if (json is! Map) {
           return Response(400, body: '{"error":"invalid body"}');
@@ -447,43 +522,102 @@ class PyreServer {
           final list = entry.value;
           if (list is! List) continue;
           for (final raw in list) {
-            if (raw is! Map) continue;
-            final m = raw.cast<String, dynamic>();
-            final id = m['id'] as String?;
-            if (id == null) continue;
-            var incomingMtime = (m['mtime'] as num?)?.toInt() ?? 0;
-            if (incomingMtime > serverNow) {
-              // Future-clock record — pull it back to the server's now so it
-              // can't outrun the /pull watermark. Mutate the map too so the
-              // stored copy (built via fromJson) reflects the clamp.
-              incomingMtime = serverNow;
-              m['mtime'] = serverNow;
-            }
-            // Wave CY.18.256: if the server has a tombstone for this record
-            // at/after the pushed version, the record was deleted here (or by
-            // another peer) — don't resurrect it. Reject benignly (NOT a hard
-            // reject: the pusher's NEXT /pull carries our tombstone and reaps
-            // its own copy, so the loss is intentional and converges).
-            final kind = _collectionToKind(collection);
-            if (kind != null &&
-                store.isTombstonedNewer(kind, id, incomingMtime)) {
-              rejected.add({
-                'id': id,
-                'collection': collection,
-                'reason': 'server has newer mtime',
-              });
+            // Audit 2026-06-04 (H1): per-record isolation. A single poison
+            // record (e.g. a numeric `id` that fails the `as String?` cast, or
+            // a malformed nested field that trips Character/Chat.fromJson) must
+            // NOT 500 the whole batch — that wedges the pushing device's sync
+            // forever (it holds its watermark and re-pushes the same bad batch
+            // every tick). The client SyncEngine already isolates per record;
+            // mirror that here.
+            try {
+              if (raw is! Map) continue;
+              final m = raw.cast<String, dynamic>();
+              // SYNC W3: the settings UNIT is a SINGLETON record with no `id`
+              // (it'd be skipped by the id-required path below). Handle it
+              // first: clamp its mtime to the server clock (same future-clock
+              // guard as records) so it can't outrun the /pull watermark, then
+              // apply under LWW. `applySyncedSettings` reads the mtime off the
+              // map and no-ops when not strictly newer (counts as a benign
+              // server-newer reject so the pusher advances cleanly).
+              if (collection == 'settings') {
+                var sMtime = (m['mtime'] as num?)?.toInt() ?? 0;
+                if (sMtime > serverNow) {
+                  sMtime = serverNow;
+                  m['mtime'] = serverNow;
+                }
+                final before = store.settingsMtime;
+                store.applySyncedSettings(m);
+                if (store.settingsMtime != before) {
+                  accepted++;
+                } else {
+                  rejected.add({
+                    'collection': 'settings',
+                    'reason': 'server has newer mtime',
+                  });
+                }
+                continue;
+              }
+              // The BotBooru PROFILE unit is also a SINGLETON record with no
+              // `id` — handle it exactly like `settings` (clamp future clock,
+              // apply under LWW, count accepted vs server-newer reject).
+              if (collection == 'botbooruProfile') {
+                var pMtime = (m['mtime'] as num?)?.toInt() ?? 0;
+                if (pMtime > serverNow) {
+                  pMtime = serverNow;
+                  m['mtime'] = serverNow;
+                }
+                final before = store.botbooruProfileMtime;
+                store.applySyncedBotbooruProfile(m);
+                if (store.botbooruProfileMtime != before) {
+                  accepted++;
+                } else {
+                  rejected.add({
+                    'collection': 'botbooruProfile',
+                    'reason': 'server has newer mtime',
+                  });
+                }
+                continue;
+              }
+              final id = m['id'] as String?;
+              if (id == null) continue;
+              var incomingMtime = (m['mtime'] as num?)?.toInt() ?? 0;
+              if (incomingMtime > serverNow) {
+                // Future-clock record — pull it back to the server's now so it
+                // can't outrun the /pull watermark. Mutate the map too so the
+                // stored copy (built via fromJson) reflects the clamp.
+                incomingMtime = serverNow;
+                m['mtime'] = serverNow;
+              }
+              // Wave CY.18.256: if the server has a tombstone for this record
+              // at/after the pushed version, the record was deleted here (or by
+              // another peer) — don't resurrect it. Reject benignly (NOT a hard
+              // reject: the pusher's NEXT /pull carries our tombstone and reaps
+              // its own copy, so the loss is intentional and converges).
+              final kind = _collectionToKind(collection);
+              if (kind != null &&
+                  store.isTombstonedNewer(kind, id, incomingMtime)) {
+                rejected.add({
+                  'id': id,
+                  'collection': collection,
+                  'reason': 'server has newer mtime',
+                });
+                continue;
+              }
+              final applied =
+                  await _applyOne(store, collection, m, incomingMtime, device);
+              if (applied) {
+                accepted++;
+              } else {
+                rejected.add({
+                  'id': id,
+                  'collection': collection,
+                  'reason': 'server has newer mtime',
+                });
+              }
+            } catch (e) {
+              debugPrint(
+                  '[PyreServer] /push skipped a malformed $collection record: $e');
               continue;
-            }
-            final applied =
-                await _applyOne(store, collection, m, incomingMtime, device);
-            if (applied) {
-              accepted++;
-            } else {
-              rejected.add({
-                'id': id,
-                'collection': collection,
-                'reason': 'server has newer mtime',
-              });
             }
           }
         }
@@ -571,10 +705,23 @@ class PyreServer {
     // up before referencing it in a Character record.
     r.post('/attachments', (Request req) async {
       try {
-        final bytes = await req.read().fold<List<int>>(
-          <int>[],
-          (acc, chunk) => acc..addAll(chunk),
-        );
+        // Audit 2026-06-04 (M2): cap the upload. The body is buffered fully in
+        // memory before hitting disk, so an unbounded POST from a paired
+        // device could OOM the host or fill the disk. Attachments are
+        // avatars/gallery images — a 64 MB ceiling is generous. Reject early
+        // on a declared Content-Length, and abort mid-stream if it lies.
+        const maxAttachmentBytes = 64 * 1024 * 1024;
+        final declaredLen = int.tryParse(req.headers['content-length'] ?? '');
+        if (declaredLen != null && declaredLen > maxAttachmentBytes) {
+          return Response(413, body: '{"error":"attachment too large"}');
+        }
+        final bytes = <int>[];
+        await for (final chunk in req.read()) {
+          bytes.addAll(chunk);
+          if (bytes.length > maxAttachmentBytes) {
+            return Response(413, body: '{"error":"attachment too large"}');
+          }
+        }
         if (bytes.isEmpty) {
           return Response(400, body: '{"error":"empty body"}');
         }
@@ -595,6 +742,40 @@ class PyreServer {
         );
       } catch (e) {
         debugPrint('[PyreServer] POST /attachments failed: $e');
+        return Response.internalServerError(
+            body: '{"error":"server error"}');
+      }
+    });
+
+    // SYNC W7 (attachment volume): POST /attachments/missing
+    // Negotiation so a pushing client uploads ONLY the blobs this server
+    // lacks. Body: {"hashes":[...]}. Returns {"missing":[...]} — the subset
+    // not already on disk. Content-hash dedup means each image transfers at
+    // most once, ever, instead of re-sending gigabytes of images the server
+    // already holds. (Auth-protected: '/attachments' prefix covers this.)
+    r.post('/attachments/missing', (Request req) async {
+      try {
+        final body = jsonDecode(await req.readAsString());
+        final hashes = (body is Map ? body['hashes'] : null) as List?;
+        final requested =
+            hashes?.whereType<String>().toList() ?? const <String>[];
+        final present = <String>{};
+        for (final h in requested) {
+          final clean = h.trim();
+          if (clean.isEmpty || clean.contains('/') || clean.contains('..')) {
+            continue;
+          }
+          final f = await AttachmentStore.fileFor(
+              '${AttachmentStore.urlPrefix}$clean');
+          if (f != null) present.add(clean);
+        }
+        final missing = attachmentHashesMissing(requested, present);
+        return Response.ok(
+          jsonEncode({'missing': missing.toList()}),
+          headers: {'content-type': 'application/json'},
+        );
+      } catch (e) {
+        debugPrint('[PyreServer] POST /attachments/missing failed: $e');
         return Response.internalServerError(
             body: '{"error":"server error"}');
       }
@@ -869,11 +1050,26 @@ class PyreServer {
     'lorebooks',
     // Pyre 1.1 (F4): regex find/replace rules.
     'regexRules',
+    // Mega-audit 2026-06-05 (F2): user-authored library folders + forkable
+    // Creator presets now ride the synced set. Both diff by mtime + delete
+    // via the tombstone log; the locked default Creator preset is excluded
+    // (rebuilt-from-build on every load) exactly like the locked Preset.
+    'folders',
+    'creatorPresets',
     // Wave CY.18.260: providers ride the synced set ONLY when the user has
     // opted in (uiPrefs.syncProviderKeys) AND the peer is native — the /pull
     // block below gates them out otherwise, so an old/web peer that asks for
     // 'providers' explicitly still receives nothing.
     'providers',
+    // SYNC W3: the usage SETTINGS unit (model/chat/memory/liveSheet/script/
+    // guide + the active/creator/vision provider role pointers). Synced as a
+    // SINGLE record under one `settingsMtime` (LWW). The chat background image
+    // is excluded from the wire (see AppStore.syncedSettingsToJson).
+    'settings',
+    // The BotBooru PROFILE unit (username / avatar (+ original) / about-me /
+    // title / pronouns / featured character). Synced as its OWN SINGLE record
+    // under one `botbooruProfileMtime` (LWW), exactly like `settings`.
+    'botbooruProfile',
   };
 
   /// Bumped when the wire shape changes incompatibly. Wave 66 = v1.
@@ -1000,6 +1196,35 @@ class PyreServer {
           store.regexRules.add(RegexRule.fromJson(j));
         }
         return true;
+      case 'folders':
+        // Mega-audit 2026-06-05 (F2): LWW by mtime, mirrors lorebooks.
+        final id = j['id'] as String;
+        final idx = store.folders.indexWhere((f) => f.id == id);
+        if (idx >= 0) {
+          if (store.folders[idx].mtime >= incomingMtime) return false;
+          store.folders[idx] = Folder.fromJson(j);
+        } else {
+          store.folders.add(Folder.fromJson(j));
+        }
+        return true;
+      case 'creatorPresets':
+        // Mega-audit 2026-06-05 (F2): LWW by mtime. The locked default is
+        // refreshed-from-build on every load, so a synced copy must never
+        // overwrite it (it isn't emitted by /pull either, but be defensive
+        // against a hand-crafted push).
+        final id = j['id'] as String;
+        final idx = store.creatorPresets.indexWhere((p) => p.id == id);
+        if (idx >= 0) {
+          if (store.creatorPresets[idx].locked) return false;
+          if (store.creatorPresets[idx].mtime >= incomingMtime) return false;
+          store.creatorPresets[idx] = CreatorPreset.fromJson(j);
+        } else {
+          final incoming = CreatorPreset.fromJson(j);
+          // Never add a second "locked default" via sync.
+          if (incoming.locked) return false;
+          store.creatorPresets.add(incoming);
+        }
+        return true;
       case 'providers':
         // Wave CY.18.260: providers carry the API key — gated identically to
         // the pull (opt-in flag AND peer-native). A non-native peer (e.g. web)
@@ -1088,6 +1313,11 @@ class PyreServer {
       // Wave CY.18.260: provider deletes propagate via the tombstone log too.
       case 'providers':
         return 'provider';
+      // Mega-audit 2026-06-05 (F2): folder + Creator-preset deletes.
+      case 'folders':
+        return 'folder';
+      case 'creatorPresets':
+        return 'creatorPreset';
       default:
         return null;
     }
@@ -1133,6 +1363,18 @@ class PyreServer {
         store.regexRules
             .removeWhere((r) => r.id == id && r.mtime < tombstoneMtime);
         return store.regexRules.length != before;
+      case 'folder':
+        // Mega-audit 2026-06-05 (F2): reap a folder deleted on a peer.
+        final before = store.folders.length;
+        store.folders
+            .removeWhere((f) => f.id == id && f.mtime < tombstoneMtime);
+        return store.folders.length != before;
+      case 'creatorPreset':
+        // Never reap the locked default — it's rebuilt-from-build on load.
+        final before = store.creatorPresets.length;
+        store.creatorPresets.removeWhere(
+            (p) => p.id == id && !p.locked && p.mtime < tombstoneMtime);
+        return store.creatorPresets.length != before;
       case 'provider':
         // Wave CY.18.260: a deleted provider also drops its key from OS-secure
         // storage so a stale secret never lingers. We `await` the delete only
@@ -1251,6 +1493,11 @@ class PyreServer {
     '/push',
     '/llm/',
     '/attachments',
+    // SYNC W6 (verification): the read-only manifest is auth-gated like /pull —
+    // it sits under no other prefix, so it's listed explicitly here. It exposes
+    // only per-collection id+mtime fingerprints (no content, no keys), but
+    // gating it keeps the whole sync surface uniformly behind the bearer.
+    '/manifest',
   };
 
   static Middleware get _authMiddleware {
@@ -1275,6 +1522,18 @@ class PyreServer {
         final device = await DeviceRegistry.instance.deviceFor(token);
         if (device == null) {
           return Response(401, body: '{"error":"unknown bearer"}');
+        }
+        // Mega-audit 2026-06-05 (Item 3 / Finding 2): self-heal legacy native
+        // devices. A native client advertises `x-pyre-native: 1` on every
+        // authenticated request (web never sends it). If a stored record is
+        // marked non-native (legacy / pre-flag pairing) but the caller proves
+        // it is native, upgrade the record so key-sync stops excluding it —
+        // no re-pair required. Fire-and-forget persist (off the hot path); the
+        // in-memory flag is already true for THIS request's gate checks.
+        final declaresNative =
+            (req.headers['x-pyre-native'] ?? '').trim() == '1';
+        if (declaresNative && !device.isNative) {
+          unawaited(DeviceRegistry.instance.markNative(device));
         }
         // Stash the device on the request so downstream handlers can
         // log who did what (and so Wave 66's /push knows which device

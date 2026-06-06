@@ -18,7 +18,9 @@ import '../services/refusal_detector.dart';
 import '../services/generation_keepalive.dart';
 import '../services/lorebook_inject.dart';
 import '../services/live_sheet.dart' as lsheet;
+import '../services/llm_debug_log.dart';
 import '../services/memory.dart' as ltm;
+import '../services/preset_assembly.dart';
 import '../services/regex_rules.dart';
 import '../services/scene_background.dart' as scenebg;
 import '../services/story_roadmap.dart' as roadmap;
@@ -29,6 +31,7 @@ import '../widgets/avatar.dart';
 import '../widgets/lightbox.dart';
 import '../widgets/chat_text.dart';
 import '../widgets/confirm_dialog.dart';
+import '../widgets/export_snack.dart';
 import '../widgets/fallback_prompt_card.dart';
 import 'character_details_sheet.dart';
 import 'chat_info_sheet.dart';
@@ -50,6 +53,97 @@ bool get _isDesktop {
 }
 
 // kExplicitNoPersonaId is declared in models.dart (canonical location).
+
+/// chat-core-2-05: build the one-shot system prompt for the Fill-In scenario
+/// opener. Pure (no Flutter / no AppStore) so it can be unit-tested and so the
+/// dialog closure stays thin.
+///
+/// The opener must run on the SAME baseline context the ongoing chat does, or
+/// the generated greeting can contradict the lore / preset every later turn
+/// enforces. So this folds in, in order:
+///   1. the active preset's main (system) prompt, when set — sets the register;
+///   2. the responder's canon (name / description / personality / scenario /
+///      example dialogue);
+///   3. the user persona;
+///   4. the bound lorebook hits that fired this turn (`--- Lore ---`);
+///   5. the user's typed scenario + the output instruction.
+///
+/// [filledScenario] is the user's scenario with `{{char}}`/`{{user}}` already
+/// substituted. [loreHits] are the entries `scanLorebookHits` returned for the
+/// chat. [presetMainPrompt] is the assembled active-preset system text (empty
+/// for no preset). Empty sections are omitted (no stray headers).
+String buildFillInOpenerPrompt({
+  required Character? responder,
+  required Persona? persona,
+  required String filledScenario,
+  required List<LoreEntry> loreHits,
+  required String presetMainPrompt,
+}) {
+  final sys = StringBuffer();
+  // 1. Active preset main prompt first — it frames tone / register the rest of
+  // the chat uses. (datamodel-...-02: {{wiAfter}} no longer advertised, but a
+  // preset's own {{...}} tokens are intentionally left literal here — the
+  // opener is a one-shot hand-built prompt, not the full builder pipeline.)
+  if (presetMainPrompt.trim().isNotEmpty) {
+    sys.writeln(presetMainPrompt.trim());
+    sys.writeln();
+  }
+  if (responder != null) {
+    sys.writeln('You are ${responder.name}.');
+    if (responder.description.isNotEmpty) {
+      sys.writeln('\nDescription:\n${responder.description}');
+    }
+    if (responder.personality.isNotEmpty) {
+      sys.writeln('\nPersonality:\n${responder.personality}');
+    }
+    // Fold in the card's own scenario field and dialogue examples so the
+    // generated opener is consistent with the character's canon + voice.
+    if (responder.scenario.trim().isNotEmpty) {
+      sys.writeln('\nScenario:\n${responder.scenario.trim()}');
+    }
+    if (responder.mesExample.trim().isNotEmpty) {
+      sys.writeln('\nExample dialogue:\n${responder.mesExample.trim()}');
+    }
+  }
+  if (persona != null) {
+    sys.writeln('\nUser persona — ${persona.name}: ${persona.description}');
+    if (persona.dialogueExamples.trim().isNotEmpty) {
+      sys.writeln(
+          '\n${persona.name}\'s dialogue examples:\n${persona.dialogueExamples.trim()}');
+    }
+  }
+  // 4. Bound lorebook hits — the same world facts the ongoing chat injects via
+  // {{wiBefore}} / the inline "--- Lore ---" block, so the opener can't
+  // contradict established lore.
+  final loreParts = <String>[];
+  for (final e in loreHits) {
+    final c = e.content.trim();
+    if (c.isNotEmpty) loreParts.add(c);
+  }
+  if (loreParts.isNotEmpty) {
+    sys.writeln('\n--- Lore ---');
+    sys.writeln(loreParts.join('\n'));
+  }
+  sys.writeln(
+      '\nWrite a fresh opening message — vivid, in-character, that begins with this scenario:\n\n$filledScenario');
+  sys.writeln(
+      '\nUse *italics* for actions and "quotes" for dialogue. Output ONLY the opening message, no meta or explanation.');
+  // C-4: the persona AND responder blocks are written RAW above, and personas
+  // built via `buildPersonaFromCharacter` ALWAYS carry literal {{user}}/{{char}}
+  // macros — so without this pass the opener-generation prompt ships those
+  // macros to the model verbatim (only `filledScenario` was pre-substituted).
+  // The ongoing-chat builder resolves them via a final global name-fill pass
+  // (`fillNamePlaceholders`, chat_prompt_builder.dart); this separate one-shot
+  // builder was missed. Apply the SAME name-only resolution over the whole
+  // assembled prompt. Idempotent: `filledScenario` and the preset main prompt
+  // hold no macros, so re-running is a no-op there. {{user}}=persona name,
+  // {{char}}=responder name (matches the main path's resolution).
+  return fillNamePlaceholders(
+    sys.toString().trim(),
+    charName: responder?.name,
+    personaName: persona?.name,
+  );
+}
 
 class ChatScreen extends StatefulWidget {
   final String chatId;
@@ -85,6 +179,26 @@ class _ChatScreenState extends State<ChatScreen> {
   String _streamBuffer = '';
   bool _generating = false;
   String? _streamMessageId;
+
+  /// H-1: this screen's own outstanding GenerationKeepAlive refs (light —
+  /// the chat path never uses heavy). Bumped by [_keepAliveStart] and
+  /// dropped by [_keepAliveStop] so dispose() can release exactly what's
+  /// still held when the user navigates away mid-stream. Cancelling an
+  /// `async*` subscription fires neither onDone nor onError, so without
+  /// this drain the global `_anyRefs` would stay > 0 forever and the
+  /// SyncEngine would skip every push until app restart.
+  int _keepAliveHeld = 0;
+  Future<void> _keepAliveStart() {
+    _keepAliveHeld++;
+    return GenerationKeepAlive.start();
+  }
+
+  void _keepAliveStop() {
+    if (_keepAliveHeld > 0) {
+      _keepAliveHeld--;
+      unawaited(GenerationKeepAlive.stop());
+    }
+  }
 
   /// Strip ONLY Pyre's end-of-stream sentinels (finish-reason +
   /// dropped-frame) from streamed chat text. Unlike `stripStreamArtifacts`
@@ -147,6 +261,21 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Which character should respond next. Defaults to the primary.
   String? _responderId;
 
+  /// Guide (Part 2 — "Guide the reply"): a transient, ONE-SHOT instruction
+  /// armed by the user for the NEXT Send. It is NEVER written to chat history,
+  /// never persisted, never synced — it only rides as `ChatPromptInputs.guideNote`
+  /// for a single generation. A dismissible chip above the input bar shows it's
+  /// armed; sending consumes it (moved into `_inFlightGuide`, then cleared).
+  String? _armedGuide;
+
+  /// The guide actually threaded into the IN-FLIGHT generation. `_send` moves
+  /// `_armedGuide` here at dispatch (clearing the armed slot so it's one-shot),
+  /// and `_runGenerationInto` reads it. Keeping it separate from `_armedGuide`
+  /// means a smart-fallback RETRY of the SAME turn still applies the guide
+  /// (it's the same logical reply), while a brand-new Send won't accidentally
+  /// reuse a stale guide. Cleared when the generation settles.
+  String? _inFlightGuide;
+
   /// Wave CI: safe resolution of the active responder. Falls back to
   /// the chat's primary character when `_responderId` is null OR when
   /// the previously-chosen responder has been removed from the chat
@@ -186,9 +315,15 @@ class _ChatScreenState extends State<ChatScreen> {
       case ChatBackgroundSource.personaAvatar:
         // Fall back to character avatar if the persona has no image —
         // better than leaving the chat naked and inconsistent.
-        return persona?.avatar ?? character?.avatar;
+        // Non-destructive Recrop: use the UNCROPPED original when one exists so
+        // the backdrop shows the WHOLE image (the recropped thumbnail is for
+        // the small circle, not a full-bleed background).
+        return persona?.avatarOriginal ??
+            persona?.avatar ??
+            character?.avatarOriginal ??
+            character?.avatar;
       case ChatBackgroundSource.characterAvatar:
-        return character?.avatar;
+        return character?.avatarOriginal ?? character?.avatar;
       case ChatBackgroundSource.dynamic:
         // Wave CY.18.184: resolve to a bundled asset path (rendered by
         // _BackdropImage's asset branch). null sceneBgFile -> no backdrop
@@ -256,6 +391,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    // H-1: release any keepalive refs this screen still holds. Cancelling
+    // the subscription below never fires onDone/onError (the only places
+    // _keepAliveStop runs), so drain the counter here to keep the global
+    // refcount balanced. The loop decrements exactly what's outstanding —
+    // no over-decrement.
+    while (_keepAliveHeld > 0) {
+      _keepAliveStop();
+    }
     _streamSub?.cancel();
     _scrollCtl.removeListener(_onScroll);
     _scrollCtl.dispose();
@@ -490,8 +633,14 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ),
                       // OPTIONAL quick main-prompt tweak — only when the active
-                      // preset is UNLOCKED. The locked default is never editable.
-                      if (active != null && !active.locked) ...[
+                      // preset is UNLOCKED *and FLAT* (H-8). For a MODULAR
+                      // preset, `mainPrompt` is ignored by `assemblePreset`
+                      // (it builds from blocks), so the quick-edit would be a
+                      // silent no-op — gate it on the predicate and show a
+                      // short note pointing to the Presets screen instead.
+                      if (active != null &&
+                          !active.locked &&
+                          presetSupportsMainPromptQuickEdit(active)) ...[
                         const Divider(color: EmberColors.stroke, height: 8),
                         ListTile(
                           dense: true,
@@ -573,6 +722,32 @@ class _ChatScreenState extends State<ChatScreen> {
                               ],
                             ),
                           ),
+                      ] else if (active != null &&
+                          !active.locked &&
+                          !presetSupportsMainPromptQuickEdit(active)) ...[
+                        // MODULAR preset: the in-chat main-prompt quick-edit
+                        // would be ignored by assembly, so we don't offer it.
+                        // Point the user at the Presets screen, where the
+                        // block editor actually drives a modular preset.
+                        const Divider(color: EmberColors.stroke, height: 8),
+                        const ListTile(
+                          dense: true,
+                          leading: Icon(Icons.view_module_outlined,
+                              color: EmberColors.textMid),
+                          title: Text(
+                            'Modular preset',
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: EmberColors.textHigh,
+                                fontWeight: FontWeight.w500),
+                          ),
+                          subtitle: Text(
+                            'Built from prompt blocks — edit it in the '
+                            'Presets screen below.',
+                            style: TextStyle(
+                                color: EmberColors.textMid, fontSize: 11),
+                          ),
+                        ),
                       ],
                       const Divider(color: EmberColors.stroke, height: 8),
                       Padding(
@@ -655,6 +830,19 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     _inputCtl.clear();
+
+    // Guide (Part 2 — "Guide the reply"): consume the armed one-shot guide for
+    // THIS send only. Move it into `_inFlightGuide` (read by every
+    // `_runGenerationInto` for this turn, incl. smart-fallback retries of the
+    // same slot) and clear the armed slot immediately so it never carries over
+    // to a later Send. A plain send with nothing armed sets `_inFlightGuide`
+    // to null, so a stale guide can never leak across distinct sends. The
+    // guide is ephemeral — it is NOT appended to `chat.messages` here; it only
+    // becomes an in-prompt system note via `_buildTurns`→`buildChatPrompt`.
+    _inFlightGuide = _armedGuide;
+    if (_armedGuide != null) {
+      setState(() => _armedGuide = null);
+    }
 
     // Wave CY.5: empty send is intentional — it means "scene continues
     // without me". Skip appending a user message and let the responder
@@ -771,11 +959,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
     _streamMessageId = assistantId;
     final pinnedVariant = _streamVariantIndex;
-    final turns = _buildTurns(store, chat);
+    // Thread the in-flight one-shot guide (if any). It survives a smart-
+    // fallback retry of the SAME turn (we keep `_inFlightGuide` set across
+    // retries) and is cleared once the turn settles in `_finishGeneration`-
+    // style cleanup below.
+    final turns = _buildTurns(store, chat, guide: _inFlightGuide);
     // Wave BM: foreground-service keep-alive so the OS doesn't kill
     // Pyre while the LLM streams (especially the slow first-token wait
     // on reasoning models). Matching stop() in onDone / failure paths.
-    await GenerationKeepAlive.start();
+    await _keepAliveStart();
     try {
       // Audit C2: cancel any prior subscription before re-arming. The
       // fallback retry path can reach here while an earlier stream for
@@ -818,7 +1010,7 @@ class _ChatScreenState extends State<ChatScreen> {
           error: e,
         ),
         onDone: () {
-          unawaited(GenerationKeepAlive.stop());
+          _keepAliveStop();
           if (!mounted) return;
           setState(() {
             _generating = false;
@@ -834,7 +1026,7 @@ class _ChatScreenState extends State<ChatScreen> {
         },
       );
     } catch (e) {
-      unawaited(GenerationKeepAlive.stop());
+      _keepAliveStop();
       _handleGenerationFailure(
         chatId: chat.id,
         assistantId: assistantId,
@@ -851,7 +1043,7 @@ class _ChatScreenState extends State<ChatScreen> {
     required String assistantId,
     required Object error,
   }) {
-    unawaited(GenerationKeepAlive.stop());
+    _keepAliveStop();
     if (!mounted) return;
     final store = context.read<AppStore>();
     final hasNext = _fallbackIndex + 1 < _fallbackChain.length;
@@ -876,6 +1068,34 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Empty or likely-refusal + another candidate + toggle on → show the
   /// card. Anything else → resume the normal post-done bookkeeping
   /// (auto-summarize).
+  /// Fire-and-forget the post-turn background memory pipeline: auto-summarise →
+  /// Live Sheet → scene background, serialised so the three LLM calls never
+  /// overlap on one provider. Every stage is fully self-guarded (shouldSummarize
+  /// / per-feature latches / mounted), so this is safe + idempotent to call from
+  /// EVERY assistant-turn completion path.
+  ///
+  /// LTM fix 2026-06-04: this chain previously lived ONLY inside the fresh-send
+  /// onDone AND only in the `!eligible` branch — so chats whose replies tripped
+  /// the smart-fallback refusal classifier never checkpointed (the "auto-memory
+  /// fires in some chats, never in others" instability).
+  ///
+  /// Mega-audit 2026-06-04 (chat-core-1-02): it is now ALSO invoked from every
+  /// other assistant-turn completion path — Continue (`_continueLast`),
+  /// Regenerate / Regenerate-with-guide (`_regenerateMessage`), Fill-In
+  /// (`_streamFillInVariant`), Impersonate (`_runImpersonation`), and a kept
+  /// partial reply in `_stop`. Each stage is fully self-guarded
+  /// (shouldSummarize counts only NEW char messages past the anchor, per-feature
+  /// latches, mounted), so firing it from a path that produced no new turn
+  /// (e.g. a Continue that only extended an existing message, or an Impersonate
+  /// that only wrote to the input box) is a cheap idempotent no-op. The win is
+  /// the per-turn scene-background classifier, which now refreshes on those
+  /// paths too instead of lagging until the next fresh send.
+  void _runAutoMemoryChain() {
+    _maybeAutoSummarize()
+        .then((_) => _maybeAutoLiveSheetUpdate())
+        .then((_) => _maybeUpdateSceneBackground());
+  }
+
   void _maybeOfferFallbackAfterDone(String chatId, String assistantId) {
     if (!mounted) return;
     final store = context.read<AppStore>();
@@ -890,16 +1110,18 @@ class _ChatScreenState extends State<ChatScreen> {
     final eligible = store.uiPrefs.askToSwitchOnFailure &&
         hasNext &&
         verdict != ResponseVerdict.ok;
-    if (!eligible) {
-      // Wave CY.18.173: run Live Sheet update AFTER the summariser resolves so
-      // the two background LLM calls are serialised (never overlap on the same
-      // provider). Wave CY.18.184: scene classifier chained after Live Sheet
-      // (three background LLM calls serialised: summary → sheet → scene).
-      _maybeAutoSummarize()
-          .then((_) => _maybeAutoLiveSheetUpdate())
-          .then((_) => _maybeUpdateSceneBackground());
-      return;
-    }
+    // LTM fix 2026-06-04 — DECOUPLED from the smart-fallback decision: the
+    // auto-memory chain runs after EVERY clean finish now, NOT only when the
+    // fallback path declined the turn. It used to live inside `if (!eligible)`,
+    // so in any chat whose replies the refusal classifier judged non-ok (short
+    // / unusual markup — varies by character + provider) the summariser was
+    // silently skipped turn after turn while other chats checkpointed fine →
+    // "auto-memory works in some chats, never in others". The fallback card
+    // (below) is now an independent, additional offer.
+    unawaited(LlmDebugLog.instance
+        .trace('ltm.auto: dispatching (fallbackEligible=$eligible)'));
+    _runAutoMemoryChain();
+    if (!eligible) return;
     final failed = _fallbackChain[_fallbackIndex];
     final next = _fallbackChain[_fallbackIndex + 1];
     ApiProvider? clean;
@@ -1005,12 +1227,28 @@ class _ChatScreenState extends State<ChatScreen> {
     final store = context.read<AppStore>();
     final chat = _chat(store);
     if (chat == null) return;
+    // SILENT export-only breadcrumb at entry: mounted / memoryEnabled / latch.
+    // These are the first three gates and any one of them can silently abort
+    // a 2nd+ checkpoint.
+    unawaited(LlmDebugLog.instance.trace(
+        'ltm.auto: entry mounted=$mounted memoryEnabled=${chat.memoryEnabled} '
+        'summarising=$_summarising'));
     // Wave CY.16: per-chat opt-out via the Memory menu. Manual
     // summarisation still works even when this is false (the
     // MemoryScreen "Summarise now" button bypasses the toggle) —
     // auto-trigger just respects it.
     if (!chat.memoryEnabled) return;
-    if (!ltm.shouldSummarize(chat, memorySettings: store.memorySettings)) {
+    // Compute the decision WITH ITS NUMBERS for the breadcrumb. This is the
+    // diagnostic companion to shouldSummarize — same boolean verdict, plus the
+    // intermediates — so we trace exactly why it did/didn't fire.
+    final decision =
+        ltm.summarizeDecision(chat, memorySettings: store.memorySettings);
+    unawaited(LlmDebugLog.instance.trace(
+        'ltm.auto: shouldSummarize=${decision.shouldSummarize} '
+        'lastAnchor=${decision.lastAnchor} '
+        'newCharMsgs=${decision.newCharMsgs}/${decision.threshold} '
+        'validCkpts=${decision.validCount} totalMsgs=${decision.totalMessages}'));
+    if (!decision.shouldSummarize) {
       return;
     }
     // Wave CY.18.6: prevent two summarisers running at once. The
@@ -1020,7 +1258,13 @@ class _ChatScreenState extends State<ChatScreen> {
     // the same provider can hit rate limits or, on proxies that
     // serialise requests per session, silently drop one — leaving
     // the user with a phantom "Generating…" on the chat reply.
-    if (_summarising) return;
+    if (_summarising) {
+      // SILENT breadcrumb: prime suspect — a stuck latch blocks every 2nd+
+      // checkpoint while shouldSummarize keeps reporting true.
+      unawaited(
+          LlmDebugLog.instance.trace('ltm.auto: skipped (latch busy)'));
+      return;
+    }
     final provider = store.activeProvider;
     if (provider == null) return;
     _summarising = true;
@@ -1032,6 +1276,11 @@ class _ChatScreenState extends State<ChatScreen> {
         memorySettings: store.memorySettings,
       );
       if (ckpt == null) {
+        // SILENT breadcrumb: the checkpoint did not materialise. The reason
+        // (if any) sits in MemoryErrors; surface it greppably in the export.
+        unawaited(LlmDebugLog.instance.trace(
+            'ltm.auto: generateCheckpoint returned null (reason='
+            '${ltm.MemoryErrors.log.isNotEmpty ? ltm.MemoryErrors.log.first : 'none'})'));
         // Wave CY.18.160: don't fail silently. generateCheckpoint returns
         // null when the LLM reply was empty / errored / offline — it
         // records the reason in MemoryErrors but, until now, the user got
@@ -1064,11 +1313,15 @@ class _ChatScreenState extends State<ChatScreen> {
         }
         return;
       }
+      // SILENT breadcrumb: a checkpoint was produced and is about to be
+      // appended at this anchor.
+      unawaited(LlmDebugLog.instance.trace(
+          'ltm.auto: checkpoint CREATED (anchor=${ckpt.anchorMessageIdx})'));
       // A success clears the "shown" latch so a genuine LATER failure (e.g.
       // the provider goes down after working) surfaces again.
       _autoSummariseFailureShown = false;
       ltm.applyCheckpoint(chat, ckpt);
-      store.notifyAndPersist();
+      store.touchChat(chat); // F1: bump mtime so the checkpoint syncs
     } finally {
       _summarising = false;
     }
@@ -1121,7 +1374,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       _liveSheetFailureShown = false;
       lsheet.appendLiveSheetSnapshot(chat, snap);
-      store.notifyAndPersist();
+      store.touchChat(chat); // F1: bump mtime so the snapshot syncs
     } finally {
       _liveSheetUpdating = false;
     }
@@ -1192,7 +1445,7 @@ class _ChatScreenState extends State<ChatScreen> {
           chat.sceneLastClassifyMsgCount = chat.messages.length;
           changed = true;
         }
-        if (changed) store.notifyAndPersist();
+        if (changed) store.touchChat(chat); // F1: scene fields sync
       }
       if (!force) return; // keyword hit short-circuits the classifier this turn
     }
@@ -1248,7 +1501,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ));
           }
         }
-        store.notifyAndPersist(); // persist the advanced watermarks
+        store.touchChat(chat); // F1: persist+sync the advanced watermarks
         return;
       }
       _sceneFailureShown = false;
@@ -1287,7 +1540,7 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         }
       }
-      store.notifyAndPersist();
+      store.touchChat(chat); // F1: scene fields + watermarks sync
     } finally {
       _sceneClassifying = false;
     }
@@ -1319,10 +1572,29 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
 
+  /// Drop the just-streamed assistant placeholder when it finished empty
+  /// (an error with no tokens, or Stop before the first byte). VARIANT-AWARE:
+  /// if a regenerate / fill-in added this as a NEW variant on top of real
+  /// ones, drop only that variant (which restores the prior variant and the
+  /// branch that followed it). Only a genuinely single-variant placeholder (a
+  /// fresh send) is removed wholesale. Audit 2026-06-04 (Critical): calling
+  /// removeMessage on a multi-variant message deletes EVERY good variant AND
+  /// the entire downstream conversation — silent data loss under the default
+  /// (onlyThis) delete setting.
+  void _dropEmptyStreamPlaceholder(AppStore store, Chat chat, String messageId) {
+    final mi = chat.messages.indexWhere((m) => m.id == messageId);
+    if (mi < 0) return;
+    if (chat.messages[mi].variants.length > 1) {
+      store.removeMessageVariant(chat.id, messageId);
+    } else {
+      store.removeMessage(chat.id, messageId, cascadeOverride: false);
+    }
+  }
+
   void _finishWithError(String message, {Object? originalError}) {
     // Wave BM: belt-and-braces — drop keep-alive on any error path.
     // Safe to call even if start() was never reached.
-    unawaited(GenerationKeepAlive.stop());
+    _keepAliveStop();
     if (!mounted) return;
     // Wave CH+CI: parse the friendly error message out of ChatApiError
     // JSON bodies and surface it as a transient SnackBar instead of
@@ -1365,15 +1637,20 @@ class _ChatScreenState extends State<ChatScreen> {
       // otherwise look non-empty and be kept as a literal-marker bubble.
       final partial = _stripChatSentinels(_streamBuffer);
       if (stripStreamArtifacts(_streamBuffer).trim().isEmpty) {
-        // Empty placeholder — drop it so the chat doesn't end with
-        // a phantom assistant bubble. (deleteMessage handles the
-        // case where the id no longer exists.)
-        store.removeMessage(chat.id, _streamMessageId!);
+        // Empty placeholder — drop it so the chat doesn't end with a phantom
+        // assistant bubble. Variant-aware (see _dropEmptyStreamPlaceholder):
+        // a regenerate that errors empty must NOT nuke the original reply +
+        // its branch.
+        _dropEmptyStreamPlaceholder(store, chat, _streamMessageId!);
       } else {
         // Partial — keep it (sentinels removed; <think> preserved for the
         // reasoning toggle). The user can read what was already generated;
-        // the error info lives in the snackbar.
-        store.updateMessageText(chat.id, _streamMessageId!, partial);
+        // the error info lives in the snackbar. Audit 2026-06-04: write to the
+        // PINNED stream variant, not selectedVariant — if the user swiped
+        // variants mid-stream, the unindexed write would clobber whichever
+        // variant they landed on.
+        store.updateMessageText(chat.id, _streamMessageId!, partial,
+            variantIndex: _streamVariantIndex);
       }
     }
     setState(() {
@@ -1448,7 +1725,12 @@ class _ChatScreenState extends State<ChatScreen> {
   /// builder's `.turns`. Behaviour is byte-identical — proven by the
   /// regression net in `test/chat_prompt_builder_test.dart` + the full
   /// existing suite.
-  List<ChatTurn> _buildTurns(AppStore store, Chat chat) {
+  /// [guide], when non-null/blank AND the Guide feature is enabled, is the
+  /// ONE-SHOT guidance note injected into THIS prompt only (ephemeral — it is
+  /// never added to `chat.messages`, never persisted). The injection itself is
+  /// the pure `injectGuide` inside `buildChatPrompt`; here we just resolve the
+  /// position from settings and pass the note through.
+  List<ChatTurn> _buildTurns(AppStore store, Chat chat, {String? guide}) {
     // Use the selected responder for the system prompt (so the right
     // character's voice is described). For >1 member chats, also include
     // a brief roster so the LLM knows the other personas in the scene.
@@ -1488,6 +1770,16 @@ class _ChatScreenState extends State<ChatScreen> {
           '(scanned ${scan.totalScanned} across ${attached.length} book(s))');
     }
 
+    // Guide: only honour the one-shot note when the feature is enabled. A
+    // null/blank note makes `buildChatPrompt`/`injectGuide` a no-op, so the
+    // assembled turns stay byte-identical for every non-guided generation.
+    final guideSettings = store.guideSettings;
+    final guideNote = (guideSettings.enabled &&
+            guide != null &&
+            guide.trim().isNotEmpty)
+        ? guide
+        : null;
+
     final inputs = ChatPromptInputs(
       chat: chat,
       character: character,
@@ -1499,6 +1791,8 @@ class _ChatScreenState extends State<ChatScreen> {
       lookupBook: store.lorebookById,
       inFlightMessageId: _streamMessageId,
       regexRules: store.regexRules,
+      guideNote: guideNote,
+      guidePosition: guideSettings.injectionPosition,
     );
     return buildChatPrompt(inputs).turns;
   }
@@ -1584,6 +1878,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final store = context.read<AppStore>();
     final chat = _chat(store);
     final streamId = _streamMessageId;
+    // chat-core-1-02: track whether Stop KEPT a real partial assistant reply
+    // (vs dropping an empty placeholder or stopping an input-box impersonation,
+    // where streamId is null). A kept partial is a real char turn, so the
+    // post-turn memory pipeline should re-check it like any other completion.
+    var keptPartial = false;
     if (chat != null && streamId != null) {
       final idx = chat.messages.indexWhere((m) => m.id == streamId);
       // Strip <think> + Pyre sentinels before the emptiness test: a
@@ -1593,7 +1892,13 @@ class _ChatScreenState extends State<ChatScreen> {
       // bubble rather than kept.
       if (idx >= 0 &&
           stripStreamArtifacts(chat.messages[idx].text).trim().isEmpty) {
-        store.removeMessage(chat.id, streamId, cascadeOverride: false);
+        // Variant-aware drop (audit 2026-06-04 Critical): a Stop-before-first-
+        // token on a regenerate must drop only the new empty variant, never
+        // the whole message (which would take every prior variant + branch).
+        _dropEmptyStreamPlaceholder(store, chat, streamId);
+      } else if (idx >= 0) {
+        // A non-empty partial was kept — it's a real assistant turn.
+        keptPartial = true;
       }
     }
     setState(() {
@@ -1603,6 +1908,11 @@ class _ChatScreenState extends State<ChatScreen> {
     // The partial response is real text the user might want — flush so
     // it survives. (The debounce timer is still running otherwise.)
     store.flushPersist();
+    // chat-core-1-02: a kept partial is a completed assistant turn, so re-check
+    // the post-turn memory pipeline (self-guarded/idempotent — see
+    // _runAutoMemoryChain). Dropped placeholders / input-box impersonations
+    // (streamId null) leave keptPartial false and skip it.
+    if (keptPartial) _runAutoMemoryChain();
   }
 
   Future<void> _showChatKebab(Chat chat, Character? primary) async {
@@ -1645,6 +1955,18 @@ class _ChatScreenState extends State<ChatScreen> {
               onTap: () {
                 Navigator.pop(sheet);
                 _promptFillIn(chat);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.drive_file_rename_outline),
+              title: const Text('Rename chat'),
+              subtitle: const Text(
+                'Name this chat to tell it apart from others.',
+                style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+              ),
+              onTap: () {
+                Navigator.pop(sheet);
+                _renameChatPrompt(chat, primary);
               },
             ),
             // ── Memories ▸ ───────────────────────────────────────────
@@ -1717,7 +2039,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   ListTile(
                     leading: const Icon(Icons.psychology_outlined),
-                    title: const Text('Long-term Memory'),
+                    title: const Text('Checkpoints'),
                     subtitle: Builder(builder: (_) {
                       if (!chat.memoryEnabled) {
                         return const Text(
@@ -1793,7 +2115,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 children: [
                   ListTile(
                     leading: const Icon(Icons.tune),
-                    title: const Text('Customize chat'),
+                    title: const Text('Chat background'),
                     subtitle: const Text(
                       'Background & scene.',
                       style: TextStyle(
@@ -1916,6 +2238,45 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Completeness-gaps: rename (or clear) the chat's manual title. Mirrors
+  /// the Creator's `_renameSessionPrompt` (Cancel / Reset / Save). The dialog
+  /// pre-fills with the current effective label (manual title or character
+  /// name); "Reset" clears the override back to the derived label.
+  Future<void> _renameChatPrompt(Chat chat, Character? primary) async {
+    final fallback = primary?.name ?? 'Chat';
+    final ctl = TextEditingController(text: chat.displayTitle(fallback));
+    final renamed = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: EmberColors.bgPanel,
+        title: const Text('Rename chat'),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'Chat title'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ''),
+            child: const Text('Reset'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    ctl.dispose(); // H-3: dispose the rename controller once the dialog closes.
+    if (renamed == null) return;
+    if (!mounted) return;
+    context.read<AppStore>().renameChat(chat.id, renamed.isEmpty ? null : renamed);
+  }
+
   /// Wave CY.13: export the chat to disk. Two formats:
   ///  - SillyTavern JSONL (portable; opens in ST / chub clients)
   ///  - Pyre JSON (full fidelity — variants, branches, snapshots)
@@ -2026,33 +2387,28 @@ class _ChatScreenState extends State<ChatScreen> {
       // Drop any lingering banner first (opening the OS share sheet
       // pauses a live SnackBar's dismiss timer) and show the filename
       // only, not the whole path, so the bar stays compact.
-      messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(SnackBar(
-        content: Text('Exported — ${Uri.file(path).pathSegments.last}'),
-        duration: const Duration(seconds: 4),
-        action: SnackBarAction(
-          label: 'Share',
-          onPressed: () async {
-            try {
-              await Share.shareXFiles(
-                [
-                  XFile(path,
-                      mimeType:
-                          asSillyTavern ? 'application/x-ndjson' : 'application/json'),
-                ],
-                subject: 'Pyre chat — $characterName',
-                text: asSillyTavern
-                    ? 'SillyTavern-compatible chat export.'
-                    : 'Full-fidelity Pyre chat backup.',
-              );
-            } catch (e) {
-              messenger.showSnackBar(
-                SnackBar(content: Text('Share failed: $e')),
-              );
-            }
-          },
-        ),
-      ));
+      // Deliver per platform: on mobile the documents dir is app-private and
+      // invisible, so we open the share sheet directly (otherwise the export
+      // "goes nowhere"); on desktop we show the saved-path confirmation + a
+      // self-dismissing Share button. See widgets/export_snack.dart.
+      await deliverExport(
+        messenger,
+        [
+          XFile(path,
+              mimeType: asSillyTavern
+                  ? 'application/x-ndjson'
+                  : 'application/json'),
+        ],
+        savedBanner: 'Exported — ${Uri.file(path).pathSegments.last}',
+        shareSubject: 'Pyre chat — $characterName',
+        shareText: asSillyTavern
+            ? 'SillyTavern-compatible chat export.'
+            : 'Full-fidelity Pyre chat backup.',
+        // Mobile: real "Save to device" (SAF) for the chat file.
+        saveBytes: Uint8List.fromList(utf8.encode(content)),
+        saveFileName: Uri.file(path).pathSegments.last,
+        saveExtensions: [ext],
+      );
     } catch (e) {
       messenger.showSnackBar(
           SnackBar(content: Text('Export failed: $e')));
@@ -2099,6 +2455,25 @@ class _ChatScreenState extends State<ChatScreen> {
                 onTap: () {
                   Navigator.pop(sheet);
                   _regenerateLast();
+                },
+              ),
+            // Guide (Part 2 — Action 2): guided re-roll. Same regenerate path,
+            // but with a one-shot guide threaded into THIS generation only.
+            // Gated on the Guide feature being enabled (matches the input ⊕
+            // affordance). Last-char-message only, like plain Regenerate.
+            if (isChar && isLast && store.guideSettings.enabled)
+              ListTile(
+                leading: const Icon(Icons.auto_fix_high_outlined,
+                    color: EmberColors.primary),
+                title: const Text('Regenerate with a guide'),
+                subtitle: const Text(
+                  'Re-roll this reply with a one-shot instruction.',
+                  style: TextStyle(
+                      color: EmberColors.textMid, fontSize: 12),
+                ),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  _regenerateWithGuide(chat, m);
                 },
               ),
             ListTile(
@@ -2163,11 +2538,24 @@ class _ChatScreenState extends State<ChatScreen> {
                   // Cascade is destructive — confirm before nuking the
                   // tail of the conversation.
                   if (cascade) {
+                    // chat-core-2-02: the action below is variant-aware — a
+                    // multi-variant message only loses the CURRENT branch
+                    // (the message + sibling variants survive). Match the
+                    // confirm copy to what actually happens so the user
+                    // isn't told "and every reply after" when the gentler
+                    // per-variant removal will run.
+                    final multiVariant = m.variants.length > 1;
                     final ok = await confirmDelete(
                       context,
-                      title: 'Delete this and all messages after?',
-                      message:
-                          'You\'ll lose this message and every reply that came after it.',
+                      title: multiVariant
+                          ? 'Delete this version and its replies?'
+                          : 'Delete this and all messages after?',
+                      message: multiVariant
+                          ? 'This message has alternate versions — only the '
+                              'current one and the replies under it are '
+                              'removed. The other versions are kept.'
+                          : 'You\'ll lose this message and every reply that '
+                              'came after it.',
                     );
                     if (!ok) return;
                   }
@@ -2279,8 +2667,14 @@ class _ChatScreenState extends State<ChatScreen> {
     turns.add(ChatTurn('user', nudge));
 
     final pinnedVariant = _streamVariantIndex;
-    await GenerationKeepAlive.start(); // Wave BM
+    await _keepAliveStart(); // Wave BM
     try {
+      // chat-core-1-10: cancel any prior subscription before re-arming
+      // (mirrors `_runGenerationInto`'s audit-C2 guard) so a desync where a
+      // stream is live while `_generating` is false can't leak/race the old
+      // sub into a stale slot.
+      await _streamSub?.cancel();
+      _streamSub = null;
       _streamSub = streamChatCompletion(
         provider: provider,
         settings: store.modelSettings,
@@ -2308,7 +2702,7 @@ class _ChatScreenState extends State<ChatScreen> {
         // server) and render a friendly snackbar per kind.
         onError: (e) => _finishWithError(e.toString(), originalError: e),
         onDone: () {
-          unawaited(GenerationKeepAlive.stop()); // Wave BM
+          _keepAliveStop(); // Wave BM
           if (!mounted) return;
           setState(() {
             _generating = false;
@@ -2317,10 +2711,13 @@ class _ChatScreenState extends State<ChatScreen> {
           // Flush the debounced state — disk is idle now, save the final
           // text so a crash doesn't lose the just-generated variant.
           context.read<AppStore>().flushPersist();
+          // chat-core-1-02: re-check the post-turn memory pipeline after a
+          // Continue too (self-guarded/idempotent — see _runAutoMemoryChain).
+          _runAutoMemoryChain();
         },
       );
     } catch (e) {
-      unawaited(GenerationKeepAlive.stop()); // Wave BM
+      _keepAliveStop(); // Wave BM
       _finishWithError(e.toString());
     }
   }
@@ -2329,7 +2726,49 @@ class _ChatScreenState extends State<ChatScreen> {
   /// and STREAM it into the input field — the user watches it fill in
   /// real-time and can tweak before sending. Cancellable via the stop
   /// button while streaming.
+  ///
+  /// Guide (Part 2 — Action 3): when the Guide feature is enabled this is the
+  /// guided upgrade. It first opens a small sheet to collect an optional
+  /// outline (pre-filled with the current input draft) + a narrative
+  /// perspective, then expands that into the user's message. With the feature
+  /// off it streams the classic impersonation immediately (unchanged).
+  /// Classic "Impersonate me" — ALWAYS one-tap: no sheet, no outline, no
+  /// perspective. Gui asked to keep this DECOUPLED from "Guide my message" so
+  /// it matches the old (1.0) behaviour that worked on safety-default models.
+  /// The guided upgrade lives in [_guideMyMessage], a separate menu item.
   Future<void> _impersonateMe() async {
+    if (_generating) return;
+    return _runImpersonation();
+  }
+
+  /// "Guide my message" — the guided upgrade of Impersonate: collect an outline
+  /// (seeded from whatever is in the input box) + a perspective, then write the
+  /// user's message expanding that outline. A SEPARATE menu item from the
+  /// one-tap [_impersonateMe]; only surfaced when the Guide feature is enabled.
+  Future<void> _guideMyMessage() async {
+    if (_generating) return;
+    final store = context.read<AppStore>();
+    final draft = _inputCtl.text.trim();
+    final choice = await _promptGuidedImpersonation(
+      initialOutline: draft,
+      initialPerspective: store.guideSettings.defaultPerspective,
+    );
+    if (choice == null || !mounted) return; // cancelled
+    await _runImpersonation(
+      outline: choice.outline,
+      perspective: choice.perspective,
+    );
+  }
+
+  /// The streaming core shared by classic Impersonate Me and its guided
+  /// upgrade. [outline]/[perspective] are the guided affordances (both null →
+  /// classic behaviour). Output streams into the input box for review; the
+  /// reasoning-leak strip (Wave 153) is reused verbatim. The instruction turn
+  /// is ephemeral — it is NEVER added to `chat.messages`.
+  Future<void> _runImpersonation({
+    String? outline,
+    GuidePerspective? perspective,
+  }) async {
     if (_generating) return;
     _clearPendingFallback(); // audit C1
     final store = context.read<AppStore>();
@@ -2343,15 +2782,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final preset = store.activePreset;
     final turns = _buildTurns(store, chat);
     // Impersonation prompt — preset override if provided (ST presets define
-    // it as `impersonation_prompt`), else our default.
-    //
-    // Wave CW: the previous default was too soft and went in as a tail
-    // `system` turn — the model stayed in narrator/char role and kept
-    // emitting NPC dialogue. New default is explicit about what's
-    // allowed (user actions / thoughts / dialogue / sensations) and
-    // what's NOT (NPC speech, world narration, scene advancement from
-    // any other POV). Sent as a `user` turn with [OOC] prefix — RP
-    // convention the model respects more reliably than tail systems.
+    // it as `impersonation_prompt`), else our default. Wave CW tuned the
+    // default; Wave CX.1 added the examples nudge. Guide Part 2 extracted the
+    // assembly into the pure `buildImpersonationPrompt` so the outline +
+    // perspective riders are unit-testable.
     final speakerName = _primaryCharacter(store, chat)?.name ?? '';
     // Wave CX.1: if the persona has dialogue examples, give the
     // model an explicit nudge to match them. The examples are already
@@ -2365,53 +2799,14 @@ class _ChatScreenState extends State<ChatScreen> {
             'system context. Same diction, same sentence length, same '
             'kind of action beats.'
         : '';
-    final impPrompt =
-        (preset?.impersonationPrompt?.trim().isNotEmpty ?? false)
-            ? preset!.impersonationPrompt!
-                .replaceAll(
-                  RegExp(r'\{\{user\}\}', caseSensitive: false),
-                  personaName,
-                )
-                .replaceAll(
-                  RegExp(r'\{\{char\}\}', caseSensitive: false),
-                  speakerName,
-                )
-            : '[OOC: Drop out of narrator/character voice for ONE reply. '
-                'Write the next message from $personaName\'s perspective '
-                'only — what $personaName would type as their own '
-                'character in this scene.\n\n'
-                'ALLOWED in this reply:\n'
-                '- $personaName\'s actions, gestures, body language\n'
-                '- $personaName\'s thoughts and sensations\n'
-                '- $personaName\'s dialogue\n\n'
-                'FORBIDDEN in this reply:\n'
-                '- ANY dialogue or action from ${speakerName.isNotEmpty ? speakerName : "the narrator"} or any NPC\n'
-                '- World/scene narration of what other people do or '
-                'how the environment reacts\n'
-                '- Advancing the scene from anyone except $personaName\n'
-                '- Prefixes like "$personaName:", "(impersonating)", or '
-                'meta-commentary\n\n'
-                'FORMATTING — match the chat\'s established pattern EXACTLY:\n\n'
-                'GOOD example (this is the ONLY shape you produce):\n'
-                '*She crosses her arms, eyes narrowing.*\n\n'
-                '"You really expect me to believe that?"\n\n'
-                '*Her foot taps once, twice, against the floorboard.*\n\n'
-                'BAD examples (NEVER produce these):\n'
-                '- "*She crosses her arms.* You really expect me to believe that? *Her foot taps.*"  ← asterisks engulfing dialogue\n'
-                '- She crosses her arms, narrowing her eyes. "You really expect me to believe that?"  ← actions without asterisks\n'
-                '- *She crosses her arms and says "You really expect me to believe that?"*  ← dialogue inside the asterisk block\n\n'
-                'Rules pulled out:\n'
-                '- EVERY spoken line is its own paragraph, wrapped in double quotes only — no asterisks around it.\n'
-                '- Every action / body language / inner thought is its own paragraph, wrapped in *…* only — no dialogue inside the stars.\n'
-                '- Blank line between every action paragraph and every dialogue paragraph. Alternating beats.\n'
-                '- Keep it short — one to three of these blocks total.\n'
-                '- Reply with the message body only, no preamble, no "[OOC: " framing.\n\n'
-                'CRITICAL — no thinking out loud: output ONLY $personaName\'s '
-                'in-character message. Do NOT write any analysis, planning, a '
-                '"thinking process", numbered steps, or notes about these '
-                'instructions — none of that may ever appear in your reply. '
-                'Begin immediately with $personaName\'s first action or spoken '
-                'line.$examplesNudge]';
+    final impPrompt = buildImpersonationPrompt(
+      personaName: personaName,
+      speakerName: speakerName,
+      presetImpersonationPrompt: preset?.impersonationPrompt,
+      examplesNudge: examplesNudge,
+      outline: outline,
+      perspective: perspective,
+    );
     // User-role turn so the model treats it as the latest user
     // instruction, not optional context.
     turns.add(ChatTurn('user', impPrompt));
@@ -2424,8 +2819,13 @@ class _ChatScreenState extends State<ChatScreen> {
       // by message streams, but we redirect chunks into the input field.
       _streamMessageId = null;
     });
-    await GenerationKeepAlive.start(); // Wave BM
+    await _keepAliveStart(); // Wave BM
     try {
+      // chat-core-1-10: cancel any prior subscription before re-arming
+      // (mirrors `_runGenerationInto`'s audit-C2 guard) for defense in depth
+      // against a live-stream / `_generating==false` desync.
+      await _streamSub?.cancel();
+      _streamSub = null;
       _streamSub = streamChatCompletion(
         provider: provider,
         settings: store.modelSettings,
@@ -2451,7 +2851,7 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         },
         onError: (e) {
-          unawaited(GenerationKeepAlive.stop()); // Wave BM
+          _keepAliveStop(); // Wave BM
           if (mounted) {
             setState(() => _generating = false);
             messenger.showSnackBar(
@@ -2460,7 +2860,7 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         },
         onDone: () {
-          unawaited(GenerationKeepAlive.stop()); // Wave BM
+          _keepAliveStop(); // Wave BM
           if (!mounted) return;
           setState(() => _generating = false);
           // Wave CY.18.153: authoritative final strip — reasoning blocks +
@@ -2479,6 +2879,11 @@ class _ChatScreenState extends State<ChatScreen> {
             );
           }
           _inputFocus.requestFocus();
+          // chat-core-1-02: invoked for parity across completion paths. An
+          // Impersonate only writes to the input box (no new char turn), so the
+          // chain's own guards make this a cheap no-op — but it keeps the
+          // per-turn scene-bg / memory re-check consistent if state changed.
+          _runAutoMemoryChain();
         },
       );
     } catch (e) {
@@ -2487,6 +2892,213 @@ class _ChatScreenState extends State<ChatScreen> {
         SnackBar(content: Text('Impersonate failed: $e')),
       );
     }
+  }
+
+  /// Guide (Part 2): shared one-line prompt for a guidance instruction.
+  /// Returns the trimmed text, or null if the user cancelled / left it blank.
+  /// Used by both "Guide the reply" (arm for next Send) and "Regenerate with a
+  /// guide". The text is transient — the caller passes it through the prompt
+  /// build for ONE generation; it is never written to history.
+  Future<String?> _promptGuideLine({
+    required String title,
+    required String hint,
+    String confirmLabel = 'Apply',
+  }) async {
+    final ctl = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: EmberColors.bgPanel,
+        title: Text(title),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          maxLines: 4,
+          minLines: 1,
+          textCapitalization: TextCapitalization.sentences,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (v) {
+            final t = v.trim();
+            if (t.isNotEmpty) Navigator.pop(ctx, t);
+          },
+          decoration: InputDecoration(
+            hintText: hint,
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final t = ctl.text.trim();
+              if (t.isEmpty) return;
+              Navigator.pop(ctx, t);
+            },
+            child: Text(confirmLabel),
+          ),
+        ],
+      ),
+    );
+    ctl.dispose(); // H-3: dispose the guide-line controller on dialog close.
+    final t = result?.trim();
+    return (t == null || t.isEmpty) ? null : t;
+  }
+
+  /// Guide (Part 2 — Action 1): arm a one-shot guide for the NEXT Send. Shows a
+  /// dismissible chip above the input bar; consumed (and cleared) by `_send`.
+  Future<void> _armGuideForReply() async {
+    final guide = await _promptGuideLine(
+      title: 'Guide the reply',
+      hint: 'How should the next reply go?',
+      confirmLabel: 'Arm guide',
+    );
+    if (guide == null || !mounted) return;
+    setState(() => _armedGuide = guide);
+  }
+
+  /// Guide (Part 2 — Action 2): prompt for a one-shot guide, then regenerate
+  /// [m] as a new variant with that guidance applied for this call only.
+  Future<void> _regenerateWithGuide(Chat chat, Message m) async {
+    if (_generating) return;
+    final guide = await _promptGuideLine(
+      title: 'Regenerate with a guide',
+      hint: 'Steer this re-roll (e.g. "make her more reluctant")',
+      confirmLabel: 'Regenerate',
+    );
+    if (guide == null || !mounted) return;
+    await _regenerateMessage(chat, m, guide: guide);
+  }
+
+  /// Guide (Part 2 — Action 3): the "Guide my message" sheet. Collects an
+  /// optional outline (pre-filled with the current input draft) + a narrative
+  /// perspective, then returns both. Returns null if the user cancelled. The
+  /// outline is transient — it only seeds the model and is never persisted.
+  Future<({String? outline, GuidePerspective perspective})?>
+      _promptGuidedImpersonation({
+    required String initialOutline,
+    required GuidePerspective initialPerspective,
+  }) async {
+    final outlineCtl = TextEditingController(text: initialOutline);
+    var perspective = initialPerspective;
+    final result = await showModalBottomSheet<
+        ({String? outline, GuidePerspective perspective})>(
+      context: context,
+      backgroundColor: EmberColors.bgPanel,
+      isScrollControlled: true,
+      builder: (sheet) => StatefulBuilder(
+        builder: (sheet, setLocal) => Padding(
+          // Lift the sheet above the keyboard when the outline field focuses.
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 16,
+            bottom: 16 + MediaQuery.viewInsetsOf(sheet).bottom,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Guide my message',
+                  style: TextStyle(
+                    color: EmberColors.textHigh,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Jot a rough outline and the model expands it into a full '
+                  'message in your voice — or leave it blank to have it draft '
+                  'one for you. It lands in the input box to review before you '
+                  'send.',
+                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: outlineCtl,
+                  autofocus: true,
+                  minLines: 2,
+                  maxLines: 6,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'Outline (optional)',
+                    hintText: 'e.g. refuse the offer, but leave the door open',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'Perspective',
+                  style: TextStyle(
+                      color: EmberColors.textMid, fontSize: 12),
+                ),
+                const SizedBox(height: 6),
+                SegmentedButton<GuidePerspective>(
+                  segments: const [
+                    ButtonSegment(
+                        value: GuidePerspective.first, label: Text('First')),
+                    ButtonSegment(
+                        value: GuidePerspective.second, label: Text('Second')),
+                    ButtonSegment(
+                        value: GuidePerspective.third, label: Text('Third')),
+                  ],
+                  selected: {perspective},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (s) =>
+                      setLocal(() => perspective = s.first),
+                  style: ButtonStyle(
+                    backgroundColor:
+                        WidgetStateProperty.resolveWith((states) {
+                      return states.contains(WidgetState.selected)
+                          ? EmberColors.primary
+                          : EmberColors.bgElevated;
+                    }),
+                    foregroundColor:
+                        WidgetStateProperty.resolveWith((states) {
+                      return states.contains(WidgetState.selected)
+                          ? Colors.white
+                          : EmberColors.textMid;
+                    }),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(sheet),
+                      child: const Text('Cancel'),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      onPressed: () {
+                        final o = outlineCtl.text.trim();
+                        Navigator.pop(
+                          sheet,
+                          (
+                            outline: o.isEmpty ? null : o,
+                            perspective: perspective,
+                          ),
+                        );
+                      },
+                      child: const Text('Write it'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    outlineCtl
+        .dispose(); // H-3: dispose the outline controller on sheet close.
+    return result;
   }
 
   Future<void> _promptAuxAndAdd(
@@ -2525,6 +3137,9 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+    // chat-core-2-09: dispose the dialog-local controller on close (mirrors
+    // the preset switcher's quickEditCtl) so each open doesn't leak one.
+    ctl.dispose();
   }
 
 
@@ -2668,37 +3283,37 @@ class _ChatScreenState extends State<ChatScreen> {
                           .replaceAll('{{char}}',
                               responder?.name ?? 'the character')
                           .replaceAll('{{user}}', userName);
-                      final sys = StringBuffer();
-                      if (responder != null) {
-                        sys.writeln('You are ${responder.name}.');
-                        if (responder.description.isNotEmpty) {
-                          sys.writeln(
-                              '\nDescription:\n${responder.description}');
-                        }
-                        if (responder.personality.isNotEmpty) {
-                          sys.writeln(
-                              '\nPersonality:\n${responder.personality}');
-                        }
-                      }
-                      if (persona != null) {
-                        sys.writeln(
-                            '\nUser persona — ${persona.name}: ${persona.description}');
-                        if (persona.dialogueExamples
-                            .trim()
-                            .isNotEmpty) {
-                          sys.writeln(
-                              '\n${persona.name}\'s dialogue examples:\n${persona.dialogueExamples.trim()}');
-                        }
-                      }
-                      sys.writeln(
-                          '\nWrite a fresh opening message — vivid, in-character, that begins with this scenario:\n\n$filled');
-                      sys.writeln(
-                          '\nUse *italics* for actions and "quotes" for dialogue. Output ONLY the opening message, no meta or explanation.');
+                      // chat-core-2-05 (deferred portion): collect the SAME
+                      // bound-lorebook hits the ongoing chat injects, plus the
+                      // active preset's assembled main prompt, so the generated
+                      // opener doesn't contradict the lore/preset every later
+                      // turn enforces. Mirrors the builder's collect+scan
+                      // (pure, cheap).
+                      final attached = collectBoundLorebooks(
+                        chat: chat,
+                        persona: persona,
+                        lookupBook: store.lorebookById,
+                        lookupCharacter: store.characterById,
+                        responderId: responderId,
+                      );
+                      final loreScan =
+                          scanLorebookHits(attached, chat.messages);
+                      final activePreset = store.activePreset;
+                      final presetMain = activePreset == null
+                          ? ''
+                          : assemblePreset(activePreset).systemPrompt;
+                      final sys = buildFillInOpenerPrompt(
+                        responder: responder,
+                        persona: persona,
+                        filledScenario: filled,
+                        loreHits: loreScan.hits,
+                        presetMainPrompt: presetMain,
+                      );
                       Navigator.pop(ctx);
                       _streamFillInVariant(
                         chat,
                         responderId,
-                        sys.toString().trim(),
+                        sys,
                         provider,
                         // Wave CY.11: keep the raw scenario in the
                         // chat history as an OOC above the first
@@ -2717,6 +3332,10 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
     );
+    // chat-core-2-09: dispose the dialog-local controllers on close (mirrors
+    // the preset switcher's quickEditCtl) so each open doesn't leak two.
+    scenarioCtl.dispose();
+    customCtl.dispose();
   }
 
   /// Push the text as a new variant of the first message (creates the
@@ -2736,9 +3355,24 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     final first = chat.messages.first;
+    // chat-core-2-01 (2026-06-04): before selecting the new greeting variant,
+    // stash the currently-visible downstream tail under the OLD variant and
+    // hide it — exactly the dance selectVariant / _regenerateMessage /
+    // _streamFillInVariant do. Without it the old conversation tail stays
+    // physically below the new (empty) greeting variant; a later swipe then
+    // stashes that foreign tail under the WRONG variant and the original
+    // greeting's whole conversation appears to vanish (recoverable, but
+    // mis-associated). Snapshotting it here keeps each variant's tail with the
+    // variant it belongs to, so the new custom greeting opens on a clean slate.
+    if (chat.messages.length > 1) {
+      final tail = chat.messages.sublist(1);
+      first.downstreamByVariant[first.selectedVariant] =
+          List<Message>.from(tail);
+      chat.messages.removeRange(1, chat.messages.length);
+    }
     first.variants.add(text);
     first.selectedVariant = first.variants.length - 1;
-    store.notifyAndPersist();
+    store.touchChat(chat); // F1: greeting-variant edit syncs
   }
 
   /// Wave CY.10: stream a new opening-message variant into the chat
@@ -2792,7 +3426,7 @@ class _ChatScreenState extends State<ChatScreen> {
         final gi = chat.messages.indexWhere((x) => x.id == m.id);
         if (gi >= 0) {
           chat.messages.insert(gi + 1, oocMsg);
-          store.notifyAndPersist();
+          store.touchChat(chat); // F1: OOC-message insert syncs
         }
       }
     } else {
@@ -2814,7 +3448,7 @@ class _ChatScreenState extends State<ChatScreen> {
       // owns it and switching greetings no longer leaks it across branches.
       if (oocMsg != null) {
         chat.messages.insert(firstCharIdx + 1, oocMsg);
-        store.notifyAndPersist();
+        store.touchChat(chat); // F1: OOC-message insert syncs
       }
     }
     _streamMessageId = firstId;
@@ -2824,9 +3458,14 @@ class _ChatScreenState extends State<ChatScreen> {
       _streamBuffer = '';
     });
     _scrollToBottom();
-    await GenerationKeepAlive.start();
+    await _keepAliveStart();
     final pinnedVariant = vIdx;
     try {
+      // chat-core-1-10: cancel any prior subscription before re-arming
+      // (mirrors `_runGenerationInto`'s audit-C2 guard) for defense in depth
+      // against a live-stream / `_generating==false` desync.
+      await _streamSub?.cancel();
+      _streamSub = null;
       _streamSub = streamChatCompletion(
         provider: provider,
         settings: store.modelSettings,
@@ -2855,17 +3494,22 @@ class _ChatScreenState extends State<ChatScreen> {
         // server) and render a friendly snackbar per kind.
         onError: (e) => _finishWithError(e.toString(), originalError: e),
         onDone: () {
-          unawaited(GenerationKeepAlive.stop());
+          _keepAliveStop();
           if (!mounted) return;
           setState(() {
             _generating = false;
             _streamMessageId = null;
           });
           context.read<AppStore>().flushPersist();
+          // chat-core-1-02: re-check the post-turn memory pipeline after a
+          // Fill-In opener too (self-guarded/idempotent — see
+          // _runAutoMemoryChain). On an empty chat this seeds the per-turn
+          // scene-background classifier for the brand-new greeting.
+          _runAutoMemoryChain();
         },
       );
     } catch (e) {
-      unawaited(GenerationKeepAlive.stop());
+      _keepAliveStop();
       // Wave CY.18.45: same typed-error passthrough as the streaming
       // listener — caller-side classification stays intact.
       _finishWithError(e.toString(), originalError: e);
@@ -2919,7 +3563,7 @@ class _ChatScreenState extends State<ChatScreen> {
         if (rest.trim().isEmpty) return false;
         final beat = roadmap.appendStoryBeat(chat, rest);
         if (beat != null) {
-          store.notifyAndPersist();
+          store.touchChat(chat); // F1: story beat add syncs
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Added to script')),
           );
@@ -3016,7 +3660,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// the source variant (so swiping back restores it) and stream a new
   /// variant in place. Non-destructive — the old continuation is preserved
   /// on the variant it belonged to.
-  Future<void> _regenerateMessage(Chat chat, Message m) async {
+  /// [guide], when set (and the Guide feature is enabled), is the ONE-SHOT
+  /// guidance applied to THIS regeneration only ("Regenerate with a guide").
+  /// It is threaded into the prompt build for this single call and never saved
+  /// to history — the resulting variant is just normal text.
+  Future<void> _regenerateMessage(Chat chat, Message m, {String? guide}) async {
     if (_generating) return;
     _clearPendingFallback(); // audit C1
     if (m.kind != MessageKind.char) return;
@@ -3049,10 +3697,16 @@ class _ChatScreenState extends State<ChatScreen> {
           'No provider configured. Open "More → API Connections".');
       return;
     }
-    final turns = _buildTurns(store, chat);
+    final turns = _buildTurns(store, chat, guide: guide);
     final pinnedVariant = _streamVariantIndex;
-    await GenerationKeepAlive.start(); // Wave BM
+    await _keepAliveStart(); // Wave BM
     try {
+      // chat-core-1-10: cancel any prior subscription before re-arming
+      // (mirrors `_runGenerationInto`'s audit-C2 guard) so a desync where a
+      // stream is live while `_generating` is false can't leak/race the old
+      // sub into a stale slot.
+      await _streamSub?.cancel();
+      _streamSub = null;
       _streamSub = streamChatCompletion(
         provider: provider,
         settings: store.modelSettings,
@@ -3078,7 +3732,7 @@ class _ChatScreenState extends State<ChatScreen> {
         // server) and render a friendly snackbar per kind.
         onError: (e) => _finishWithError(e.toString(), originalError: e),
         onDone: () {
-          unawaited(GenerationKeepAlive.stop()); // Wave BM
+          _keepAliveStop(); // Wave BM
           if (!mounted) return;
           setState(() {
             _generating = false;
@@ -3087,10 +3741,16 @@ class _ChatScreenState extends State<ChatScreen> {
           // Flush the debounced state — disk is idle now, save the final
           // text so a crash doesn't lose the just-generated variant.
           context.read<AppStore>().flushPersist();
+          // chat-core-1-02: re-check the post-turn memory pipeline after a
+          // Regenerate / Regenerate-with-guide too (self-guarded/idempotent —
+          // see _runAutoMemoryChain). A regen adds a variant rather than a new
+          // message, so the summariser is a no-op, but the per-turn scene-bg
+          // classifier refreshes for the freshly-selected variant.
+          _runAutoMemoryChain();
         },
       );
     } catch (e) {
-      unawaited(GenerationKeepAlive.stop()); // Wave BM
+      _keepAliveStop(); // Wave BM
       _finishWithError(e.toString());
     }
   }
@@ -3163,6 +3823,8 @@ class _ChatScreenState extends State<ChatScreen> {
               fallback: character?.name ?? '?',
               radius: 16,
               tappableLightbox: true,
+              // Non-destructive Recrop: tap shows the full uncropped image.
+              fullImageUrl: character?.avatarOriginal ?? character?.avatar,
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -3170,14 +3832,30 @@ class _ChatScreenState extends State<ChatScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Completeness-gaps: show the manual chat title when set,
+                  // else the character name (unchanged behaviour for untitled
+                  // chats). When a title overrides it, the character name moves
+                  // to the subtitle so identity isn't lost.
                   Text(
-                    character?.name ?? 'Chat',
+                    chat.displayTitle(character?.name ?? 'Chat'),
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
+                  if (chat.title != null &&
+                      chat.title!.trim().isNotEmpty &&
+                      (character?.name ?? '').isNotEmpty)
+                    Text(
+                      character!.name,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: EmberColors.textMid,
+                        height: 1.2,
+                      ),
+                    ),
                   // Wave CY.14: show the active (chat-bound) persona
                   // under the chat name so the user always sees who
                   // they're playing as. Hidden if there's no persona
@@ -3482,6 +4160,15 @@ class _ChatScreenState extends State<ChatScreen> {
               disabled: _generating,
             ),
           _ChatSizeBanner(messages: chat.messages),
+          // Guide (Part 2 — Action 1): the dismissible "armed guide" chip. Only
+          // shows when a one-shot guide is armed AND the feature is enabled.
+          // It's a transient UI cue — the guide lives only in `_armedGuide`
+          // (State), never in the chat model.
+          if (_armedGuide != null && store.guideSettings.enabled)
+            _ArmedGuideChip(
+              guide: _armedGuide!,
+              onCancel: () => setState(() => _armedGuide = null),
+            ),
           _InputBar(
             controller: _inputCtl,
             focusNode: _inputFocus,
@@ -3490,6 +4177,10 @@ class _ChatScreenState extends State<ChatScreen> {
             onStop: _stop,
             onImpersonate: _impersonateMe,
             onAddOOC: () => _promptAuxAndAdd(chat, MessageKind.ooc, 'OOC'),
+            onGuideReply:
+                store.guideSettings.enabled ? _armGuideForReply : null,
+            onGuideMessage:
+                store.guideSettings.enabled ? _guideMyMessage : null,
           ),
         ],
             ),
@@ -3646,23 +4337,34 @@ class _MessageBubbleState extends State<_MessageBubble> {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: EmberColors.stroke),
             ),
-            child: Text(
-              // Wave CY.18.157: OOC/scene/system bubbles also substitute
-              // {{user}}/{{char}} (the normal ChatText path already does) —
-              // without this the placeholder rendered literally here, which
-              // is exactly the bug Gui hit on an OOC scene-setup line.
-              _fillNamePlaceholders(
-                m.text,
-                charName: widget.character?.name,
-                personaName: widget.persona?.name,
-              ),
-              style: const TextStyle(
-                color: EmberColors.textMid,
-                fontStyle: FontStyle.italic,
-                fontSize: 13,
-              ),
-              textAlign: TextAlign.center,
-            ),
+            // The "Edit text" action flips edit mode for OOC/scene/system
+            // bubbles too — show the inline editor on the RAW text (the name
+            // substitution below is display-only, so edit the stored text just
+            // like the normal user/char branch does).
+            child: widget.isEditing
+                ? _InlineMessageEditor(
+                    initialText: m.text,
+                    onCommit: widget.onCommitEdit ?? (_) {},
+                    onCancel: widget.onCancelEdit ?? () {},
+                  )
+                : Text(
+                    // Wave CY.18.157: OOC/scene/system bubbles also substitute
+                    // {{user}}/{{char}} (the normal ChatText path already
+                    // does) — without this the placeholder rendered literally
+                    // here, which is exactly the bug Gui hit on an OOC
+                    // scene-setup line.
+                    _fillNamePlaceholders(
+                      m.text,
+                      charName: widget.character?.name,
+                      personaName: widget.persona?.name,
+                    ),
+                    style: const TextStyle(
+                      color: EmberColors.textMid,
+                      fontStyle: FontStyle.italic,
+                      fontSize: 13,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
           ),
         ),
       );
@@ -3851,12 +4553,16 @@ class _MessageBubbleState extends State<_MessageBubble> {
             fallback: persona?.name ?? 'U',
             radius: 16,
             tappableLightbox: true,
+            // Non-destructive Recrop: tap shows the full uncropped image.
+            fullImageUrl: persona?.avatarOriginal ?? persona?.avatar,
           )
         : AvatarBubble(
             dataUrl: widget.character?.avatar,
             fallback: widget.character?.name ?? '?',
             radius: 16,
             tappableLightbox: true,
+            fullImageUrl:
+                widget.character?.avatarOriginal ?? widget.character?.avatar,
           );
 
     final variantCount = m.variants.length;
@@ -3941,7 +4647,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
     // blocks, end-of-scene horizontal rules) — so the pill flashed
     // false-positive on a lot of clean replies. Continue still lives
     // in the long-press menu where it's user-triggered intentionally.
-    Widget? continuePill() => null;
+    // chat-core-1-13 (2026-06-04): removed the dead `continuePill()` helper
+    // (always returned null) and its call site below.
 
     // Compose the bubble with optional lateral arrow chips overlapping
     // its right edge (HTML positions them like floating affordances on
@@ -4041,7 +4748,6 @@ class _MessageBubbleState extends State<_MessageBubble> {
               ),
               child: variantCounter(),
             ),
-          if (continuePill() != null) continuePill()!,
           // Footer row: assistant messages get token estimate + (optional)
           // per-message reasoning toggle + #N. User and aux messages get
           // just #N on their respective side. All hidden mid-stream and
@@ -4618,6 +5324,13 @@ class _InputBar extends StatelessWidget {
   final VoidCallback onStop;
   final VoidCallback onImpersonate;
   final VoidCallback onAddOOC;
+  // Guide (Part 2): "Guide the reply" menu entry. Only surfaced when the
+  // feature is enabled (callback non-null).
+  final VoidCallback? onGuideReply;
+  // "Guide my message" — the guided upgrade of Impersonate (outline +
+  // perspective). DECOUPLED from one-tap "Impersonate me". Only surfaced when
+  // the Guide feature is enabled (callback non-null).
+  final VoidCallback? onGuideMessage;
 
   const _InputBar({
     required this.controller,
@@ -4627,6 +5340,8 @@ class _InputBar extends StatelessWidget {
     required this.onStop,
     required this.onImpersonate,
     required this.onAddOOC,
+    this.onGuideReply,
+    this.onGuideMessage,
   });
 
   // Wave CY.15: kebab is now driven by [PopupMenuButton] which
@@ -4656,15 +5371,42 @@ class _InputBar extends StatelessWidget {
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert,
                   color: EmberColors.textMid),
-              tooltip: 'Impersonate / OOC',
+              tooltip: 'Guide / Impersonate / OOC',
               enabled: !generating,
               color: EmberColors.bgElevated,
               onSelected: (value) {
+                if (value == 'guide') onGuideReply?.call();
+                if (value == 'guidemsg') onGuideMessage?.call();
                 if (value == 'impersonate') onImpersonate();
                 if (value == 'ooc') onAddOOC();
               },
-              itemBuilder: (_) => const [
-                PopupMenuItem<String>(
+              itemBuilder: (_) => [
+                // Guide (Part 2 — Action 1): arm a one-shot guide for the next
+                // Send. Only present when the Guide feature is enabled.
+                if (onGuideReply != null)
+                  const PopupMenuItem<String>(
+                    value: 'guide',
+                    child: Row(children: [
+                      Icon(Icons.explore_outlined,
+                          size: 16, color: EmberColors.textMid),
+                      SizedBox(width: 10),
+                      Text('Guide the reply'),
+                    ]),
+                  ),
+                // "Guide my message" — guided Impersonate (outline +
+                // perspective). Separate item from one-tap Impersonate below;
+                // only present when the Guide feature is enabled.
+                if (onGuideMessage != null)
+                  const PopupMenuItem<String>(
+                    value: 'guidemsg',
+                    child: Row(children: [
+                      Icon(Icons.edit_note_outlined,
+                          size: 16, color: EmberColors.textMid),
+                      SizedBox(width: 10),
+                      Text('Guide my message'),
+                    ]),
+                  ),
+                const PopupMenuItem<String>(
                   value: 'impersonate',
                   child: Row(children: [
                     Icon(Icons.person_outline,
@@ -4673,7 +5415,7 @@ class _InputBar extends StatelessWidget {
                     Text('Impersonate me'),
                   ]),
                 ),
-                PopupMenuItem<String>(
+                const PopupMenuItem<String>(
                   value: 'ooc',
                   child: Row(children: [
                     Icon(Icons.chat_bubble_outline,
@@ -4888,7 +5630,7 @@ class _ChatSizeBannerState extends State<_ChatSizeBanner> {
             child: Text(
               hard
                   ? 'Chat ~$tokenLabel tokens — many models will reject this. Consider trimming old messages or starting a new chat.'
-                  : 'Chat ~$tokenLabel tokens — long-term memory will summarise soon, but cost-per-turn climbs from here.',
+                  : 'Chat ~$tokenLabel tokens — Checkpoints will summarise soon, but cost-per-turn climbs from here.',
               style: TextStyle(
                 color: hard
                     ? EmberColors.danger
@@ -4897,6 +5639,59 @@ class _ChatSizeBannerState extends State<_ChatSizeBanner> {
                 height: 1.3,
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Guide (Part 2 — Action 1): the dismissible "armed guide" cue rendered
+/// directly above the input bar. Shows the user that a one-shot guide is
+/// armed for their next Send and lets them cancel it (✕). The guide string is
+/// owned by the chat-screen State (`_armedGuide`) — this widget is purely a
+/// display + cancel affordance; it never touches the chat model.
+class _ArmedGuideChip extends StatelessWidget {
+  final String guide;
+  final VoidCallback onCancel;
+  const _ArmedGuideChip({required this.guide, required this.onCancel});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: EmberColors.primary.withValues(alpha: 0.12),
+        border: Border(
+          top: BorderSide(
+            color: EmberColors.primary.withValues(alpha: 0.35),
+          ),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
+      child: Row(
+        children: [
+          const Icon(Icons.explore_outlined,
+              color: EmberColors.primary, size: 14),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Guiding next reply: $guide',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: EmberColors.textHigh,
+                fontSize: 11,
+                height: 1.3,
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: onCancel,
+            tooltip: 'Cancel guide',
+            visualDensity: VisualDensity.compact,
+            iconSize: 16,
+            icon: const Icon(Icons.close, color: EmberColors.textMid),
           ),
         ],
       ),

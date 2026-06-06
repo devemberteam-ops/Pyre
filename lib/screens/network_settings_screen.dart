@@ -418,8 +418,10 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                   SwitchListTile(
                     value: store.uiPrefs.syncProviderKeys,
                     onChanged: (v) {
-                      store.uiPrefs.syncProviderKeys = v;
-                      store.notifyAndPersist();
+                      // S1: setSyncProviderKeys restamps provider mtimes on
+                      // enable so they re-ship to a receiver whose cursor has
+                      // already advanced (the inert-toggle bug).
+                      store.setSyncProviderKeys(v);
                       setState(() {});
                     },
                     title: const Text(

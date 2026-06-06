@@ -2,7 +2,7 @@
 //
 // Replaces the previous "Keyboard shortcuts" row in More (which just
 // opened the command palette) with a full configuration surface.
-// Three responsibilities:
+// Two responsibilities:
 //
 //   1. Show each remappable shortcut with its current binding chip
 //      and let the user tap to capture a new key combo.
@@ -10,9 +10,10 @@
 //      as read-only rows (for discoverability — chat input handles
 //      them directly via raw key events, not through the global
 //      Shortcuts map).
-//   3. Host the "Wide desktop layout" toggle that used to live in
-//      the main More card — the user asked to bundle layout +
-//      shortcuts under one desktop-tweaks screen.
+//
+// (The "Wide desktop layout" toggle used to live here too, but moved to
+// DisplaySettingsScreen — it's a display preference, so it belongs next
+// to "App text size" rather than in a shortcuts screen.)
 //
 // Capture UX: tap a row → modal opens with a single instruction
 // ("Press a key combination, or Esc to cancel"). A KeyboardListener
@@ -122,43 +123,6 @@ class DesktopShortcutsScreen extends StatelessWidget {
                   binding: 'Shift + Enter',
                 ),
               ],
-            ),
-          ),
-          const SizedBox(height: 20),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(4, 4, 4, 8),
-            child: Text(
-              'Layout',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: EmberColors.textDim,
-                letterSpacing: 0.4,
-              ),
-            ),
-          ),
-          Card(
-            margin: EdgeInsets.zero,
-            child: SwitchListTile(
-              value: store.uiPrefs.desktopWideLayout,
-              onChanged: store.setDesktopWideLayout,
-              title: const Text(
-                'Wide desktop layout',
-                style:
-                    TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-              ),
-              subtitle: const Text(
-                'Off: same mobile layout, centered in a narrow column '
-                '(phone-in-a-window).\n'
-                'On: side rail + wider content. Recommended for larger '
-                'windows.',
-                style: TextStyle(
-                  color: EmberColors.textMid,
-                  fontSize: 12,
-                  height: 1.4,
-                ),
-              ),
-              activeThumbColor: EmberColors.primary,
             ),
           ),
         ],

@@ -1,11 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../services/attachment_store.dart';
 import '../services/token_estimate.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
@@ -68,6 +68,11 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   // preserved through Save because `Character.fromJson(_source().toJson())`
   // copies them automatically; we just never overwrite from form state.
   String? _avatar;
+  /// Non-destructive Recrop: the UNCROPPED original avatar ref (or null when
+  /// the avatar was never cropped — then `_avatar` IS the full image). Seeded
+  /// from the source character, set on the FIRST recrop (to the pre-crop
+  /// `_avatar`), and flushed into the Character on _save → _composeFromForm.
+  String? _avatarOriginal;
   /// Wave CC: bound lorebook ids (a mutable copy of the source
   /// character's list). Edited inline via the LorebookBindingSection
   /// chip UI; flushed back into the Character on _save.
@@ -104,6 +109,9 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
           ];
     creatorNotes = TextEditingController(text: c.creatorNotes);
     _avatar = c.avatar;
+    // Non-destructive Recrop: carry the preserved original (null = never
+    // cropped, `_avatar` is the full image).
+    _avatarOriginal = c.avatarOriginal;
     // Wave CC: local copy of bound lorebook ids, mutated by the
     // LorebookBindingSection's onChanged and flushed back into the
     // character on _save → _composeFromForm.
@@ -122,6 +130,19 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   @override
   void dispose() {
     _draftDebounce?.cancel();
+    // H-2: dispose every field controller this State created. Each also
+    // holds a `_scheduleDraftSave` listener (draft mode only) whose closure
+    // captures `this` — remove it first so the State can be GC'd. The
+    // greeting list grows/shrinks at runtime; dispose whatever's left.
+    for (final c in <TextEditingController>[
+      name, tagline, description, personality, scenario, firstMes,
+      mesExample, systemPrompt, postHistory, creator, characterVersion,
+      tagsCsv, creatorNotes,
+      ..._greetingCtls,
+    ]) {
+      c.removeListener(_scheduleDraftSave);
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -184,7 +205,13 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
       ..lorebookIds = List<String>.from(_lorebookIds)
       // Wave CY.18.128: flush the locally-edited gallery refs.
       ..gallery = List<String>.from(_gallery)
-      ..avatar = _avatar;
+      ..avatar = _avatar
+      // Non-destructive Recrop: flush the preserved original alongside the
+      // displayed avatar. NOTE: the `fromJson(toJson())` base already carries
+      // the source's avatarOriginal, but picking a NEW avatar / "Use as
+      // avatar" resets the crop relationship, so we always re-assert the
+      // tracked value (which those paths clear → null).
+      ..avatarOriginal = _avatarOriginal;
   }
 
   /// Wave BG: debounced auto-save to the draft. Only fires in draft
@@ -230,8 +257,16 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
     // a crop modal on every pick, which destroyed the original — bad
     // when the user picked a botbooru bot that's meant to be shown
     // whole. Recrop stays available as an explicit opt-in.
+    // B-2 / H-6: externalise into the AttachmentStore (pyre:// ref) instead of
+    // inline base64 (web falls back to a data URL).
+    final ref = await externalizeImageBytes(bytes);
+    if (!mounted) return;
     setState(() {
-      _avatar = 'data:image/png;base64,${base64Encode(bytes)}';
+      _avatar = ref;
+      // Non-destructive Recrop: a freshly picked image IS the full image, so
+      // clear any preserved original from a previous avatar (a later recrop
+      // re-seeds it from this new full image).
+      _avatarOriginal = null;
     });
   }
 
@@ -239,19 +274,29 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   /// original card avatar came in misaligned and the user just wants to
   /// reposition without picking a new file.
   Future<void> _recropAvatar() async {
-    final url = _avatar;
-    if (url == null || !url.startsWith('data:')) return;
-    final comma = url.indexOf(',');
-    if (comma < 0) return;
+    // Non-destructive Recrop: crop from the ORIGINAL when one exists so a
+    // SECOND recrop re-crops the full image, never a crop-of-a-crop.
+    final source = _avatarOriginal ?? _avatar;
+    if (source == null || source.isEmpty) return;
     try {
-      final bytes = base64Decode(url.substring(comma + 1));
+      // B-2 / H-6: the avatar is now usually a `pyre://` ref (externalised on
+      // pick), so resolve bytes via the shared helper rather than assuming a
+      // `data:` URL. The recropped result is re-externalised to a fresh ref.
+      final bytes = await resolveAvatarBytes(source);
+      if (bytes == null || bytes.isEmpty) return;
       if (!mounted) return;
       final cropped = await cropAvatar(context, bytes);
       if (cropped == null) return;
+      final ref = await externalizeImageBytes(cropped);
+      if (!mounted) return;
       setState(() {
-        _avatar = 'data:image/png;base64,${base64Encode(cropped)}';
+        // First recrop: preserve the CURRENT full avatar as the original
+        // (it's already a pyre:// ref / data URL — copy the ref, don't
+        // re-externalize the same bytes). Later recrops keep that original.
+        _avatarOriginal ??= _avatar;
+        _avatar = ref;
       });
-    } catch (_) {/* ignore — bad base64 */}
+    } catch (_) {/* ignore — bad image data */}
   }
 
   void _save() {
@@ -377,6 +422,8 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                   fallback: name.text.isEmpty ? '?' : name.text,
                   radius: 44,
                   tappableLightbox: true,
+                  // Non-destructive Recrop: tapping shows the full image.
+                  fullImageUrl: _avatarOriginal ?? _avatar,
                 ),
                 const SizedBox(height: 8),
                 Row(
@@ -389,7 +436,10 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                     ),
                     const SizedBox(width: 8),
                     TextButton(
-                      onPressed: _avatar != null && _avatar!.startsWith('data:')
+                      // B-2 / H-6: enable Recrop for any avatar with bytes we
+                      // can resolve — a `data:` URL (web / legacy) OR a
+                      // `pyre://` ref (the new externalised form).
+                      onPressed: _avatar != null && _avatar!.isNotEmpty
                           ? _recropAvatar
                           : null,
                       child: const Text('Recrop'),
@@ -487,7 +537,12 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
             onChanged: (next) => setState(() => _gallery = next),
             onUseAsAvatar: (i) {
               if (i < 0 || i >= _gallery.length) return;
-              setState(() => _avatar = _gallery[i]);
+              setState(() {
+                _avatar = _gallery[i];
+                // Non-destructive Recrop: the gallery image becomes the new
+                // full avatar; drop any stale preserved original.
+                _avatarOriginal = null;
+              });
             },
           ),
           const SizedBox(height: 4),
@@ -844,6 +899,8 @@ class _GreetingsEditor extends StatelessWidget {
                           tooltip: 'Remove this greeting',
                           onPressed: controllers.length > 1
                               ? () {
+                                  // H-2: drop any autosave listener before
+                                  // disposing the removed greeting controller.
                                   controllers[i].dispose();
                                   controllers.removeAt(i);
                                   onChanged();

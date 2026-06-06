@@ -74,3 +74,15 @@ AssembledPreset assemblePreset(Preset p) {
     postHistory: after.join('\n\n'),
   );
 }
+
+/// H-8: does this preset support the in-chat "Quick edit system prompt"
+/// affordance?
+///
+/// That quick-edit writes [Preset.mainPrompt], but [assemblePreset] IGNORES
+/// `mainPrompt` for MODULAR presets (it assembles from `promptBlocks`). So for
+/// a modular preset the quick-edit is a silent no-op — the user edits, sees a
+/// "Saved" toast, and the next message is byte-identical. Gate the affordance
+/// on this predicate: it is supported ONLY for FLAT presets (no blocks), where
+/// `mainPrompt` is the value actually sent. Modular presets are edited in the
+/// Presets screen (block editor).
+bool presetSupportsMainPromptQuickEdit(Preset p) => p.promptBlocks.isEmpty;

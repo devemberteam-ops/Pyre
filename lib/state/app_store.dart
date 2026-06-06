@@ -12,10 +12,12 @@ import '../services/attachment_refs.dart';
 import '../services/attachment_store.dart';
 import '../services/chat_api.dart' show warmUpProvider;
 import '../services/example_seed.dart';
+import '../services/live_sheet.dart' show ensureLiveSheetSeed;
 import '../services/provider_fallback.dart';
 import '../services/regex_rules.dart';
 import '../services/secure_keys.dart';
 import '../services/store_backend.dart';
+import '../services/token_estimate.dart';
 
 class AppStore extends ChangeNotifier {
   // Wave CY.18.63: persistence is now behind a `StoreBackend` interface.
@@ -86,6 +88,13 @@ class AppStore extends ChangeNotifier {
   /// avatars or card creator fields). Null when never set.
   String? botbooruAvatar;
 
+  /// Non-destructive Recrop: the UNCROPPED original of [botbooruAvatar] (a
+  /// `pyre://attachment/<hash>` ref / data URL), or null when the profile
+  /// avatar was never cropped (then [botbooruAvatar] IS the full image). Same
+  /// rationale as [Character.avatarOriginal]: recropping the profile picture
+  /// must not destroy the full image. Omitted from JSON when null.
+  String? botbooruAvatarOriginal;
+
   /// Wave CY.18.30: free-form "about me" from the user, written in
   /// their own voice.
   ///
@@ -120,6 +129,22 @@ class AppStore extends ChangeNotifier {
   /// deleted (the Profile renderer falls back gracefully).
   String? botbooruFeaturedCharacterId;
 
+  /// Watermark for the BotBooru PROFILE unit. The profile fields
+  /// (username / avatar (+ original) / about-me / title / pronouns / featured
+  /// character) sync together as ONE logical record under Last-Writer-Wins,
+  /// keyed by this single mtime — see [syncedBotbooruProfileToJson] /
+  /// [applySyncedBotbooruProfile]. Bumped via [_touchBotbooruProfile] on every
+  /// profile mutation. 0 = never touched (a fresh install), which makes the
+  /// FIRST incoming sync (any mtime > 0) win — correct, since a never-edited
+  /// device has nothing of its own worth keeping.
+  ///
+  /// Modelled EXACTLY on [settingsMtime]: the profile is a small, self-contained
+  /// record that changes on its own cadence, so a dedicated watermark means a
+  /// profile edit can't be clobbered by an unrelated (older) settings sync and
+  /// vice-versa. `installedAt` is NOT part of this unit — it's a per-device stat
+  /// ("X days on Pyre"), not identity.
+  int botbooruProfileMtime = 0;
+
   /// Wave CY.18.36: timestamp of the first AppStore load on this
   /// device — used to compute "X days on Pyre" stat. Set ONCE on
   /// fresh install when this field is missing from the loaded JSON;
@@ -152,6 +177,10 @@ class AppStore extends ChangeNotifier {
   /// simpler — sort + favorites only, no tag filter, no folders.
   String personaSortKey = 'recent';
 
+  /// Completeness-gaps: persisted collapse state of the Personas
+  /// Favorites section header (parity with [charFavoritesExpanded]).
+  bool personaFavoritesExpanded = true;
+
   /// Wave CY.18.39: latches to true the moment the user hits "Get
   /// started" on the welcome screen. Pre-Wave the onboarding gate
   /// was `providers.isEmpty` — meaning a user who tapped Skip without
@@ -183,19 +212,13 @@ class AppStore extends ChangeNotifier {
   /// check is unconditional and runs exactly once regardless.
   bool vesnaExamplePersonaSwept = false;
 
-  /// Wave CY.18.204: latches to true after the one-time migration that
-  /// adjusts persona defaults on an EXISTING install to match the new
-  /// fresh-install behaviour (Gui): un-favourite the seeded example Ren
-  /// persona, clear `activePersonaId` if it still points at that Ren, and
-  /// flip `askPersonaOnNewChat` to true. All three actions are
-  /// non-destructive/reversible; the flag just guarantees it runs once.
-  ///
-  /// Same persisted-flag pattern as [exampleContentSeeded] /
-  /// [vesnaExamplePersonaSwept]: read `?? false` in load(), written only
-  /// when true in _persist() (omit-when-false). Fresh installs already get
-  /// the right defaults from the seeder + the model defaults, so the
-  /// migration is effectively a no-op there — but the flag still latches so
-  /// the check runs exactly once regardless.
+  /// Wave CY.18.204: VESTIGIAL — the migration this flag guarded was removed
+  /// (audit datamodel-appstore-macros-slash-10). Its corrective pass matched
+  /// the seeded Ren persona by `name == 'Ren'`, but the real persona name is
+  /// "Ren Brennan", so it never fired; [personaDefaultsAdjustedV3] supersedes
+  /// it with the corrected match. The field is KEPT (read `?? false` in load(),
+  /// written-when-true in _persist()) purely for back-compat so existing blobs
+  /// that carry it round-trip unchanged — nothing reads it for behaviour now.
   bool personaDefaultsAdjustedV2 = false;
 
   /// Wave CY.18.209: SUPERSEDES the Wave-204 [personaDefaultsAdjustedV2]
@@ -216,6 +239,17 @@ class AppStore extends ChangeNotifier {
   /// Same persisted-flag pattern: read `?? false` in load(), written only
   /// when true in _persist() (omit-when-false).
   bool personaDefaultsAdjustedV3 = false;
+
+  /// Pyre 1.1: latches to true after the one-time seed of the bundled DEFAULT
+  /// regex rule(s) (see [seedDefaultRegexRulesIfNeeded]). The default rule
+  /// unwraps italic asterisks that hug spoken dialogue (`*"hi"*` → `"hi"`) so
+  /// it renders as prominent dialogue rather than faint narration. Unlike the
+  /// example-card seed (fresh-install-only), this runs once for BOTH fresh
+  /// installs AND upgrades — every user should get the formatting fix — and
+  /// once latched it never re-adds the rule, so a user who deletes it stays
+  /// rid of it. Same persisted-flag pattern as [exampleContentSeeded]:
+  /// read `?? false` in load(), written only when true in _persist().
+  bool defaultRegexRulesSeeded = false;
 
   /// Wave CY.18.40: per-model load errors captured during `load()`.
   /// Each entry is a human-readable string describing what failed
@@ -247,6 +281,7 @@ class AppStore extends ChangeNotifier {
   MemorySettings memorySettings = MemorySettings();
   LiveSheetSettings liveSheetSettings = LiveSheetSettings();
   ScriptSettings scriptSettings = ScriptSettings();
+  GuideSettings guideSettings = GuideSettings();
   UiPrefs uiPrefs = UiPrefs();
 
   /// One CreatorSession per in-progress card build. The drawer in the
@@ -271,6 +306,63 @@ class AppStore extends ChangeNotifier {
   /// Additive on the wire: a peer that doesn't send `tombstones` (older
   /// build) is treated as an empty map everywhere.
   final Map<String, int> tombstones = {};
+
+  /// SYNC W3: watermark for the SETTINGS unit. The usage settings
+  /// (model/chat/memory/liveSheet/script/guide) and the three provider ROLE
+  /// pointers (active/creator/vision) all sync together as ONE logical record
+  /// under Last-Writer-Wins, keyed by this single mtime — see
+  /// [syncedSettingsToJson] / [applySyncedSettings]. Bumped via [_touchSettings]
+  /// on every mutation of a synced setting/pointer. 0 = never touched (a fresh
+  /// install), which makes the FIRST incoming sync (any mtime > 0) win — correct,
+  /// since a never-edited device has nothing of its own worth keeping.
+  ///
+  /// Why ONE mtime rather than per-object: these settings are tiny, change
+  /// together, and have no individual identity — a single whole-unit LWW is
+  /// both simpler and correct. uiPrefs / sort+filter / active persona+preset
+  /// are deliberately NOT part of this unit (device-specific), so they never
+  /// touch this watermark.
+  int settingsMtime = 0;
+
+  // ───────────────────────────────────────────────────────────────────
+  // BATCH P1-state perf caches. All are lazily (re)built on first read
+  // after invalidation, so the cost is paid at most once per mutation
+  // BURST regardless of how many readers ask. `null` = "stale, rebuild
+  // on next read".
+  //
+  // (D) O(1) id→record indexes. `characterById` / `personaById` /
+  // `lorebookById` were linear scans called in render + prompt hot paths
+  // (a group-chat frame did many O(N_chars) scans). Backed by these maps
+  // and invalidated whenever the owning collection mutates.
+  Map<String, Character>? _charIndex;
+  Map<String, Persona>? _personaIndex;
+  Map<String, Lorebook>? _lorebookIndex;
+
+  // (B) memoized Characters-sort maps. The default 'recent' sort + the
+  // 'chatted' sort previously rescanned ALL chats per character per
+  // comparison (O(N_chars · log N · N_chats) every rebuild). These are
+  // computed in ONE O(N_chats) pass and invalidated only when the chat
+  // collection materially changes.
+  Map<String, int>? _lastUsedAtByCharacter;
+  Map<String, int>? _chatCountByCharacter;
+
+  // (E) memoized per-character token estimate, keyed by character id with
+  // the value's content-hash stored alongside so a same-id-but-edited
+  // character recomputes. Bounded implicitly by the character count.
+  final Map<String, int> _tokenContentHashById = {};
+  final Map<String, int> _tokenEstimateById = {};
+
+  /// Invalidate the character id-index AND the derived token cache holders
+  /// that key off character ids. Called on every characters mutation.
+  void _invalidateCharacterCaches() {
+    _charIndex = null;
+  }
+
+  /// Invalidate the chat-derived sort maps. Called on every chat mutation
+  /// (add / import / message edit / variant change / delete / clear).
+  void _invalidateChatCaches() {
+    _lastUsedAtByCharacter = null;
+    _chatCountByCharacter = null;
+  }
 
   // Wave CY.18.63: accept StoreBackend instead of JsonStorage directly.
   // Default is LocalBackend (native disk via JsonStorage) so existing
@@ -350,6 +442,12 @@ class AppStore extends ChangeNotifier {
 
   Future<void> load() async {
     loadErrors = [];
+    // BATCH P1-state: load() reassigns the collections wholesale (e.g.
+    // `characters = _parseList(...)`). If this store was used before (a
+    // re-load / restore), the perf caches would otherwise point at the old
+    // lists. Invalidate up front so the first read after load rebuilds
+    // against the freshly-loaded data.
+    _invalidateAllPerfCaches();
     final raw = await _storage.load();
     // Fresh install (or post-wipe / post-applicationId-rename) — there's
     // no state file yet. Don't early-return; we still need to seed the
@@ -449,6 +547,8 @@ class AppStore extends ChangeNotifier {
       // backwards-compatible with pre-Wave backups (missing fields →
       // empty / null).
       botbooruAvatar = raw['botbooruAvatar'] as String?;
+      // Non-destructive Recrop: absent/null → null (pre-feature backups).
+      botbooruAvatarOriginal = raw['botbooruAvatarOriginal'] as String?;
       botbooruAboutMe = (raw['botbooruAboutMe'] as String?) ?? '';
       // Wave CY.18.36: Profile expansion fields, all optional + back-
       // compat. `installedAt` gets set on this load if absent (see
@@ -457,6 +557,10 @@ class AppStore extends ChangeNotifier {
       botbooruPronouns = (raw['botbooruPronouns'] as String?) ?? '';
       botbooruFeaturedCharacterId =
           raw['botbooruFeaturedCharacterId'] as String?;
+      // The BotBooru profile sync watermark. Absent (pre-feature backups) → 0,
+      // so the first incoming profile sync (any mtime > 0) wins.
+      botbooruProfileMtime =
+          (raw['botbooruProfileMtime'] as num?)?.toInt() ?? 0;
       installedAt = (raw['installedAt'] as num?)?.toInt();
 
       folders = _parseList<Folder>(
@@ -468,6 +572,8 @@ class AppStore extends ChangeNotifier {
       charFavoritesExpanded =
           (raw['charFavoritesExpanded'] as bool?) ?? true;
       personaSortKey = (raw['personaSortKey'] as String?) ?? 'recent';
+      personaFavoritesExpanded =
+          (raw['personaFavoritesExpanded'] as bool?) ?? true;
       seenOnboarding = (raw['seenOnboarding'] as bool?) ?? false;
       // Wave CY.18.121: example-seed latch. Missing on pre-Wave backups
       // → false, but the seed gate's `charactersEmpty` + `!seenOnboarding`
@@ -488,6 +594,11 @@ class AppStore extends ChangeNotifier {
       // that predate this wave → false, so the corrected pass runs once.
       personaDefaultsAdjustedV3 =
           (raw['personaDefaultsAdjustedV3'] as bool?) ?? false;
+      // Pyre 1.1: default-regex-rule seed latch. Missing on installs that
+      // predate this build → false, so the one-time seed runs once on the
+      // next launch (fresh installs AND upgrades).
+      defaultRegexRulesSeeded =
+          (raw['defaultRegexRulesSeeded'] as bool?) ?? false;
 
       chats = _parseList<Chat>(raw['chats'], 'chats', Chat.fromJson);
       lorebooks = _parseList<Lorebook>(
@@ -528,6 +639,11 @@ class AppStore extends ChangeNotifier {
           'scriptSettings',
           ScriptSettings.fromJson,
           scriptSettings);
+      guideSettings = _parseObject<GuideSettings>(
+          raw['guideSettings'],
+          'guideSettings',
+          GuideSettings.fromJson,
+          guideSettings);
       uiPrefs = _parseObject<UiPrefs>(
           raw['uiPrefs'], 'uiPrefs', UiPrefs.fromJson, uiPrefs);
 
@@ -545,6 +661,10 @@ class AppStore extends ChangeNotifier {
           tombstones[k.toString()] = (v as num?)?.toInt() ?? 0;
         });
       }
+
+      // SYNC W3: settings-unit watermark. Absent on pre-Wave blobs → 0, which
+      // means the first sync wins (a never-touched device has nothing to keep).
+      settingsMtime = (raw['settingsMtime'] as num?)?.toInt() ?? 0;
 
       // Wave CY.18.62: schema v1 → v2 migration. v2 adds `mtime` / `deleted`
       // to every synced record. Pre-Wave-62 records load with mtime=0
@@ -628,22 +748,34 @@ class AppStore extends ChangeNotifier {
     // touches records whose mtime is still 0. `stampMtimeIfZero` prefers
     // the record's own `updatedAt` so the LWW merge keeps the right order;
     // Preset has no `updatedAt`, so its `createdAt` stands in.
+    //
+    // Audit datamodel-appstore-macros-slash-04: each result is then passed
+    // through `clampMtime(_, now)` so a future-dated mtime from a corrupt /
+    // hand-edited / hostile backup cannot win every local LWW conflict until
+    // wall-clock time passes it. Clamping lives here (disk/restore path) and
+    // NOT in `fromJson` so the sync-wire path keeps remote mtimes intact (the
+    // server `/push` already clamps those; clamping a legitimately newer remote
+    // record to the receiver's clock could drop a real update under skew).
     final mtimeNow = DateTime.now().millisecondsSinceEpoch;
     for (final c in characters) {
-      c.mtime = stampMtimeIfZero(c.mtime, c.updatedAt, mtimeNow);
+      c.mtime = clampMtime(stampMtimeIfZero(c.mtime, c.updatedAt, mtimeNow), mtimeNow);
     }
     for (final p in personas) {
-      p.mtime = stampMtimeIfZero(p.mtime, p.updatedAt, mtimeNow);
+      p.mtime = clampMtime(stampMtimeIfZero(p.mtime, p.updatedAt, mtimeNow), mtimeNow);
     }
     for (final ch in chats) {
-      ch.mtime = stampMtimeIfZero(ch.mtime, ch.updatedAt, mtimeNow);
+      ch.mtime = clampMtime(stampMtimeIfZero(ch.mtime, ch.updatedAt, mtimeNow), mtimeNow);
     }
     for (final p in presets) {
       // Preset tracks `createdAt` instead of `updatedAt`.
-      p.mtime = stampMtimeIfZero(p.mtime, p.createdAt, mtimeNow);
+      p.mtime = clampMtime(stampMtimeIfZero(p.mtime, p.createdAt, mtimeNow), mtimeNow);
     }
     for (final l in lorebooks) {
-      l.mtime = stampMtimeIfZero(l.mtime, l.updatedAt, mtimeNow);
+      l.mtime = clampMtime(stampMtimeIfZero(l.mtime, l.updatedAt, mtimeNow), mtimeNow);
+    }
+    for (final r in regexRules) {
+      // RegexRule has no `updatedAt`; only zero-fill + future-clamp apply.
+      r.mtime = clampMtime(stampMtimeIfZero(r.mtime, mtimeNow, mtimeNow), mtimeNow);
     }
     // Wave CY.18.268: providers were MISSING from this repair pass, so a
     // provider created before the mtime field existed (or by the old
@@ -651,7 +783,8 @@ class AppStore extends ChangeNotifier {
     // invisible to LAN key-sync forever. ApiProvider has no updatedAt, so
     // installedAt is the stable fallback (now() on a fresh install).
     for (final p in providers) {
-      p.mtime = stampMtimeIfZero(p.mtime, installedAt ?? mtimeNow, mtimeNow);
+      p.mtime = clampMtime(
+          stampMtimeIfZero(p.mtime, installedAt ?? mtimeNow, mtimeNow), mtimeNow);
     }
 
     // Wave CY.18.44: load-time reference-integrity sweep. Pre-Wave this
@@ -719,54 +852,21 @@ class AppStore extends ChangeNotifier {
       }
     }
 
-    // Wave CY.18.204: one-time persona-defaults adjustment for EXISTING
-    // installs, to match the new fresh-install behaviour (Gui). Three
-    // non-destructive/reversible actions, run exactly once:
-    //   1. Un-favourite the seeded example Ren persona (he was starred by
-    //      the old seeder for no real reason). Identified the SAME safe way
-    //      Wave 188 identified Vesna — see `shouldUnfavoriteSeededRen` in
-    //      example_seed.dart (name=='Ren' && favorite && no lorebook bind);
-    //      there is no deterministic id since personas get random UUIDs.
-    //   2. Clear `activePersonaId` IF it still points at that seeded Ren, so
-    //      the install matches "no default persona" like a fresh one.
-    //   3. Flip `askPersonaOnNewChat` to true (Gui's explicit request) so the
-    //      user is asked who they play as on each new chat. This only
-    //      touches the persisted ChatSettings once; the user can toggle it
-    //      back in Chat Behaviors at any time.
-    // Guarded by `personaDefaultsAdjustedV2` so it runs once and never again.
-    // Effectively a no-op on fresh installs (the new seeder already leaves Ren
-    // unfavourited + no active persona, and the model default is already true).
-    if (!personaDefaultsAdjustedV2) {
-      var touched = false;
-      // 1 + 2: find the seeded Ren persona (if any) and unstar it / drop it
-      //        as the active persona.
-      for (final p in personas) {
-        if (shouldUnfavoriteSeededRen(p)) {
-          p.favorite = false;
-          touched = true;
-          if (activePersonaId == p.id) {
-            activePersonaId = null;
-          }
-        }
-      }
-      // 3: prompt-on-new-chat default flip (Gui's explicit ask). Only counts
-      //    as a "touch" if it actually changes the persisted value.
-      if (!chatSettings.askPersonaOnNewChat) {
-        chatSettings.askPersonaOnNewChat = true;
-        touched = true;
-      }
-      personaDefaultsAdjustedV2 = true;
-      if (touched) {
-        // Persist right away so the adjustment survives an immediate
-        // force-quit (same fire-and-forget pattern as the Vesna sweep above).
-        unawaited(_persist());
-      }
-    }
+    // Wave CY.18.204: the one-time persona-defaults adjustment guarded by
+    // `personaDefaultsAdjustedV2` was DELETED here (audit
+    // datamodel-appstore-macros-slash-10). Its corrective pass matched the
+    // seeded Ren persona by `name == 'Ren'`, but the persona is created via
+    // `buildPersonaFromCharacter` (which copies the card name "Ren Brennan"),
+    // so the match was always false and the pass never did anything — pure
+    // dead code. The V3 pass below SUPERSEDES it with the identical (now
+    // correct) actions. The `personaDefaultsAdjustedV2` field is retained
+    // (read in load(), persisted-when-true) only for back-compat so existing
+    // blobs that carry it round-trip unchanged.
 
     // Wave CY.18.209: corrected persona-defaults adjustment. SUPERSEDES the
-    // Wave-204 block above, which matched the seeded Ren persona by
-    // `name == 'Ren'` and so never fired (the persona's real name is
-    // "Ren Brennan" — `buildPersonaFromCharacter` copies the card name).
+    // dead Wave-204 block (removed above), which matched the seeded Ren
+    // persona by `name == 'Ren'` and so never fired (the persona's real name
+    // is "Ren Brennan" — `buildPersonaFromCharacter` copies the card name).
     // `shouldUnfavoriteSeededRen` is now corrected, but the v2 flag already
     // latched on existing installs, so we gate the corrected pass behind a
     // NEW flag (`personaDefaultsAdjustedV3`) so it fires exactly once on the
@@ -790,6 +890,18 @@ class AppStore extends ChangeNotifier {
       if (touched) {
         unawaited(_persist());
       }
+    }
+
+    // Pyre 1.1: one-time seed of the bundled DEFAULT regex rule. Models very
+    // often wrap spoken dialogue in italics (`*"Hello."*`), which Pyre renders
+    // as faint narration; this conservative display-stage rule unwraps the
+    // asterisks that hug a quote so dialogue renders as dialogue. Runs once
+    // (flag-guarded) for BOTH fresh installs and upgrades, and respects a user
+    // who later deletes it (the flag stays latched). Persist on the first run
+    // so the seeded rule + latch survive an immediate force-quit.
+    if (!defaultRegexRulesSeeded) {
+      seedDefaultRegexRulesIfNeeded();
+      unawaited(_persist());
     }
 
     _loaded = true;
@@ -948,7 +1060,8 @@ class AppStore extends ChangeNotifier {
   /// Wave CY.18.256: record a deletion in the synced tombstone log. Called
   /// by every delete method so a paired peer learns the record is gone and
   /// stops re-pushing its still-live copy. [kind] is one of `character`,
-  /// `persona`, `chat`, `lorebook`, `preset`.
+  /// `persona`, `chat`, `lorebook`, `preset`, `regexRule`, `provider`,
+  /// `folder`, `creatorPreset`.
   void recordTombstone(String kind, String id) {
     tombstones['$kind:$id'] = DateTime.now().millisecondsSinceEpoch;
   }
@@ -993,6 +1106,35 @@ class AppStore extends ChangeNotifier {
   Future<void>? _persistInFlight;
   bool _persistQueued = false;
 
+  // Mega-audit 2026-06-05 (M-3): surface persist failures. A `save()` throw
+  // (disk full, permissions, read-only volume) used to become an unhandled
+  // async error swallowed by the global `onError` — the user kept working
+  // and silently lost everything since the last good write on the next
+  // launch. We now latch the failure so the UI can warn ONCE; it clears on
+  // the next successful write so the banner doesn't linger after recovery.
+  bool _lastPersistFailed = false;
+
+  /// True when the most recent persist attempt threw (disk full / unwritable
+  /// storage). Cleared the moment a save succeeds. The UI watches this to
+  /// show a single non-blocking warning; [acknowledgePersistError] lets it
+  /// mark the current failure as shown so it isn't surfaced repeatedly.
+  bool get lastPersistFailed => _lastPersistFailed;
+
+  // Whether the CURRENT failure has already been surfaced to the user, so a
+  // burst of failed saves shows the warning once, not once per save.
+  bool _persistErrorAcknowledged = false;
+
+  /// True only when there's an UNACKNOWLEDGED persist failure to surface.
+  /// The UI calls [acknowledgePersistError] after showing the warning.
+  bool get hasUnshownPersistError =>
+      _lastPersistFailed && !_persistErrorAcknowledged;
+
+  /// Mark the current persist failure as shown so it isn't surfaced again
+  /// until a fresh failure occurs (after a successful save resets the latch).
+  void acknowledgePersistError() {
+    _persistErrorAcknowledged = true;
+  }
+
   /// Serialised persist. Never overlaps with another `_persist()`; rapid
   /// callers coalesce into at most one trailing write.
   Future<void> _persist() {
@@ -1013,16 +1155,45 @@ class AppStore extends ChangeNotifier {
   /// so a follow-up always writes the freshest snapshot.
   Future<void> _runPersistChain() async {
     try {
-      await _persistOnce();
+      await _persistOnceGuarded();
       // Drain coalesced follow-ups one at a time (a burst of N requests
       // collapses to a single trailing write). The loop terminates because
       // `_persistQueued` is only re-set by callers arriving DURING a write.
       while (_persistQueued) {
         _persistQueued = false;
-        await _persistOnce();
+        await _persistOnceGuarded();
       }
     } finally {
       _persistInFlight = null;
+    }
+  }
+
+  /// Mega-audit 2026-06-05 (M-3): run one persist, translating a thrown
+  /// `save()` (disk full / unwritable storage) into the [lastPersistFailed]
+  /// latch + a notify so the UI can warn. A success clears the latch (and
+  /// notifies if it had been set) so the warning doesn't linger after the
+  /// user frees space and the next write goes through. Never rethrows — the
+  /// failure is now signalled via state, not an unhandled async error.
+  Future<void> _persistOnceGuarded() async {
+    try {
+      await _persistOnce();
+      if (_lastPersistFailed) {
+        // Recovered — clear the latch and let any banner dismiss itself.
+        _lastPersistFailed = false;
+        _persistErrorAcknowledged = false;
+        notifyListeners();
+      }
+    } catch (e) {
+      // Don't route to ErrorLog: a disk-full failure would also fail its own
+      // append, and the user-facing signal is the latch below, not the log.
+      debugPrint('[AppStore] persist failed: $e');
+      final wasFailing = _lastPersistFailed;
+      _lastPersistFailed = true;
+      // A NEW failure resets the acknowledged flag so it surfaces again.
+      _persistErrorAcknowledged = false;
+      // Notify so a listener (the root banner) reacts. Only notify on the
+      // transition or a fresh un-acknowledged failure — cheap either way.
+      if (!wasFailing) notifyListeners();
     }
   }
 
@@ -1060,12 +1231,18 @@ class AppStore extends ChangeNotifier {
       // Avatar is data-URL string (may be null), aboutMe is plain
       // free-form text.
       if (botbooruAvatar != null) 'botbooruAvatar': botbooruAvatar,
+      // Non-destructive Recrop: emit only when a recrop preserved an original.
+      if (botbooruAvatarOriginal != null)
+        'botbooruAvatarOriginal': botbooruAvatarOriginal,
       'botbooruAboutMe': botbooruAboutMe,
       // Wave CY.18.36: Profile expansion fields.
       'botbooruTitle': botbooruTitle,
       'botbooruPronouns': botbooruPronouns,
       if (botbooruFeaturedCharacterId != null)
         'botbooruFeaturedCharacterId': botbooruFeaturedCharacterId,
+      // BotBooru profile sync watermark (omit when 0 to keep fresh blobs
+      // clean; load() reads it back as `?? 0`).
+      if (botbooruProfileMtime > 0) 'botbooruProfileMtime': botbooruProfileMtime,
       if (installedAt != null) 'installedAt': installedAt,
       // Wave CY.18.38: folders + Characters/Personas filter state.
       'folders': folders.map((f) => f.toJson()).toList(),
@@ -1074,6 +1251,7 @@ class AppStore extends ChangeNotifier {
       if (charFolderId != null) 'charFolderId': charFolderId,
       'charFavoritesExpanded': charFavoritesExpanded,
       'personaSortKey': personaSortKey,
+      'personaFavoritesExpanded': personaFavoritesExpanded,
       if (seenOnboarding) 'seenOnboarding': true,
       // Wave CY.18.121: example-seed latch (omit when false, mirroring
       // seenOnboarding, to keep fresh-install blobs clean).
@@ -1084,6 +1262,8 @@ class AppStore extends ChangeNotifier {
       if (personaDefaultsAdjustedV2) 'personaDefaultsAdjustedV2': true,
       // Wave CY.18.209: corrected persona-defaults migration latch.
       if (personaDefaultsAdjustedV3) 'personaDefaultsAdjustedV3': true,
+      // Pyre 1.1: default-regex-rule seed latch (omit when false).
+      if (defaultRegexRulesSeeded) 'defaultRegexRulesSeeded': true,
       'chats': chats.map((c) => c.toJson()).toList(),
       'lorebooks': lorebooks.map((l) => l.toJson()).toList(),
       'presets': presets.map((p) => p.toJson()).toList(),
@@ -1097,6 +1277,7 @@ class AppStore extends ChangeNotifier {
       'memorySettings': memorySettings.toJson(),
       'liveSheetSettings': liveSheetSettings.toJson(),
       'scriptSettings': scriptSettings.toJson(),
+      'guideSettings': guideSettings.toJson(),
       'uiPrefs': uiPrefs.toJson(),
       'creatorSessions':
           creatorSessions.map((s) => s.toJson()).toList(),
@@ -1105,6 +1286,9 @@ class AppStore extends ChangeNotifier {
       // empty to keep fresh / never-synced blobs clean). GC'd to the
       // same 30-day window as the per-record tombstones in _gcTombstones.
       if (tombstones.isNotEmpty) 'tombstones': tombstones,
+      // SYNC W3: settings-unit watermark (omit when 0 to keep fresh blobs
+      // clean; load() reads it back as `?? 0`).
+      if (settingsMtime > 0) 'settingsMtime': settingsMtime,
     };
     await _storage.save(blob);
   }
@@ -1119,7 +1303,96 @@ class AppStore extends ChangeNotifier {
   static const _persistDebounce = Duration(milliseconds: 600);
 
   void _bump() {
+    // BATCH P1-state: any mutation may have changed a collection that one
+    // of the perf caches is derived from. Invalidating here (cheap — five
+    // pointer nulls) keeps every existing mutation method correct without
+    // each having to remember which caches it touches; the maps rebuild
+    // lazily on the next read.
+    _invalidateAllPerfCaches();
+    // (H) batch mode: a multi-mutation block (runBatch / multi-select tag
+    // apply) suppresses the per-mutation notify + persist schedule and
+    // emits exactly ONE of each when the block closes. Without this, a
+    // loop of N mutations fired N notifyListeners (N full list rebuilds)
+    // and scheduled N debounced persists.
+    if (_batchDepth > 0) {
+      _batchDirty = true;
+      return;
+    }
     notifyListeners();
+    _persistTimer?.cancel();
+    _persistTimer = Timer(_persistDebounce, _persist);
+  }
+
+  void _invalidateAllPerfCaches() {
+    _invalidateCharacterCaches();
+    _personaIndex = null;
+    _lorebookIndex = null;
+    _invalidateChatCaches();
+  }
+
+  /// Test-only hook to reproduce the cache invalidation that `load()` /
+  /// `factoryReset()` perform after reassigning collections wholesale.
+  @visibleForTesting
+  void debugInvalidatePerfCachesForTest() => _invalidateAllPerfCaches();
+
+  // (H) Batch coalescing. While `_batchDepth > 0`, `_bump()` records that
+  // state changed but defers the single notify + debounced persist until
+  // the outermost [runBatch] closes. Re-entrant (nested runBatch is safe).
+  int _batchDepth = 0;
+  bool _batchDirty = false;
+
+  /// Run [body] as a single coalesced state mutation: every `_bump()` it
+  /// triggers is collapsed into ONE `notifyListeners()` + ONE debounced
+  /// persist when the (outermost) batch closes. Use for multi-mutation
+  /// operations — e.g. applying a multi-select tag set, or a bulk import —
+  /// so the UI rebuilds once and the blob is re-serialised once instead of
+  /// N times. No-op-safe: if [body] mutated nothing, no notify/persist
+  /// fires. Always restores batch state even if [body] throws.
+  void runBatch(void Function() body) {
+    _batchDepth++;
+    try {
+      body();
+    } finally {
+      _batchDepth--;
+      if (_batchDepth == 0 && _batchDirty) {
+        _batchDirty = false;
+        notifyListeners();
+        _persistTimer?.cancel();
+        _persistTimer = Timer(_persistDebounce, _persist);
+      }
+    }
+  }
+
+  // ── (G) Coalesced streaming notify ────────────────────────────────
+  //
+  // `updateMessageText` is called once per streamed token. Firing a full
+  // `notifyListeners()` per chunk re-runs every `context.watch<AppStore>()`
+  // widget per token. The model mutation stays SYNCHRONOUS (the streaming
+  // bubble reads `message.text` directly, so the latest text is always
+  // present), but the NOTIFY is coalesced to ~frame cadence: a burst of
+  // chunks within the window collapses to a single rebuild, and a trailing
+  // notify is always scheduled so the final chunk paints. The persist is
+  // still the existing 600ms debounce, and `flushPersist()` / the
+  // stream-end flush guarantee durability.
+  Timer? _coalescedNotifyTimer;
+  static const _coalescedNotifyWindow = Duration(milliseconds: 16);
+
+  /// Notify + schedule the debounced persist, but COALESCE the notify so a
+  /// rapid burst (token stream) collapses to roughly one rebuild per frame.
+  /// The model is assumed already mutated by the caller. A trailing notify
+  /// is guaranteed via the ~16ms timer.
+  void _bumpStreaming() {
+    _invalidateAllPerfCaches();
+    if (_batchDepth > 0) {
+      _batchDirty = true;
+      return;
+    }
+    // Schedule (or keep) the single trailing notify.
+    _coalescedNotifyTimer ??= Timer(_coalescedNotifyWindow, () {
+      _coalescedNotifyTimer = null;
+      notifyListeners();
+    });
+    // Persist on the normal debounce — unchanged from `_bump`.
     _persistTimer?.cancel();
     _persistTimer = Timer(_persistDebounce, _persist);
   }
@@ -1129,6 +1402,13 @@ class AppStore extends ChangeNotifier {
   /// app pause/background, navigation away from the chat — so a crash or
   /// kill doesn't lose the last few seconds of state.
   Future<void> flushPersist() async {
+    // (G) Make sure any pending coalesced notify isn't left dangling — fire
+    // it now so the final streamed frame is painted before we settle.
+    if (_coalescedNotifyTimer != null) {
+      _coalescedNotifyTimer!.cancel();
+      _coalescedNotifyTimer = null;
+      notifyListeners();
+    }
     _persistTimer?.cancel();
     _persistTimer = null;
     await _persist();
@@ -1138,6 +1418,19 @@ class AppStore extends ChangeNotifier {
   /// in bulk (e.g. backup-restore import) and want a single notify+persist
   /// when they're done.
   void notifyAndPersist() => _bump();
+
+  @override
+  void dispose() {
+    // (G) Cancel the coalesced-notify timer so it can't fire
+    // `notifyListeners()` after dispose (which throws). The persist timer
+    // only calls `_persist` (no notify) so it's safe either way, but we
+    // cancel it too to avoid a stray write during teardown.
+    _coalescedNotifyTimer?.cancel();
+    _coalescedNotifyTimer = null;
+    _persistTimer?.cancel();
+    _persistTimer = null;
+    super.dispose();
+  }
 
   /// Wave CY.18.48: schedule a debounced save WITHOUT firing
   /// notifyListeners. Use this for state that NEEDS to land on disk
@@ -1230,6 +1523,7 @@ class AppStore extends ChangeNotifier {
   /// Pass null to clear the override (creator will reuse the chat provider).
   void setCreatorProvider(String? id) {
     creatorProviderId = id;
+    _touchSettings(); // SYNC W3: role pointer rides the LWW settings unit.
     _bump();
   }
 
@@ -1251,6 +1545,7 @@ class AppStore extends ChangeNotifier {
   /// provider, which itself falls back to chat).
   void setVisionProvider(String? id) {
     visionProviderId = id;
+    _touchSettings(); // SYNC W3: role pointer rides the LWW settings unit.
     _bump();
   }
 
@@ -1306,34 +1601,113 @@ class AppStore extends ChangeNotifier {
     // key-sync (otherwise a paired native peer with sync ON re-pushes its
     // live copy and the provider resurrects on the next pull).
     recordTombstone('provider', id);
+    // SYNC W3: track whether a role pointer changes so we only bump the
+    // settings-unit watermark when one actually moved (a delete of an
+    // unreferenced provider shouldn't churn the settings mtime).
+    var pointerChanged = false;
     if (activeProviderId == id) {
       activeProviderId = providers.isNotEmpty ? providers.first.id : null;
+      pointerChanged = true;
     }
     if (creatorProviderId == id) {
       // Drop the override entirely — falling back to the chat provider
       // is friendlier than silently picking some other random provider.
       creatorProviderId = null;
+      pointerChanged = true;
     }
     if (visionProviderId == id) {
       visionProviderId = null;
+      pointerChanged = true;
     }
+    if (pointerChanged) _touchSettings();
     SecureKeys.delete(id);
     _bump();
   }
 
   void setActiveProvider(String id) {
     activeProviderId = id;
+    _touchSettings(); // SYNC W3: role pointer rides the LWW settings unit.
     _bump();
   }
 
   // -------------------------------------------------------------------------
   // Characters
 
-  Character? characterById(String id) {
+  /// (D) O(1) id→Character lookup. Backed by [_charIndex], rebuilt lazily
+  /// after any characters-collection mutation (invalidated in `_bump`).
+  /// Last-writer-wins on duplicate ids (matches the old linear scan, which
+  /// returned the FIRST match — see note: we keep first-match semantics by
+  /// not overwriting an existing key).
+  Character? characterById(String id) => _characterIndex()[id];
+
+  Map<String, Character> _characterIndex() {
+    final cached = _charIndex;
+    if (cached != null) return cached;
+    final m = <String, Character>{};
     for (final c in characters) {
-      if (c.id == id) return c;
+      // Preserve the linear scan's first-match semantics on duplicate ids.
+      m.putIfAbsent(c.id, () => c);
     }
-    return null;
+    _charIndex = m;
+    return m;
+  }
+
+  /// (B) Memoized "last chat activity" per character: max `updatedAt`
+  /// across every chat that includes the character. Computed in ONE
+  /// O(N_chats) pass and cached until a chat mutation invalidates it.
+  /// Characters with no chats are ABSENT (callers treat absent as 0) so
+  /// the map stays proportional to active characters, not the library.
+  /// The Characters 'recent' sort reads this O(1) per comparison instead
+  /// of rescanning all chats.
+  Map<String, int> get lastUsedAtByCharacter {
+    final cached = _lastUsedAtByCharacter;
+    if (cached != null) return cached;
+    _buildChatDerivedMaps();
+    return _lastUsedAtByCharacter!;
+  }
+
+  /// (B) Memoized count of chats that include each character. One
+  /// O(N_chats) pass, cached, invalidated on chat mutation. Powers the
+  /// 'chatted' sort O(1) per comparison.
+  Map<String, int> get chatCountByCharacter {
+    final cached = _chatCountByCharacter;
+    if (cached != null) return cached;
+    _buildChatDerivedMaps();
+    return _chatCountByCharacter!;
+  }
+
+  /// Single pass that fills BOTH chat-derived maps at once — iterating the
+  /// chat list (and each chat's `characterIds`) only once for the pair.
+  void _buildChatDerivedMaps() {
+    final lastUsed = <String, int>{};
+    final counts = <String, int>{};
+    for (final ch in chats) {
+      final u = ch.updatedAt;
+      for (final id in ch.characterIds) {
+        counts[id] = (counts[id] ?? 0) + 1;
+        final prev = lastUsed[id];
+        if (prev == null || u > prev) lastUsed[id] = u;
+      }
+    }
+    _lastUsedAtByCharacter = lastUsed;
+    _chatCountByCharacter = counts;
+  }
+
+  /// (E) Memoized per-character token estimate. Keyed by character id with
+  /// the content-hash stored alongside; a hit only when BOTH id and hash
+  /// match, so an edited card (same id, changed body) recomputes. Lets the
+  /// Characters list show the token chip without re-summing every field of
+  /// every visible row on every rebuild.
+  int approxTokensForCharacterCached(Character c) {
+    final hash = characterTokenContentHash(c);
+    if (_tokenContentHashById[c.id] == hash) {
+      final cached = _tokenEstimateById[c.id];
+      if (cached != null) return cached;
+    }
+    final value = approxTokensForCharacter(c);
+    _tokenContentHashById[c.id] = hash;
+    _tokenEstimateById[c.id] = value;
+    return value;
   }
 
   Character addCharacter(Character c) {
@@ -1355,6 +1729,34 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
+  /// In-app "Duplicate" — deep-clone a character into a new card with a
+  /// fresh id, a `<name> (copy)` name, inserted right after the original.
+  /// Mirrors the lorebook "Copy as new" / preset "Copy (editable)" copy
+  /// convention.
+  ///
+  /// The avatar / gallery refs are content-addressed
+  /// `pyre://attachment/<sha256>` strings, so the clone COPIES the ref
+  /// (both cards point at the same blob — zero byte duplication; the
+  /// AttachmentStore GC keeps it alive as long as either references it).
+  /// Same for `lorebookIds`. The deep-clone goes through fromJson(toJson)
+  /// so every list is a fresh instance (no shared mutable refs).
+  ///
+  /// Returns the clone, or null if no character with [id] exists.
+  Character? duplicateCharacter(String id) {
+    final i = characters.indexWhere((c) => c.id == id);
+    if (i < 0) return null;
+    final original = characters[i];
+    final clone = Character.fromJson(original.toJson())
+      ..id = newId('char')
+      ..name = '${original.name} (copy)'
+      ..createdAt = DateTime.now().millisecondsSinceEpoch
+      ..updatedAt = DateTime.now().millisecondsSinceEpoch
+      ..mtime = DateTime.now().millisecondsSinceEpoch;
+    characters.insert(i + 1, clone);
+    _bump();
+    return clone;
+  }
+
   void removeCharacter(String id) {
     characters.removeWhere((c) => c.id == id);
     // Wave CY.18.256: log a tombstone so the deletion propagates over LAN
@@ -1370,6 +1772,9 @@ class AppStore extends ChangeNotifier {
     }
     if (botbooruFeaturedCharacterId == id) {
       botbooruFeaturedCharacterId = null;
+      // The featured pin is part of the LWW profile unit — touch its mtime so
+      // the cleared pin propagates to paired devices.
+      _touchBotbooruProfile();
     }
     _bump();
   }
@@ -1461,12 +1866,24 @@ class AppStore extends ChangeNotifier {
   // -------------------------------------------------------------------------
   // Personas
 
+  /// (D) O(1) id→Persona lookup. Backed by [_personaIndex], rebuilt lazily
+  /// after any personas-collection mutation.
+  Persona? personaById(String id) => _personaIndexMap()[id];
+
+  Map<String, Persona> _personaIndexMap() {
+    final cached = _personaIndex;
+    if (cached != null) return cached;
+    final m = <String, Persona>{};
+    for (final p in personas) {
+      m.putIfAbsent(p.id, () => p);
+    }
+    _personaIndex = m;
+    return m;
+  }
+
   Persona? get activePersona {
     if (activePersonaId == null) return null;
-    for (final p in personas) {
-      if (p.id == activePersonaId) return p;
-    }
-    return null;
+    return personaById(activePersonaId!);
   }
 
   Persona addPersona(Persona p) {
@@ -1485,6 +1902,29 @@ class AppStore extends ChangeNotifier {
     p.mtime = p.updatedAt; // Wave CY.18.70: sync metadata
     personas[i] = p;
     _bump();
+  }
+
+  /// In-app "Duplicate" — deep-clone a persona into a new one with a fresh
+  /// id, a `<name> (copy)` name, inserted right after the original. Same
+  /// content-addressed-ref-copy semantics as [duplicateCharacter] (avatar
+  /// / gallery / lorebookIds refs are copied, not byte-duplicated). The
+  /// clone never inherits `activePersonaId` — that pointer stays on
+  /// whatever was active.
+  ///
+  /// Returns the clone, or null if no persona with [id] exists.
+  Persona? duplicatePersona(String id) {
+    final i = personas.indexWhere((p) => p.id == id);
+    if (i < 0) return null;
+    final original = personas[i];
+    final clone = Persona.fromJson(original.toJson())
+      ..id = newId('persona')
+      ..name = '${original.name} (copy)'
+      ..createdAt = DateTime.now().millisecondsSinceEpoch
+      ..updatedAt = DateTime.now().millisecondsSinceEpoch
+      ..mtime = DateTime.now().millisecondsSinceEpoch;
+    personas.insert(i + 1, clone);
+    _bump();
+    return clone;
   }
 
   void removePersona(String id) {
@@ -1518,14 +1958,33 @@ class AppStore extends ChangeNotifier {
   /// to the active persona's name in that case).
   void setBotbooruUsername(String value) {
     botbooruUsername = value.trim();
+    _touchBotbooruProfile(); // rides the LWW profile unit.
     _bump();
   }
 
   /// Wave CY.18.30: update the user's decorative profile avatar.
   /// Pass null to clear the avatar back to the empty placeholder.
   /// Expected shape: `data:image/png;base64,...` data URL.
+  ///
+  /// Non-destructive Recrop: picking a NEW avatar (or removing it) is a fresh
+  /// full image, so the preserved original is cleared here. A RECROP uses
+  /// [recropBotbooruAvatar] instead, which keeps the original.
   void setBotbooruAvatar(String? dataUrl) {
     botbooruAvatar = dataUrl;
+    botbooruAvatarOriginal = null;
+    _touchBotbooruProfile(); // rides the LWW profile unit.
+    _bump();
+  }
+
+  /// Non-destructive Recrop (profile): set the DISPLAYED avatar to a freshly
+  /// cropped [croppedRef] while preserving the uncropped [original] so the
+  /// full image survives (viewable whole / future re-crops crop the original,
+  /// never a crop-of-a-crop). On the FIRST recrop the caller passes the
+  /// pre-crop avatar as [original]; later recrops keep the existing original.
+  void recropBotbooruAvatar(String croppedRef, {required String? original}) {
+    botbooruAvatarOriginal ??= original;
+    botbooruAvatar = croppedRef;
+    _touchBotbooruProfile(); // rides the LWW profile unit.
     _bump();
   }
 
@@ -1535,18 +1994,21 @@ class AppStore extends ChangeNotifier {
   /// Purely Profile-side bio text now.
   void setBotbooruAboutMe(String value) {
     botbooruAboutMe = value;
+    _touchBotbooruProfile(); // rides the LWW profile unit.
     _bump();
   }
 
   /// Wave CY.18.36: update the user-editable Profile subtitle.
   void setBotbooruTitle(String value) {
     botbooruTitle = value;
+    _touchBotbooruProfile(); // rides the LWW profile unit.
     _bump();
   }
 
   /// Wave CY.18.36: update the optional pronouns chip on Profile.
   void setBotbooruPronouns(String value) {
     botbooruPronouns = value;
+    _touchBotbooruProfile(); // rides the LWW profile unit.
     _bump();
   }
 
@@ -1554,6 +2016,7 @@ class AppStore extends ChangeNotifier {
   /// Profile. Pass null to clear the pin.
   void setBotbooruFeaturedCharacter(String? characterId) {
     botbooruFeaturedCharacterId = characterId;
+    _touchBotbooruProfile(); // rides the LWW profile unit.
     _bump();
   }
 
@@ -1598,6 +2061,8 @@ class AppStore extends ChangeNotifier {
   /// characters to it via `addCharacterToFolder`.
   Folder createFolder(String name) {
     final f = Folder(id: newId('folder'), name: name.trim());
+    // Mega-audit 2026-06-05 (F2): stamp mtime so the new folder syncs.
+    f.mtime = DateTime.now().millisecondsSinceEpoch;
     folders = [...folders, f];
     _bump();
     return f;
@@ -1609,6 +2074,7 @@ class AppStore extends ChangeNotifier {
     if (i < 0) return;
     folders[i].name = newName.trim();
     folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
+    folders[i].mtime = folders[i].updatedAt; // F2: sync metadata
     _bump();
   }
 
@@ -1619,6 +2085,9 @@ class AppStore extends ChangeNotifier {
   /// orphaned filter.
   void deleteFolder(String folderId) {
     folders.removeWhere((f) => f.id == folderId);
+    // Mega-audit 2026-06-05 (F2): log a tombstone so the deletion propagates
+    // over sync (mirrors removeLorebook / removePreset).
+    recordTombstone('folder', folderId);
     if (charFolderId == folderId) charFolderId = null;
     _bump();
   }
@@ -1631,6 +2100,7 @@ class AppStore extends ChangeNotifier {
     if (folders[i].characterIds.contains(characterId)) return;
     folders[i].characterIds = [...folders[i].characterIds, characterId];
     folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
+    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
     _bump();
   }
 
@@ -1642,6 +2112,7 @@ class AppStore extends ChangeNotifier {
     folders[i].characterIds =
         folders[i].characterIds.where((id) => id != characterId).toList();
     folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
+    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
     _bump();
   }
 
@@ -1670,6 +2141,22 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
+  /// (H) Replace the entire active tag-filter set in ONE mutation. The tag
+  /// picker's Apply used to `clearCharSelectedTags()` then loop
+  /// `toggleCharSelectedTag()` per tag — each call fired its own
+  /// notifyListeners + scheduled a full-blob persist, so a K-tag apply did
+  /// K rebuilds. This does a single replace + single `_bump`. No-op (no
+  /// bump) when the requested set already matches the current selection.
+  void setCharSelectedTags(Set<String> tags) {
+    final next = tags.toList();
+    if (next.length == charSelectedTags.length &&
+        charSelectedTags.toSet().containsAll(next)) {
+      return; // unchanged
+    }
+    charSelectedTags = next;
+    _bump();
+  }
+
   /// Set the active folder filter on the Characters tab. Null = "All".
   void setCharFolderId(String? folderId) {
     charFolderId = folderId;
@@ -1687,6 +2174,13 @@ class AppStore extends ChangeNotifier {
   /// 'recent' | 'created' | 'alpha'.
   void setPersonaSortKey(String key) {
     personaSortKey = key;
+    _bump();
+  }
+
+  /// Persisted collapse state of the Personas Favorites section header.
+  void setPersonaFavoritesExpanded(bool expanded) {
+    if (personaFavoritesExpanded == expanded) return;
+    personaFavoritesExpanded = expanded;
     _bump();
   }
 
@@ -1833,7 +2327,11 @@ class AppStore extends ChangeNotifier {
     // 1. Secrets out of OS-secure storage.
     try {
       await SecureKeys.clearAll();
-    } catch (_) {}
+    } catch (e) {
+      // Audit 2026-06-04 (M): don't swallow silently — a failed reset step
+      // should at least be diagnosable in logs.
+      debugPrint('[factoryReset] clear secrets failed: $e');
+    }
     // 2. Attachment blobs — with NO referenced hashes, GC treats every
     //    stored blob as an orphan and deletes it. Runs before the re-seed
     //    so the freshly-attached example avatars survive.
@@ -1868,14 +2366,21 @@ class AppStore extends ChangeNotifier {
     memorySettings = MemorySettings.fromJson(const <String, dynamic>{});
     liveSheetSettings = LiveSheetSettings.fromJson(const <String, dynamic>{});
     scriptSettings = ScriptSettings.fromJson(const <String, dynamic>{});
+    guideSettings = GuideSettings.fromJson(const <String, dynamic>{});
     uiPrefs = UiPrefs.fromJson(const <String, dynamic>{});
     seenOnboarding = false;
     exampleContentSeeded = false;
+    defaultRegexRulesSeeded = false;
 
     // 5. Re-seed the bundled examples like a fresh install. (On success it
     //    persists internally; the explicit persist below covers the rare
     //    asset-load-failure path where it doesn't.)
     await seedExamplesIfFresh();
+    // 5b. Re-seed the bundled default formatting regex rule, exactly like a
+    //     fresh launch (factoryReset doesn't go through load(), so the
+    //     load()-time seed never fires here). The flag was just reset above,
+    //     so this re-adds the default rule onto the cleared regexRules list.
+    seedDefaultRegexRulesIfNeeded();
     // 6. Guaranteed clean persist + rebuild the whole app.
     await _persist();
     notifyListeners();
@@ -1909,8 +2414,30 @@ class AppStore extends ChangeNotifier {
         selectedVariant: 0,
       ));
     }
+    // C-3: Live Sheet defaults ON (Chat.liveSheetEnabled = true) but nothing
+    // ever seeded an initial snapshot at chat creation — so the default-ON flag
+    // was inert (shouldUpdateLiveSheet stayed false, buildLiveSheetBlock '').
+    // Seed it here when enabled (idempotent; skips narrator/scenario cards).
+    // The persona resolves the same way the chat will (activePersonaId).
+    ensureLiveSheetSeed(
+      chat: chat,
+      personaName: activePersona?.name,
+      characters: [snapshot],
+    );
     // Wave CY.18.70: stamp mtime on new chat so the next sync push
     // includes it. Same dance for addLorebook below.
+    chat.mtime = DateTime.now().millisecondsSinceEpoch;
+    chats.add(chat);
+    _bump();
+    return chat;
+  }
+
+  /// Persist a fully-built [chat] that was constructed elsewhere (e.g. the
+  /// SillyTavern backup importer rebuilding a chat from a `.jsonl` log). Unlike
+  /// [startChatWith], the chat already carries its members, snapshots, and
+  /// messages — we just stamp sync metadata and add it. Mirrors the
+  /// `chats.add(chat); _bump();` tail of [startChatWith].
+  Chat addImportedChat(Chat chat) {
     chat.mtime = DateTime.now().millisecondsSinceEpoch;
     chats.add(chat);
     _bump();
@@ -1959,7 +2486,11 @@ class AppStore extends ChangeNotifier {
     }
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
     chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
-    _bump();
+    // (G) Coalesced notify: this is the per-token streaming write. The text
+    // is already in the model above (read synchronously by the bubble); only
+    // the rebuild fan-out is throttled to ~frame cadence. The 600ms persist
+    // debounce + the stream-end `flushPersist()` are unchanged.
+    _bumpStreaming();
   }
 
   /// Add a new (empty) variant to a message and make it the selected one.
@@ -2094,6 +2625,21 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
+  /// Empty a chat's message list in ONE shot (keeps the chat + its metadata).
+  /// Audit datamodel-appstore-macros-slash-05: the `/clear` slash command used
+  /// to loop `removeMessage` per message, firing N `notifyListeners()` / full
+  /// chat-list rebuilds (a visible hitch on a several-hundred-message chat).
+  /// This does a single clear + single [_bump] (one notify, one debounced
+  /// persist). No-op (and no bump) when the chat is unknown or already empty.
+  void clearMessages(String chatId) {
+    final chat = _chatById(chatId);
+    if (chat == null || chat.messages.isEmpty) return;
+    chat.messages.clear();
+    chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
+    chat.mtime = chat.updatedAt; // sync metadata, mirrors removeMessage
+    _bump();
+  }
+
   /// Add another character to a chat (group chat) — freezes a snapshot.
   void addCharacterToChat(String chatId, Character character) {
     final chat = _chatById(chatId);
@@ -2125,15 +2671,56 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
+  /// Set (or clear) a chat's manual title. Pass null/blank to clear the
+  /// override and let the UI derive a label. Mirrors renameCreatorSession.
+  void renameChat(String id, String? title) {
+    final chat = _chatById(id);
+    if (chat == null) return;
+    final t = title?.trim();
+    chat.title = (t != null && t.isNotEmpty) ? t : null;
+    chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
+    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    _bump();
+  }
+
   /// Wave CX: change the persona attached to a specific chat without
   /// touching the global active persona. Pass null to clear (falls
   /// back to the global active at runtime).
   void setChatPersona(String chatId, String? personaId) {
     final chat = _chatById(chatId);
     if (chat == null) return;
+    // M-4 (defense-in-depth): never pin a soft-deleted (tombstoned) persona.
+    // The picker already filters these out, but a stale id from sync / an
+    // older code path shouldn't latch a deleted persona whose text injects
+    // until GC. Treat it as "No persona" via the explicit sentinel. The
+    // null / kExplicitNoPersonaId sentinels are always allowed through.
+    if (personaId != null && personaId != kExplicitNoPersonaId) {
+      final isLive =
+          personas.any((p) => p.id == personaId && !p.deleted);
+      if (!isLive) personaId = kExplicitNoPersonaId;
+    }
     chat.personaId = personaId;
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
     chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    _bump();
+  }
+
+  /// Mega-audit 2026-06-05 (F1): single funnel for editing per-chat
+  /// SUB-STATE that lives inside [Chat] but is mutated outside the
+  /// dedicated message/member setters — memory checkpoints, Live Sheet
+  /// snapshots + enable toggle, memoryEnabled, story beats, scene /
+  /// per-chat background fields, disabled inherited lorebooks, etc.
+  ///
+  /// All of that is serialized by `Chat.toJson`, so it WOULD ride a chat
+  /// sync — but LAN sync only ships records whose `mtime > since`, and
+  /// those edit paths used to mutate the chat then call a bare
+  /// `notifyAndPersist()` WITHOUT bumping `mtime`, so the change saved to
+  /// disk but never propagated to the paired device. Routing every such
+  /// edit through here stamps `mtime` (and `updatedAt`) and persists +
+  /// notifies once — mirroring `addMessage` / `setChatPersona`.
+  void touchChat(Chat chat) {
+    chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
+    chat.mtime = chat.updatedAt;
     _bump();
   }
 
@@ -2147,11 +2734,19 @@ class AppStore extends ChangeNotifier {
   // -------------------------------------------------------------------------
   // Lorebooks
 
-  Lorebook? lorebookById(String id) {
+  /// (D) O(1) id→Lorebook lookup. Backed by [_lorebookIndex], rebuilt
+  /// lazily after any lorebooks-collection mutation.
+  Lorebook? lorebookById(String id) => _lorebookIndexMap()[id];
+
+  Map<String, Lorebook> _lorebookIndexMap() {
+    final cached = _lorebookIndex;
+    if (cached != null) return cached;
+    final m = <String, Lorebook>{};
     for (final l in lorebooks) {
-      if (l.id == id) return l;
+      m.putIfAbsent(l.id, () => l);
     }
-    return null;
+    _lorebookIndex = m;
+    return m;
   }
 
   Lorebook addLorebook(Lorebook l) {
@@ -2204,6 +2799,9 @@ class AppStore extends ChangeNotifier {
     if (target == null) return;
     if (!target.disabledInheritedLorebookIds.contains(bookId)) {
       target.disabledInheritedLorebookIds.add(bookId);
+      // F1: bump mtime so the per-chat opt-out propagates over sync.
+      target.updatedAt = DateTime.now().millisecondsSinceEpoch;
+      target.mtime = target.updatedAt;
       _bump();
     }
   }
@@ -2220,6 +2818,9 @@ class AppStore extends ChangeNotifier {
     }
     if (target == null) return;
     if (target.disabledInheritedLorebookIds.remove(bookId)) {
+      // F1: bump mtime so the per-chat re-enable propagates over sync.
+      target.updatedAt = DateTime.now().millisecondsSinceEpoch;
+      target.mtime = target.updatedAt;
       _bump();
     }
   }
@@ -2287,6 +2888,7 @@ class AppStore extends ChangeNotifier {
   }
 
   CreatorPreset addCreatorPreset(CreatorPreset p) {
+    p.mtime = DateTime.now().millisecondsSinceEpoch; // F2: sync metadata
     creatorPresets.add(p);
     _bump();
     return p;
@@ -2296,6 +2898,7 @@ class AppStore extends ChangeNotifier {
     if (p.locked) return; // never mutate the locked default
     final i = creatorPresets.indexWhere((x) => x.id == p.id);
     if (i < 0) return;
+    p.mtime = DateTime.now().millisecondsSinceEpoch; // F2: sync metadata
     creatorPresets[i] = p;
     _bump();
   }
@@ -2305,6 +2908,8 @@ class AppStore extends ChangeNotifier {
     if (i < 0) return;
     if (creatorPresets[i].locked) return;
     creatorPresets.removeAt(i);
+    // Mega-audit 2026-06-05 (F2): log a tombstone so the deletion propagates.
+    recordTombstone('creatorPreset', id);
     if (activeCreatorPresetId == id) {
       activeCreatorPresetId = lockedDefaultCreatorPresetId;
     }
@@ -2345,21 +2950,232 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
+  /// Pyre 1.1: one-time seed of the bundled DEFAULT regex rule(s).
+  ///
+  /// Adds every [buildDefaultRegexRules] entry whose id is not already present
+  /// (by id) to [regexRules], stamping a real `mtime` so LAN sync ships it.
+  /// Guarded by [defaultRegexRulesSeeded] so it runs at most once per install —
+  /// which means a user who later deletes the rule stays rid of it. Returns
+  /// true iff it added at least one rule.
+  ///
+  /// PURE store mutation — does NOT persist or notify; the caller (`load()`)
+  /// decides when to write, exactly like the persona-defaults migrations.
+  /// The by-id existence check also makes it safe when the rule has already
+  /// arrived via sync before this runs (no duplicate).
+  bool seedDefaultRegexRulesIfNeeded() {
+    if (defaultRegexRulesSeeded) return false;
+    var added = false;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final r in buildDefaultRegexRules()) {
+      if (regexRules.any((x) => x.id == r.id)) continue;
+      r.mtime = now;
+      regexRules.add(r);
+      added = true;
+    }
+    defaultRegexRulesSeeded = true;
+    return added;
+  }
+
   // -------------------------------------------------------------------------
   // Settings + UI prefs
 
+  /// SYNC W3: stamp the settings-unit watermark with "now". Called by every
+  /// mutation of a synced setting/pointer (model/chat/memory/liveSheet/script/
+  /// guide settings + active/creator/vision provider pointers) BEFORE the
+  /// notify/persist in that mutation, so the new mtime rides the SAME disk
+  /// write. The whole unit syncs under LWW keyed by this value.
+  void _touchSettings() {
+    settingsMtime = DateTime.now().millisecondsSinceEpoch;
+  }
+
+  /// SYNC W3: serialise the settings UNIT for sync — the small usage settings
+  /// + the three provider ROLE pointers, under a single [settingsMtime]. NOT a
+  /// per-record collection: these change together and have no individual
+  /// identity, so the transport ships this one map and applies it via LWW.
+  ///
+  /// `chatSettings` is emitted WITHOUT `customBackgroundDataUrl` — that field
+  /// is a large inline base64 image; re-shipping it on every sync would bloat
+  /// the wire pointlessly, and the background is a per-device choice anyway
+  /// (the receiver keeps its own — see [applySyncedSettings]).
+  ///
+  /// Pure: touches no SecureKeys / disk, so it's unit-testable on a bare store.
+  Map<String, dynamic> syncedSettingsToJson() {
+    // Strip the local-only background from the chat-settings copy.
+    final chatJson = chatSettings.toJson()
+      ..remove('customBackgroundDataUrl');
+    return <String, dynamic>{
+      'mtime': settingsMtime,
+      'modelSettings': modelSettings.toJson(),
+      'memorySettings': memorySettings.toJson(),
+      'liveSheetSettings': liveSheetSettings.toJson(),
+      'scriptSettings': scriptSettings.toJson(),
+      'guideSettings': guideSettings.toJson(),
+      'chatSettings': chatJson,
+      // Pointers may legitimately be null (no override) — encode as null.
+      'activeProviderId': activeProviderId,
+      'creatorProviderId': creatorProviderId,
+      'visionProviderId': visionProviderId,
+    };
+  }
+
+  /// SYNC W3: apply an incoming settings UNIT under Last-Writer-Wins. Keeps
+  /// local untouched (returns early) when the incoming [mtime] is NOT strictly
+  /// newer than ours — so a settings change never downgrades and ties keep
+  /// local. On a win, every settings object is rebuilt from the incoming map
+  /// (each `.fromJson` tolerates missing keys), and the three provider pointers
+  /// are adopted verbatim (null = "no override").
+  ///
+  /// The local `chatSettings.customBackgroundDataUrl` is PRESERVED across the
+  /// apply: it's never on the wire (see [syncedSettingsToJson]) and the
+  /// background is a per-device choice, so we read it off the current settings
+  /// before replacing and re-attach it after.
+  ///
+  /// Does NOT notify or persist — matches the other apply* paths; the caller
+  /// (SyncEngine / PyreServer) fires one [notifyAndPersist] after the whole
+  /// merge. Pure w.r.t. SecureKeys/disk so it's unit-testable on a bare store.
+  void applySyncedSettings(Map<String, dynamic> j) {
+    final m = (j['mtime'] as num?)?.toInt() ?? 0;
+    // LWW: never downgrade; ties keep local.
+    if (m <= settingsMtime) return;
+
+    Map<String, dynamic>? asMap(dynamic v) =>
+        v is Map ? v.cast<String, dynamic>() : null;
+
+    final ms = asMap(j['modelSettings']);
+    if (ms != null) modelSettings = ModelSettings.fromJson(ms);
+    final mem = asMap(j['memorySettings']);
+    if (mem != null) memorySettings = MemorySettings.fromJson(mem);
+    final ls = asMap(j['liveSheetSettings']);
+    if (ls != null) liveSheetSettings = LiveSheetSettings.fromJson(ls);
+    final ss = asMap(j['scriptSettings']);
+    if (ss != null) scriptSettings = ScriptSettings.fromJson(ss);
+    final gs = asMap(j['guideSettings']);
+    if (gs != null) guideSettings = GuideSettings.fromJson(gs);
+
+    final cs = asMap(j['chatSettings']);
+    if (cs != null) {
+      // Preserve THIS device's local background — it's never synced.
+      final localBg = chatSettings.customBackgroundDataUrl;
+      chatSettings = ChatSettings.fromJson(cs)
+        ..customBackgroundDataUrl = localBg;
+    }
+
+    // Provider ROLE pointers — adopt verbatim (null clears an override).
+    activeProviderId = j['activeProviderId'] as String?;
+    creatorProviderId = j['creatorProviderId'] as String?;
+    visionProviderId = j['visionProviderId'] as String?;
+
+    settingsMtime = m;
+  }
+
+  /// Stamp [botbooruProfileMtime] to NOW. Mirrors [_touchSettings]: called by
+  /// every BotBooru-profile mutator BEFORE the notify/persist in that mutation,
+  /// so the new mtime rides the SAME disk write. The whole profile syncs under
+  /// LWW keyed by this value.
+  void _touchBotbooruProfile() {
+    botbooruProfileMtime = DateTime.now().millisecondsSinceEpoch;
+  }
+
+  /// Serialise the BotBooru PROFILE unit for sync — the small profile fields
+  /// (username / avatar (+ original) / about-me / title / pronouns / featured
+  /// character) under a single [botbooruProfileMtime]. NOT a per-record
+  /// collection: these change together and have no individual identity, so the
+  /// transport ships this one map and applies it via LWW. Modelled exactly on
+  /// [syncedSettingsToJson].
+  ///
+  /// `installedAt` is deliberately EXCLUDED — it's a per-device stat, not part
+  /// of the synced profile identity.
+  ///
+  /// Pure: touches no SecureKeys / disk, so it's unit-testable on a bare store.
+  Map<String, dynamic> syncedBotbooruProfileToJson() {
+    return <String, dynamic>{
+      'mtime': botbooruProfileMtime,
+      'botbooruUsername': botbooruUsername,
+      // Nullable fields encode as null when unset.
+      'botbooruAvatar': botbooruAvatar,
+      'botbooruAvatarOriginal': botbooruAvatarOriginal,
+      'botbooruAboutMe': botbooruAboutMe,
+      'botbooruTitle': botbooruTitle,
+      'botbooruPronouns': botbooruPronouns,
+      'botbooruFeaturedCharacterId': botbooruFeaturedCharacterId,
+    };
+  }
+
+  /// Apply an incoming BotBooru PROFILE unit under Last-Writer-Wins. Keeps local
+  /// untouched (returns early) when the incoming [mtime] is NOT strictly newer
+  /// than ours — so a profile change never downgrades and ties keep local. This
+  /// no-clobber guard is the whole reason the profile has its OWN mtime: an
+  /// unrelated settings sync (or a never-configured peer) can't blank a curated
+  /// local profile. Mirrors [applySyncedSettings] exactly.
+  ///
+  /// Does NOT notify or persist — matches the other apply* paths; the caller
+  /// (SyncEngine / PyreServer) fires one [notifyAndPersist] after the whole
+  /// merge. Pure w.r.t. SecureKeys/disk so it's unit-testable on a bare store.
+  void applySyncedBotbooruProfile(Map<String, dynamic> j) {
+    final m = (j['mtime'] as num?)?.toInt() ?? 0;
+    // LWW: never downgrade; ties keep local.
+    if (m <= botbooruProfileMtime) return;
+
+    botbooruUsername = (j['botbooruUsername'] as String?) ?? '';
+    botbooruAvatar = j['botbooruAvatar'] as String?;
+    botbooruAvatarOriginal = j['botbooruAvatarOriginal'] as String?;
+    botbooruAboutMe = (j['botbooruAboutMe'] as String?) ?? '';
+    botbooruTitle = (j['botbooruTitle'] as String?) ?? '';
+    botbooruPronouns = (j['botbooruPronouns'] as String?) ?? '';
+    botbooruFeaturedCharacterId = j['botbooruFeaturedCharacterId'] as String?;
+
+    botbooruProfileMtime = m;
+  }
+
   void updateModelSettings(ModelSettings ms) {
     modelSettings = ms;
+    _touchSettings();
     _bump();
   }
 
   void updateChatSettings(ChatSettings cs) {
     chatSettings = cs;
+    _touchSettings();
     _bump();
   }
 
   void updateMemorySettings(MemorySettings ms) {
     memorySettings = ms;
+    _touchSettings();
+    _bump();
+  }
+
+  /// Update the global Guide settings. Bumps `mtime` so the change is
+  /// sync-eligible under LWW (GuideSettings carries an mtime, unlike
+  /// LiveSheet/Script which sync via the whole-state blob); mirrors the
+  /// provider / character save paths. Persists + notifies via [_bump].
+  void updateGuideSettings(GuideSettings gs) {
+    gs.mtime = DateTime.now().millisecondsSinceEpoch;
+    guideSettings = gs;
+    // SYNC W3: also stamp the settings-unit watermark so this rides the LWW
+    // settings sync (its own GuideSettings.mtime is separate legacy bookkeeping).
+    _touchSettings();
+    _bump();
+  }
+
+  /// Update the global Live Sheet settings. Audit
+  /// datamodel-appstore-macros-slash-11: gives LiveSheet the same encapsulated
+  /// mutation funnel as Model/Chat/Memory/Guide settings, so a caller can't
+  /// forget the notify+persist (the settings screens previously reached into
+  /// `store.liveSheetSettings.* = …` then called `notifyAndPersist()` by hand).
+  /// These settings carry no `mtime` and ride the whole-state blob, so [_bump]
+  /// (notify + debounced persist) is the complete contract.
+  void updateLiveSheetSettings(LiveSheetSettings ls) {
+    liveSheetSettings = ls;
+    _touchSettings(); // SYNC W3: part of the LWW settings unit.
+    _bump();
+  }
+
+  /// Update the global Script settings. See [updateLiveSheetSettings] — same
+  /// encapsulation rationale (audit datamodel-appstore-macros-slash-11).
+  void updateScriptSettings(ScriptSettings ss) {
+    scriptSettings = ss;
+    _touchSettings(); // SYNC W3: part of the LWW settings unit.
     _bump();
   }
 
@@ -2464,6 +3280,37 @@ class AppStore extends ChangeNotifier {
     if (value != 'lan' && value != 'localhost') return;
     if (uiPrefs.lanBindMode == value) return;
     uiPrefs.lanBindMode = value;
+    _bump();
+  }
+
+  /// Mega-audit 2026-06-05 (S1): toggle "Sync providers & API keys to
+  /// paired devices" on the key-HOLDER (desktop). Flipping the flag alone
+  /// was inert: a receiver whose sync cursor has already advanced past the
+  /// providers' (old) `mtime` would never see them re-shipped — the normal
+  /// `mtime > since` diff skips them — so enabling the toggle SECOND left
+  /// keys silently unsynced. Re-stamping every provider's `mtime` to now
+  /// makes the next normal pull ship them regardless of the receiver's
+  /// cursor. LWW-safe: a bumped mtime only wins where the receiver lacks
+  /// the key (the server-side missing-key backfill never clobbers an
+  /// existing one). Turning the flag OFF does not restamp (no point).
+  void setSyncProviderKeys(bool value) {
+    if (uiPrefs.syncProviderKeys == value) return;
+    uiPrefs.syncProviderKeys = value;
+    if (value) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      for (final p in providers) {
+        p.mtime = now;
+      }
+    }
+    _bump();
+  }
+
+  /// Mega-audit 2026-06-05 (H-4): set the device-local sync conflict policy.
+  /// Never synced — each device chooses how genuine both-sides-changed
+  /// conflicts resolve. Default [SyncConflictMode.newestWins] is today's LWW.
+  void setSyncConflictMode(SyncConflictMode mode) {
+    if (uiPrefs.syncConflictMode == mode) return;
+    uiPrefs.syncConflictMode = mode;
     _bump();
   }
 
@@ -2680,6 +3527,10 @@ Persona buildPersonaFromCharacter(Character c, {bool swap = true}) {
     dialogueExamples:
         c.mesExample.trim().isEmpty ? '' : swapRoles(c.mesExample),
     avatar: c.avatar,
+    // Non-destructive Recrop: carry the uncropped original (ref copy, no
+    // byte dup) so the persona keeps the full image too (chat background /
+    // view-whole). Null when the source was never recropped.
+    avatarOriginal: c.avatarOriginal,
     // Wave CB: carry over the character's bound lorebooks so the
     // converted persona keeps the same world context (especially
     // important for cards like Gine that ship with a lorebook —

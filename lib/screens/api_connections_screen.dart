@@ -10,9 +10,11 @@ import '../models/models.dart';
 import '../services/chat_api.dart';
 import '../services/model_metadata.dart';
 import '../services/prompt_post_processing.dart';
+import '../services/resolvers.dart' show isProviderHostAllowed;
 import '../state/app_store.dart';
 import '../theme.dart';
 import 'model_picker_sheet.dart';
+import 'smart_fallback_screen.dart';
 
 class ApiConnectionsScreen extends StatelessWidget {
   const ApiConnectionsScreen({super.key});
@@ -193,15 +195,21 @@ class ApiConnectionsScreen extends StatelessWidget {
   }
 }
 
-/// Wave CY.18.99: collapsed "Advanced" section with the single master
-/// toggle for the provider-fallback prompt. Collapsed by default so a
-/// new user never feels they must touch it.
+/// Wave CY.18.99: collapsed "Advanced" section. The provider-fallback
+/// feature now lives on its own [SmartFallbackScreen] (with a "How it
+/// works" explainer + the master toggle) so it's discoverable and
+/// documented; this is just the nav row that opens it. Collapsed by
+/// default so a new user never feels they must touch it.
+///
+/// BEHAVIOUR UNCHANGED — the toggle still binds to
+/// `uiPrefs.askToSwitchOnFailure`; it just moved to the dedicated screen.
 class _AdvancedFallbackTile extends StatelessWidget {
   final AppStore store;
   const _AdvancedFallbackTile({required this.store});
 
   @override
   Widget build(BuildContext context) {
+    final on = store.uiPrefs.askToSwitchOnFailure;
     return Theme(
       // Strip the default ExpansionTile divider lines for a cleaner look.
       data: Theme.of(context)
@@ -211,18 +219,23 @@ class _AdvancedFallbackTile extends StatelessWidget {
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
         childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
         children: [
-          SwitchListTile(
-            value: store.uiPrefs.askToSwitchOnFailure,
-            onChanged: store.setAskToSwitchOnFailure,
-            title: const Text('Ask to switch providers when one fails',
-                style: TextStyle(fontSize: 14)),
-            subtitle: const Text(
-              'When a provider errors or refuses, Pyre offers to retry '
-              'the reply on another configured provider. Off: never asks.',
-              style: TextStyle(
+          ListTile(
+            leading: const Icon(Icons.alt_route, color: EmberColors.textMid),
+            title: const Text('Smart provider fallback',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            subtitle: Text(
+              on
+                  ? 'On — if a provider fails or refuses, Pyre offers the '
+                      'next one.'
+                  : 'Off — a failed reply just surfaces the error.',
+              style: const TextStyle(
                   color: EmberColors.textMid, fontSize: 12, height: 1.4),
             ),
-            activeThumbColor: EmberColors.primary,
+            trailing: const Icon(Icons.chevron_right,
+                color: EmberColors.textDim, size: 22),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SmartFallbackScreen()),
+            ),
           ),
         ],
       ),
@@ -394,6 +407,17 @@ Future<void> _testConnection(
         const SnackBar(content: Text('Fill in the base URL first.')));
     return;
   }
+  // Mega-audit 2026-06-05 (H-7): SSRF gate. Refuse to probe a private /
+  // internal host for an External/proxy provider (a synced/imported record
+  // could point it there). The explicit Localhost kind stays allowed — a
+  // local server (LM Studio/Ollama) is exactly what it's for.
+  if (!isProviderHostAllowed(base,
+      isLocalhostKind: kind == ProviderKind.localhost)) {
+    messenger.showSnackBar(const SnackBar(
+        content: Text('That URL points at a private or internal address. '
+            'For a local server, set the type to Localhost.')));
+    return;
+  }
   final url = buildChatUrl(base, 'models');
   try {
     final resp = await http.get(
@@ -404,9 +428,14 @@ Future<void> _testConnection(
       },
     );
     if (resp.statusCode >= 400) {
-      messenger.showSnackBar(SnackBar(
-          content:
-              Text('HTTP ${resp.statusCode}: ${resp.body.split("\n").first}')));
+      // Audit 2026-06-04 [providers-01]: scrub any reflected key/token from the
+      // surfaced body before it lands in the SnackBar.
+      final scrubbed = scrubProviderBody(
+        resp.body.split('\n').first,
+        apiKey: keyCtl.text.trim(),
+      );
+      messenger.showSnackBar(
+          SnackBar(content: Text('HTTP ${resp.statusCode}: $scrubbed')));
       return;
     }
     messenger.showSnackBar(
@@ -941,6 +970,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                         fontSize: 11,
                         height: 1.4),
                   ),
+                  const _PostProcessingHelp(),
                 ],
               ),
               ],
@@ -1085,6 +1115,13 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
       ),
     ),
   );
+  // C-6: dispose all 6 dialog controllers once it closes — notably keyCtl,
+  // which would otherwise leave the API key string lingering in the heap.
+  for (final c in <TextEditingController>[
+    nameCtl, urlCtl, keyCtl, modelCtl, ctxCtl, extraParamsCtl,
+  ]) {
+    c.dispose();
+  }
 }
 
 /// Small two-column hint inside the Advanced section — a model family
@@ -1133,6 +1170,81 @@ class _ParamHint extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Inline, collapsed help for the per-provider "Prompt post-processing"
+/// dropdown. Post-processing is provider-scoped (it lives in each
+/// provider's edit form), so it stays inline rather than becoming a
+/// top-level menu — this expander just explains each mode in place.
+class _PostProcessingHelp extends StatelessWidget {
+  const _PostProcessingHelp();
+
+  @override
+  Widget build(BuildContext context) {
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(top: 4, bottom: 4),
+        title: const Row(
+          children: [
+            Icon(Icons.help_outline, size: 15, color: EmberColors.primary),
+            SizedBox(width: 6),
+            Text('What do these modes do?',
+                style: TextStyle(fontSize: 12, color: EmberColors.textMid)),
+          ],
+        ),
+        children: const [
+          _PostProcModeRow('None',
+              'Send the message list as-is, standard OpenAI format. The '
+              'right choice for most providers.'),
+          _PostProcModeRow('Merge consecutive',
+              'Combine back-to-back messages from the same role into one. '
+              'Helps providers that reject two user (or two assistant) '
+              'turns in a row.'),
+          _PostProcModeRow('Semi-strict',
+              'Merge consecutive turns and tidy the layout, but keep the '
+              'system prompt separate. A gentle fit for picky models.'),
+          _PostProcModeRow('Strict',
+              'Force a clean user/assistant alternation with the system '
+              'prompt folded in. Needed by some DeepSeek / GLM / '
+              'Mistral-style endpoints that demand strict turn order.'),
+          _PostProcModeRow('Single user message',
+              'Flatten the whole conversation into one user message. The '
+              'most aggressive option — use it when a model still ignores '
+              'instructions under Strict.'),
+        ],
+      ),
+    );
+  }
+}
+
+/// One labelled mode line inside [_PostProcessingHelp].
+class _PostProcModeRow extends StatelessWidget {
+  final String name;
+  final String body;
+  const _PostProcModeRow(this.name, this.body);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text.rich(
+        TextSpan(
+          style: const TextStyle(
+              color: EmberColors.textMid, fontSize: 11, height: 1.4),
+          children: [
+            TextSpan(
+                text: '$name — ',
+                style: const TextStyle(
+                    color: EmberColors.textHigh,
+                    fontWeight: FontWeight.w600)),
+            TextSpan(text: body),
+          ],
+        ),
       ),
     );
   }

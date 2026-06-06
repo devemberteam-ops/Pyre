@@ -78,9 +78,16 @@ Map<String, dynamic> renderCard(Map<String, dynamic> fields, CreatorMode mode) {
       case CardFieldKind.dialogueExamples:
         final raw = fields[f.key];
         final mes = raw is List
-            ? renderMesExample(raw)
+            ? renderMesExample(raw, mode: mode)
             : _asString(raw).trim();
         if (mes.isNotEmpty) out['mes_example'] = mes;
+        break;
+      case CardFieldKind.greetingsList:
+        // chara_card_v2 `alternate_greetings`: a List<String> of full
+        // standalone opening messages, NEVER folded into the Description. The
+        // model may return a JSON array of strings, a single string, or absent.
+        final greetings = _asGreetings(fields[f.key]);
+        if (greetings.isNotEmpty) out['alternate_greetings'] = greetings;
         break;
       case CardFieldKind.prose:
       case CardFieldKind.nestedBullets:
@@ -118,15 +125,47 @@ Map<String, String> decomposeDescription(
 /// separated exchanges, each with `*action/expression*` italics interlaced
 /// with `**dialogue**` bold. List items may be maps (`{action, dialogue,
 /// beat}` or `{user, char}` line maps) OR pre-formatted strings.
-String renderMesExample(List dialogueExamples) {
+///
+/// [mode] decides the DEFAULT speaker prefix for a single-line `{action,
+/// dialogue}` item with no explicit `speaker`/`user` key: persona examples are
+/// the USER's own lines (a persona is the user's self-insert) so they default
+/// to `{{user}}:`, while character / scenario examples are the character
+/// speaking and default to `{{char}}:`. An explicit `speaker` always wins.
+String renderMesExample(List dialogueExamples,
+    {CreatorMode mode = CreatorMode.character}) {
   final blocks = <String>[];
   for (final item in dialogueExamples) {
-    final block = _renderExchange(item);
+    final block = _renderExchange(item, mode);
     if (block.trim().isNotEmpty) blocks.add(block.trim());
   }
   if (blocks.isEmpty) return '';
   // Each exchange under its own <START> marker.
   return blocks.map((b) => '<START>\n$b').join('\n');
+}
+
+/// CRITICAL 4 — carry duplicate `<Tag>` sections (e.g. a second `<World>`,
+/// keyed `world#2` by [decomposeDescription]) forward through an EDIT build.
+///
+/// The edit pipeline re-requests only the BASE schema keys (`world`, `npcs`,
+/// …) — the batches never list a `#N` variant — so the model never returns
+/// `world#2`, and a plain `renderCard(fields)` on the edit output would drop the
+/// duplicate. This merges every `key#N` present in the original-card's
+/// [existing] decomposed map into [fields] (without it already), so the
+/// re-render reproduces the duplicate tag. Base keys the model DID return are
+/// never overwritten. Returns a NEW map (never mutates [fields]).
+Map<String, dynamic> carryForwardDuplicateTags(
+  Map<String, dynamic> fields,
+  Map<String, String> existing,
+) {
+  final dupRe = RegExp(r'#\d+$');
+  final out = Map<String, dynamic>.from(fields);
+  for (final entry in existing.entries) {
+    if (!dupRe.hasMatch(entry.key)) continue; // only `key#N` duplicates
+    if (out.containsKey(entry.key)) continue; // never clobber model output
+    if (entry.value.trim().isEmpty) continue;
+    out[entry.key] = entry.value;
+  }
+  return out;
 }
 
 /// Required schema-field keys (per [mode]) whose value is empty after fill —
@@ -542,13 +581,16 @@ Map<String, String> _decomposeScenario(String description) {
 
 // ── mes_example exchange rendering ────────────────────────────────────────
 
-String _renderExchange(dynamic item) {
+String _renderExchange(dynamic item, CreatorMode mode) {
   if (item is String) {
     // Pre-formatted — pass through, dropping any leading <START>.
     return item.replaceFirst(RegExp(r'^\s*<START>\s*\n?'), '').trim();
   }
   if (item is Map) {
-    // Shape A: {action, dialogue, beat} → one interlaced {{char}} line.
+    // Shape A: {action, dialogue, beat} → one interlaced speaker line. The
+    // default speaker is mode-dependent: a persona's examples are the USER's
+    // own lines ({{user}}:), every other mode's are the character speaking
+    // ({{char}}:). An explicit `speaker` (or a `user` key) overrides it.
     final action = _asString(item['action'] ?? item['expression']).trim();
     final dialogue = _asString(item['dialogue'] ?? item['speech']).trim();
     if (action.isNotEmpty || dialogue.isNotEmpty) {
@@ -556,9 +598,11 @@ String _renderExchange(dynamic item) {
       if (action.isNotEmpty) parts.add('*${_strip(action, '*')}*');
       if (dialogue.isNotEmpty) parts.add('**${_strip(dialogue, '*')}**');
       final speaker = _asString(item['speaker']).trim();
+      final defaultPrefix =
+          mode == CreatorMode.persona ? '{{user}}: ' : '{{char}}: ';
       final prefix = speaker.isNotEmpty
           ? '$speaker: '
-          : (item.containsKey('user') ? '{{user}}: ' : '{{char}}: ');
+          : (item.containsKey('user') ? '{{user}}: ' : defaultPrefix);
       return '$prefix${parts.join(' ')}';
     }
     // Shape B: {user, char} line pair.
@@ -591,16 +635,44 @@ String _strip(String s, String marker) {
 /// The model sometimes packs aliases / "goes by" / a whole sentence into Full
 /// Name; the canvas `name` must stay short. Take the first line, then cut at
 /// the FIRST of these delimiters — whichever appears earliest:
-///   ` — ` (space-emdash-space), ` – ` (space-en-dash-space), `;`, `.`, ` (`.
+///   ` — ` (space-emdash-space), ` – ` (space-en-dash-space), `;`, ` (`, and a
+///   SENTENCE-ending period (LOW 12: a `.` that ends a token of more than two
+///   chars and is followed by a space — so an initial `J.` or a title `Dr.` /
+///   `St.` never cuts the name, but `Juno. Or so they say.` cuts to `Juno`).
 /// A normal name with no delimiter is returned unchanged.
 String _clampName(String fullName) {
   var s = fullName.split('\n').first;
   var cut = s.length;
-  for (final delim in const [' — ', ' – ', ';', '.', ' (']) {
+  for (final delim in const [' — ', ' – ', ';', ' (']) {
     final i = s.indexOf(delim);
     if (i >= 0 && i < cut) cut = i;
   }
+  // LOW 12: a sentence-ending period — `.` followed by a space whose preceding
+  // token is longer than two characters (so it is a word, not an initial like
+  // `J.` or a short title like `Dr.` / `St.`).
+  final periodCut = _sentencePeriodIndex(s);
+  if (periodCut >= 0 && periodCut < cut) cut = periodCut;
   return s.substring(0, cut).trim();
+}
+
+/// Index of the FIRST sentence-ending period in [s] (a `.` followed by a space
+/// whose preceding whitespace-delimited token is longer than two chars), or -1.
+/// Initials (`J.`) and short titles (`Dr.`, `St.`) — token length ≤ 2 — are
+/// skipped so they never truncate a name.
+int _sentencePeriodIndex(String s) {
+  for (var i = 0; i < s.length; i++) {
+    if (s[i] != '.') continue;
+    // Must be followed by a space (end of a sentence/clause), or end of string.
+    if (i + 1 < s.length && s[i + 1] != ' ') continue;
+    // Length of the token immediately before this period.
+    var start = i - 1;
+    while (start >= 0 && s[start] != ' ') {
+      start--;
+    }
+    final tokenLen = i - (start + 1);
+    if (tokenLen > 2) return i;
+  }
+  return -1;
 }
 
 // ── small value coercers ──────────────────────────────────────────────────
@@ -628,6 +700,44 @@ List<String> _asTags(dynamic v) {
         .toList();
   }
   return const [];
+}
+
+/// Coerce a [CardFieldKind.greetingsList] value into the chara_card_v2
+/// `alternate_greetings` shape: a `List<String>` of full standalone greetings,
+/// empties trimmed out. Tolerates:
+///  - a List of strings (the JSON request shape / preferred);
+///  - a List of `{value|text|message|greeting}` maps (a model that wrapped each
+///    greeting in an object) → flattened to the inner text;
+///  - a single String (one greeting) → a 1-element list;
+///  - null / absent / all-empty → an empty list (so renderCard skips the key).
+/// Each greeting is right-trimmed but otherwise preserved verbatim (greetings
+/// are multi-paragraph, action-interlaced messages — never re-bulleted).
+List<String> _asGreetings(dynamic v) {
+  if (v == null) return const [];
+  if (v is String) {
+    final s = v.trim();
+    return s.isEmpty ? const [] : <String>[s];
+  }
+  if (v is List) {
+    final out = <String>[];
+    for (final item in v) {
+      String g;
+      if (item is Map) {
+        g = _asString(item['value'] ??
+                item['text'] ??
+                item['message'] ??
+                item['greeting'])
+            .trim();
+      } else {
+        g = _asString(item).trim();
+      }
+      if (g.isNotEmpty) out.add(g);
+    }
+    return out;
+  }
+  // Any other scalar → its string form (or empty).
+  final s = _asString(v).trim();
+  return s.isEmpty ? const [] : <String>[s];
 }
 
 bool _isEmptyValue(dynamic v) {
