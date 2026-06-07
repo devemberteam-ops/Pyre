@@ -19,6 +19,21 @@ import '../services/secure_keys.dart';
 import '../services/store_backend.dart';
 import '../services/token_estimate.dart';
 
+/// The provider-ROLE pointers (active/creator/vision) are DEVICE-LOCAL — each
+/// indexes into THIS device's own provider list. They must NOT cross to a peer
+/// with a different list: a web (non-native) client never receives the provider
+/// objects, so syncing the pointer there makes selecting a provider on one
+/// device clobber the other's (→ "No provider configured" / LAN-proxy 503/403).
+/// This strips them from a synced settings record before it crosses such a
+/// boundary. Pure; returns a copy and never mutates [settings].
+Map<String, dynamic> withoutProviderRolePointers(Map<String, dynamic> settings) {
+  final m = Map<String, dynamic>.of(settings);
+  m.remove('activeProviderId');
+  m.remove('creatorProviderId');
+  m.remove('visionProviderId');
+  return m;
+}
+
 class AppStore extends ChangeNotifier {
   // Wave CY.18.63: persistence is now behind a `StoreBackend` interface.
   // On native this resolves to LocalBackend (no behavioural change —
@@ -3060,10 +3075,20 @@ class AppStore extends ChangeNotifier {
         ..customBackgroundDataUrl = localBg;
     }
 
-    // Provider ROLE pointers — adopt verbatim (null clears an override).
-    activeProviderId = j['activeProviderId'] as String?;
-    creatorProviderId = j['creatorProviderId'] as String?;
-    visionProviderId = j['visionProviderId'] as String?;
+    // Provider ROLE pointers are DEVICE-LOCAL. Adopt a pointer only when the
+    // record actually CARRIES the key: a stripped record (from a non-native /
+    // web peer, 1.1.2) omits them, and we must PRESERVE the local selection
+    // rather than null it. An explicit `null` value (key present) still clears
+    // the override.
+    if (j.containsKey('activeProviderId')) {
+      activeProviderId = j['activeProviderId'] as String?;
+    }
+    if (j.containsKey('creatorProviderId')) {
+      creatorProviderId = j['creatorProviderId'] as String?;
+    }
+    if (j.containsKey('visionProviderId')) {
+      visionProviderId = j['visionProviderId'] as String?;
+    }
 
     settingsMtime = m;
   }

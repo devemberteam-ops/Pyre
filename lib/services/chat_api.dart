@@ -1252,7 +1252,12 @@ Stream<String> _streamViaLanProxy({
         'LAN client not paired — open More > Connect to LAN.');
   }
   final body = jsonEncode({
-    'providerId': provider.id,
+    // 1.1.2: deliberately DON'T send a providerId. The web client's local
+    // provider list is separate from the host's, so its id would never match
+    // the host's active provider → the host 403s it ("provider not permitted").
+    // Omitting it makes the host proxy with its OWN active provider, which is
+    // also exactly the budget-drain guard the host wants (a paired device can
+    // only ever use the host's active provider, never pick an expensive one).
     'messages': messages
         .map((m) => {'role': m.role, 'content': m.content})
         .toList(),

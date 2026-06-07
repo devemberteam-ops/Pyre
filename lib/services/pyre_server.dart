@@ -420,7 +420,15 @@ class PyreServer {
       // `mtime > since` gate as every collection). The record carries no `id`
       // (it's a singleton) and excludes the chat background image.
       if (wanted.contains('settings') && store.settingsMtime > since) {
-        updates['settings'] = [store.syncedSettingsToJson()];
+        // 1.1.2: the provider-role pointers (active/creator/vision) are
+        // device-local. A web (non-native) peer has a DIFFERENT provider list,
+        // so shipping the pointer would clobber its selection — strip them for
+        // non-native peers. Native peers (which also receive the provider
+        // objects) keep them.
+        final rec = store.syncedSettingsToJson();
+        updates['settings'] = [
+          device?.isNative == true ? rec : withoutProviderRolePointers(rec),
+        ];
       }
 
       // The BotBooru PROFILE unit — a single record under `botbooruProfileMtime`
@@ -546,7 +554,14 @@ class PyreServer {
                   m['mtime'] = serverNow;
                 }
                 final before = store.settingsMtime;
-                store.applySyncedSettings(m);
+                // 1.1.2: ignore a non-native (web) peer's provider-role pointers
+                // — they index its own provider list and would clobber the
+                // host's active-provider selection. The other settings (model,
+                // chat, memory…) still sync. applySyncedSettings preserves the
+                // stripped (absent) pointer keys instead of nulling them.
+                store.applySyncedSettings(
+                  device?.isNative == true ? m : withoutProviderRolePointers(m),
+                );
                 if (store.settingsMtime != before) {
                   accepted++;
                 } else {

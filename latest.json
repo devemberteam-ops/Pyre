@@ -1,5 +1,5 @@
 {
-  "latest": "1.1.1",
+  "latest": "1.1.2",
   "url": "https://github.com/devemberteam-ops/pyre/releases/latest",
-  "notes": "Pyre 1.1.1 — hotfix: the desktop LAN server now bundles the web UI, so opening the desktop's address in a browser works out of the box (fixes the \"Route Not Found\" error when accessing the web version over LAN)."
+  "notes": "Pyre 1.1.2 — hotfix: web (LAN) chat now works. A paired web client proxies through the desktop's active provider, fixing the \"No provider configured\" / 503 / 403 errors caused by provider selection syncing between mismatched device lists."
 }

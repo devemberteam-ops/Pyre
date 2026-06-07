@@ -253,10 +253,19 @@ class RemoteBackend implements StoreBackend {
       synced['chatSettings'] = merged;
     }
 
-    // Provider role pointers (may be null).
-    synced['activeProviderId'] = rec['activeProviderId'];
-    synced['creatorProviderId'] = rec['creatorProviderId'];
-    synced['visionProviderId'] = rec['visionProviderId'];
+    // Provider role pointers are device-local (1.1.2). The server strips them
+    // for this non-native web client, so the record usually OMITS them — only
+    // adopt one when the key is actually present, otherwise keep the web's own
+    // local selection (don't let an absent key null it via the merge).
+    if (rec.containsKey('activeProviderId')) {
+      synced['activeProviderId'] = rec['activeProviderId'];
+    }
+    if (rec.containsKey('creatorProviderId')) {
+      synced['creatorProviderId'] = rec['creatorProviderId'];
+    }
+    if (rec.containsKey('visionProviderId')) {
+      synced['visionProviderId'] = rec['visionProviderId'];
+    }
 
     final m = (rec['mtime'] as num?)?.toInt();
     if (m != null) synced['settingsMtime'] = m;
@@ -276,11 +285,11 @@ class RemoteBackend implements StoreBackend {
       return v is Map ? v.cast<String, dynamic>() : null;
     }
 
+    // 1.1.2: the web client NEVER pushes the provider-role pointers — they're
+    // device-local and would clobber the desktop host's selection (the server
+    // also strips them defensively, but don't even send them).
     final rec = <String, dynamic>{
       'mtime': mtime,
-      'activeProviderId': blob['activeProviderId'],
-      'creatorProviderId': blob['creatorProviderId'],
-      'visionProviderId': blob['visionProviderId'],
     };
     final ms = obj('modelSettings');
     if (ms != null) rec['modelSettings'] = ms;

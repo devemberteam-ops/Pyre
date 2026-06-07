@@ -5,6 +5,23 @@ All notable changes to Pyre are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Pyre follows a leading-digit `MAJOR.MINOR.PATCH` version.
 
+## [1.1.2] - 2026-06-07
+
+A hotfix for web (LAN) chat.
+
+### Fixed
+
+- **Web/LAN chat: "No provider configured" / proxy 503 / 403.** The provider-role
+  pointers (which provider is active for chat / creator / vision) were syncing
+  between the desktop host and a paired web client — but the web client has its
+  own separate provider list (it never receives your keys; it proxies chat
+  through the desktop). The mismatched pointer made selecting a provider on one
+  device deselect it on the other, breaking chat with "No provider configured"
+  or "provider not permitted." The pointers are now **device-local** (they don't
+  sync to/from the web), and a paired web client always proxies through whatever
+  provider is **active on the desktop** — no provider setup needed on the web
+  side. (You may need to re-select your provider once per device after updating.)
+
 ## [1.1.1] - 2026-06-07
 
 A hotfix for a critical packaging bug in 1.1.0.
