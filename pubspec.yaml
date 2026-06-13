@@ -37,6 +37,17 @@ dependencies:
   path_provider: ^2.1.4
   http: ^1.2.2
   crypto: ^3.0.6
+  # Pyre 1.1.3: real browser file downloads on the web build (Blob + <a download>).
+  # Used ONLY by lib/services/web_download_web.dart (conditional import; never
+  # loaded on native). Lets web exports SAVE a file instead of dumping a data
+  # URL to the clipboard.
+  web: ^1.1.0
+  # Pyre 1.1.3: streaming-capable HTTP client for the WEB build. The default
+  # BrowserClient (XHR) buffers the whole response body, so SSE token streaming
+  # over the LAN proxy never streamed on web. FetchClient reads the Fetch API
+  # ReadableStream so chunks arrive incrementally. Used ONLY by
+  # lib/services/streaming_http_client_web.dart (conditional import).
+  fetch_client: ^1.1.2
   # Wave CY.18.257: AES-GCM-256 + HKDF-SHA256 for the encrypted opt-in
   # API-key sync over LAN. Pure Dart on every Flutter target. Used only by
   # lib/services/key_crypto.dart to wrap an API key in an envelope keyed by

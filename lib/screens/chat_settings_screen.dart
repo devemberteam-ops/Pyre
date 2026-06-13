@@ -1,4 +1,4 @@
-// Wave CY.18.202 — Chat Settings is now a clean 8-entry HUB.
+// Wave CY.18.202 — Chat Settings is now a clean HUB (9 entries).
 //
 // The old flat screen crammed display knobs, behaviour toggles, and
 // config-shortcuts together. It's now a nav list where each row opens a
@@ -13,6 +13,7 @@
 //   6. Live Sheet         → LiveSheetSettingsScreen (global cadence)
 //   7. Script             → ScriptSettingsScreen    (global beats cap)
 //   8. Guide              → GuideSettingsScreen     (guided generations)
+//   9. System note        → SystemNoteSettingsScreen (opt-in /sys action)
 //
 // Lorebooks moved BACK to the More main menu in this wave (it was here
 // since Wave 193) — it's a content library, not a chat setting.
@@ -28,6 +29,7 @@ import 'long_term_memory_screen.dart';
 import 'presets_screen.dart';
 import 'regex_rules_screen.dart';
 import 'script_settings_screen.dart';
+import 'system_note_settings_screen.dart';
 
 class ChatSettingsScreen extends StatelessWidget {
   const ChatSettingsScreen({super.key});
@@ -88,6 +90,13 @@ class ChatSettingsScreen extends StatelessWidget {
               subtitle:
                   'Steer the next reply, or draft your own message from an outline.',
               builder: (_) => const GuideSettingsScreen(),
+            ),
+            _HubRow(
+              icon: Icons.smart_toy_outlined,
+              title: 'System note',
+              subtitle:
+                  'Show the one-off /sys system-note action in the chat menu (off by default).',
+              builder: (_) => const SystemNoteSettingsScreen(),
             ),
           ]),
         ],

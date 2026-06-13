@@ -69,6 +69,13 @@ class UpdateInfo {
 final ValueNotifier<UpdateInfo?> availableUpdateNotifier =
     ValueNotifier<UpdateInfo?>(null);
 
+/// Whether the "update available" notice (launch snackbar + More-footer pill)
+/// should be shown: there's a newer release AND the user has NOT dismissed THIS
+/// version (`dismissedVersion` != the available `latestVersion`). Pure so both
+/// surfaces share one rule and it stays unit-testable.
+bool shouldShowUpdateNotice(UpdateInfo? update, String? dismissedVersion) =>
+    update != null && update.latestVersion != dismissedVersion;
+
 /// Check for an available update. Returns `null` if the user is on
 /// the latest version, the network is unavailable, the JSON couldn't
 /// be parsed, or the placeholder URL hasn't been configured yet. The

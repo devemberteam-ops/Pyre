@@ -112,9 +112,10 @@ class GalleryStrip extends StatelessWidget {
 }
 
 /// A single read-only gallery thumbnail. Resolves the `pyre://` ref via the
-/// same `AttachmentStore.fileForSync` path the avatar uses; missing/web →
-/// broken-image glyph. Tap opens the viewer; long-press (when wired) offers
-/// "Use as avatar".
+/// same path the avatar uses: a local file on native, or (on web) the paired
+/// server's `GET /attachments/<hash>` via `AttachmentStore.webAttachmentRequest`.
+/// A still-missing blob → broken-image glyph. Tap opens the viewer; long-press
+/// (when wired) offers "Use as avatar".
 class _Thumb extends StatelessWidget {
   final String ref;
   final VoidCallback onTap;
@@ -127,7 +128,13 @@ class _Thumb extends StatelessWidget {
   });
 
   ImageProvider? _resolve() {
-    if (kIsWeb) return null;
+    if (kIsWeb) {
+      // Pyre 1.1.3 (Gui): web has no filesystem — fetch the bytes from the
+      // paired server's GET /attachments/<hash> (bearer-gated), same path the
+      // card avatar uses. Was `return null` → blank/broken thumbnails on web.
+      final req = AttachmentStore.webAttachmentRequest(ref);
+      return req == null ? null : NetworkImage(req.url, headers: req.headers);
+    }
     final f = AttachmentStore.fileForSync(ref);
     if (f == null) return null;
     return FileImage(f);

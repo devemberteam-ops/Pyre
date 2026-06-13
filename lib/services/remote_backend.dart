@@ -76,6 +76,8 @@ class _BlobSplit {
     'activeProviderId',
     'creatorProviderId',
     'visionProviderId',
+    'impersonateProviderId',
+    'guideProviderId',
     'activePersonaId',
     'activePresetId',
     'characterDrafts',
@@ -265,6 +267,12 @@ class RemoteBackend implements StoreBackend {
     }
     if (rec.containsKey('visionProviderId')) {
       synced['visionProviderId'] = rec['visionProviderId'];
+    }
+    if (rec.containsKey('impersonateProviderId')) {
+      synced['impersonateProviderId'] = rec['impersonateProviderId'];
+    }
+    if (rec.containsKey('guideProviderId')) {
+      synced['guideProviderId'] = rec['guideProviderId'];
     }
 
     final m = (rec['mtime'] as num?)?.toInt();

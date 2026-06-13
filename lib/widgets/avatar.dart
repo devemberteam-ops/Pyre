@@ -136,17 +136,31 @@ class AvatarBubble extends StatelessWidget {
         image = _decodeAvatar(url);
       } else if (url.startsWith('http')) {
         image = NetworkImage(url);
-      } else if (AttachmentStore.isPyreUrl(url) && !kIsWeb) {
-        // Wave CY.18.64: content-addressed attachment. Sync resolve
-        // via the warmed-up dir cache (see main.dart's startup). If
-        // warmUp hasn't completed yet OR the backing file is missing
-        // (record synced from another device before bytes arrived),
-        // `fileForSync` returns null and we render the initial-letter
-        // fallback for now — next rebuild after the file lands will
-        // show the image.
-        final f = AttachmentStore.fileForSync(url);
-        if (f != null) {
-          image = FileImage(f);
+      } else if (AttachmentStore.isPyreUrl(url)) {
+        if (kIsWeb) {
+          // Pyre 1.1.3 (Gui): Wave CY.18.255 added the web attachment fetch
+          // helper but only the fullscreen lightbox used it — the list-row
+          // avatar thumbnail still skipped pyre:// on web, so externalised
+          // avatars (Creator cards + the bundled examples) showed only the
+          // letter fallback in the browser. Resolve it the same way the
+          // lightbox does: GET /attachments/<hash> on the paired server
+          // (bearer-gated, same-origin), loaded async inside the NetworkImage.
+          final req = AttachmentStore.webAttachmentRequest(url);
+          if (req != null) {
+            image = NetworkImage(req.url, headers: req.headers);
+          }
+        } else {
+          // Wave CY.18.64: content-addressed attachment. Sync resolve
+          // via the warmed-up dir cache (see main.dart's startup). If
+          // warmUp hasn't completed yet OR the backing file is missing
+          // (record synced from another device before bytes arrived),
+          // `fileForSync` returns null and we render the initial-letter
+          // fallback for now — next rebuild after the file lands will
+          // show the image.
+          final f = AttachmentStore.fileForSync(url);
+          if (f != null) {
+            image = FileImage(f);
+          }
         }
       }
     }

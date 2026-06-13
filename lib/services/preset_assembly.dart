@@ -10,16 +10,17 @@
 // `mainPrompt` / `postHistoryInstructions` BYTE-IDENTICALLY. The whole feature
 // is additive and rides on this — the prompt-lab golden suite is the backstop.
 //
-// MVP simplification (documented): a block's `role` is preserved on the model
-// for import fidelity / display, but assembly here treats ALL enabled blocks
-// as TEXT and joins them into the system / post-history slots. It does NOT yet
-// inject user/assistant-role blocks as separate chat turns, nor honour ST
-// in-chat depth injection. This covers the dominant "toggle system modules"
-// case; per-turn roles are a future enhancement.
+// Role + depth ARE honoured (Prompt Manager Core): a block with role 'user' or
+// 'assistant' becomes a separate chat TURN (not flattened to system text), and
+// a block with an explicit `depth` is injected into the history at that depth.
+// Only `role:'system'`, no-depth blocks join the text slots. The byte-identical
+// invariant still holds for the common all-system / flat case.
 
 import '../models/models.dart';
 
-/// The two assembled text slots a preset contributes to the chat prompt.
+/// What a preset contributes to the chat prompt: two TEXT slots (system /
+/// post-history, for `role:'system'` no-depth blocks) plus role-split + depth
+/// TURNS.
 class AssembledPreset {
   /// System prompt sent BEFORE the chat history.
   final String systemPrompt;
@@ -28,9 +29,22 @@ class AssembledPreset {
   /// prefill).
   final String postHistory;
 
+  /// `role:'user'/'assistant'` no-depth blocks placed BEFORE history, in order.
+  final List<({String role, String content})> beforeTurns;
+
+  /// `role:'user'/'assistant'` no-depth blocks placed AFTER history, in order.
+  final List<({String role, String content})> afterTurns;
+
+  /// Blocks with an explicit `depth` — injected as a turn `depth` messages from
+  /// the END of the chat history (any role). In list order.
+  final List<({int depth, String role, String content})> depthTurns;
+
   const AssembledPreset({
     required this.systemPrompt,
     required this.postHistory,
+    this.beforeTurns = const [],
+    this.afterTurns = const [],
+    this.depthTurns = const [],
   });
 }
 
@@ -53,26 +67,54 @@ AssembledPreset assemblePreset(Preset p) {
     );
   }
 
-  // MODULAR PATH. `role` is intentionally NOT consulted here (see file header).
+  // MODULAR PATH. Classify each enabled, non-empty block by role + depth.
   final before = <String>[];
   final after = <String>[];
+  final beforeTurns = <({String role, String content})>[];
+  final afterTurns = <({String role, String content})>[];
+  final depthTurns = <({int depth, String role, String content})>[];
   for (final b in p.promptBlocks) {
     if (!b.enabled) continue;
     // Skip empty content so we never join "" and create a double gap.
     if (b.content.isEmpty) continue;
+    final role = _normRole(b.role);
+    // Depth overrides position: an explicit depth makes it an in-chat turn.
+    if (b.depth != null) {
+      depthTurns.add((depth: b.depth!, role: role, content: b.content));
+      continue;
+    }
+    final isSystem = role == 'system';
     switch (b.position) {
       case PromptBlockPosition.beforeHistory:
-        before.add(b.content);
+        if (isSystem) {
+          before.add(b.content);
+        } else {
+          beforeTurns.add((role: role, content: b.content));
+        }
         break;
       case PromptBlockPosition.afterHistory:
-        after.add(b.content);
+        if (isSystem) {
+          after.add(b.content);
+        } else {
+          afterTurns.add((role: role, content: b.content));
+        }
         break;
     }
   }
   return AssembledPreset(
     systemPrompt: before.join('\n\n'),
     postHistory: after.join('\n\n'),
+    beforeTurns: beforeTurns,
+    afterTurns: afterTurns,
+    depthTurns: depthTurns,
   );
+}
+
+/// Normalise a block role to `'system' | 'user' | 'assistant'`. Anything else
+/// (empty / unknown / legacy) → `'system'` so it safely flattens to text.
+String _normRole(String role) {
+  final r = role.toLowerCase();
+  return (r == 'user' || r == 'assistant') ? r : 'system';
 }
 
 /// H-8: does this preset support the in-chat "Quick edit system prompt"

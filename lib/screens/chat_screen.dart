@@ -1730,7 +1730,8 @@ class _ChatScreenState extends State<ChatScreen> {
   /// never added to `chat.messages`, never persisted). The injection itself is
   /// the pure `injectGuide` inside `buildChatPrompt`; here we just resolve the
   /// position from settings and pass the note through.
-  List<ChatTurn> _buildTurns(AppStore store, Chat chat, {String? guide}) {
+  List<ChatTurn> _buildTurns(AppStore store, Chat chat,
+      {String? guide, bool includePostHistory = true}) {
     // Use the selected responder for the system prompt (so the right
     // character's voice is described). For >1 member chats, also include
     // a brief roster so the LLM knows the other personas in the scene.
@@ -1793,6 +1794,7 @@ class _ChatScreenState extends State<ChatScreen> {
       regexRules: store.regexRules,
       guideNote: guideNote,
       guidePosition: guideSettings.injectionPosition,
+      includePostHistory: includePostHistory,
     );
     return buildChatPrompt(inputs).turns;
   }
@@ -1957,18 +1959,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 _promptFillIn(chat);
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.drive_file_rename_outline),
-              title: const Text('Rename chat'),
-              subtitle: const Text(
-                'Name this chat to tell it apart from others.',
-                style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-              ),
-              onTap: () {
-                Navigator.pop(sheet);
-                _renameChatPrompt(chat, primary);
-              },
-            ),
+            // Rename chat moved INTO "More options ▸" (Gui) — keeps the
+            // top level to just the high-traffic New chat / Fill-In actions.
             // ── Memories ▸ ───────────────────────────────────────────
             Theme(
               data: Theme.of(context)
@@ -2010,31 +2002,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   ListTile(
                     leading: const Icon(Icons.account_tree_outlined),
                     title: const Text('Chat Tree'),
-                    onTap: () async {
+                    onTap: () {
                       Navigator.pop(sheet);
-                      // Wave CY.18.5: chat tree returns the picked
-                      // message id on pop. We scroll to that bubble so
-                      // the user lands exactly where they tapped, not
-                      // just on the right branch.
-                      final targetId =
-                          await Navigator.of(context).push<String>(
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              ChatTreeScreen(chatId: chat.id),
-                        ),
-                      );
-                      if (!mounted ||
-                          targetId == null ||
-                          targetId.isEmpty) {
-                        return;
-                      }
-                      // Give the rebuild triggered by the path-of-
-                      // selectVariant calls one frame to settle before
-                      // we measure offsets.
-                      await Future<void>.delayed(
-                          const Duration(milliseconds: 50));
-                      if (!mounted) return;
-                      _scrollToMessage(targetId);
+                      // Shared with the AppBar tree button (Wave CY.18.5
+                      // scroll-to-picked-message behaviour lives there now).
+                      _openChatTree(chat);
                     },
                   ),
                   ListTile(
@@ -2113,6 +2085,20 @@ class _ChatScreenState extends State<ChatScreen> {
                 childrenPadding:
                     const EdgeInsets.only(left: 16, bottom: 4),
                 children: [
+                  // Rename chat lives here now (moved out of the top level).
+                  ListTile(
+                    leading: const Icon(Icons.drive_file_rename_outline),
+                    title: const Text('Rename chat'),
+                    subtitle: const Text(
+                      'Name this chat to tell it apart from others.',
+                      style: TextStyle(
+                          color: EmberColors.textMid, fontSize: 12),
+                    ),
+                    onTap: () {
+                      Navigator.pop(sheet);
+                      _renameChatPrompt(chat, primary);
+                    },
+                  ),
                   ListTile(
                     leading: const Icon(Icons.tune),
                     title: const Text('Chat background'),
@@ -2774,13 +2760,22 @@ class _ChatScreenState extends State<ChatScreen> {
     final store = context.read<AppStore>();
     final chat = _chat(store);
     if (chat == null) return;
-    final provider = store.activeProvider;
+    // Feature (A): per-function provider routing. A GUIDED call (outline /
+    // perspective came from "Guide my message") uses the guide provider; a plain
+    // "Impersonate me" uses the impersonate provider. Both fall back to the chat
+    // provider when no override is set — so the default behaviour is unchanged.
+    final isGuided = outline != null || perspective != null;
+    final provider =
+        isGuided ? store.guideProvider : store.impersonateProvider;
     if (provider == null) return;
     // Wave CX: honour chat.personaId (not the global default).
     final persona = _chatPersona(store, chat);
     final personaName = persona?.name ?? 'the user';
     final preset = store.activePreset;
-    final turns = _buildTurns(store, chat);
+    // Impersonate/Guide fix: drop the preset's post-history (char-voice
+    // "stay in character") instructions — they contradict the OOC "write as
+    // {{user}}" turn appended just below, which triggered refusals.
+    final turns = _buildTurns(store, chat, includePostHistory: false);
     // Impersonation prompt — preset override if provided (ST presets define
     // it as `impersonation_prompt`), else our default. Wave CW tuned the
     // default; Wave CX.1 added the examples nudge. Guide Part 2 extracted the
@@ -3140,6 +3135,26 @@ class _ChatScreenState extends State<ChatScreen> {
     // chat-core-2-09: dispose the dialog-local controller on close (mirrors
     // the preset switcher's quickEditCtl) so each open doesn't leak one.
     ctl.dispose();
+  }
+
+  /// liveoaktripper: the chat tree / branching was buried in the per-message
+  /// kebab → users couldn't find it. This is the shared "open the tree" action,
+  /// now reused by BOTH the kebab entry AND a first-class AppBar button.
+  /// Pushes [ChatTreeScreen]; on pop it returns the message id the user picked
+  /// there, and we scroll the transcript to that bubble (Wave CY.18.5 behaviour,
+  /// preserved verbatim).
+  Future<void> _openChatTree(Chat chat) async {
+    final targetId = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => ChatTreeScreen(chatId: chat.id),
+      ),
+    );
+    if (!mounted || targetId == null || targetId.isEmpty) return;
+    // Give the rebuild triggered by the path-of-selectVariant calls one frame
+    // to settle before we measure offsets.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
+    _scrollToMessage(targetId);
   }
 
 
@@ -4177,6 +4192,12 @@ class _ChatScreenState extends State<ChatScreen> {
             onStop: _stop,
             onImpersonate: _impersonateMe,
             onAddOOC: () => _promptAuxAndAdd(chat, MessageKind.ooc, 'OOC'),
+            // System note is opt-in (Chat Settings → System note). Pass the
+            // callback only when enabled → the ⋮ item is hidden by default.
+            onAddSys: store.chatSettings.systemNoteEnabled
+                ? () =>
+                    _promptAuxAndAdd(chat, MessageKind.system, 'system note')
+                : null,
             onGuideReply:
                 store.guideSettings.enabled ? _armGuideForReply : null,
             onGuideMessage:
@@ -5332,6 +5353,11 @@ class _InputBar extends StatelessWidget {
   final VoidCallback onStop;
   final VoidCallback onImpersonate;
   final VoidCallback onAddOOC;
+  // liveoaktripper request: a one-tap "system note" insert (the `/sys`
+  // command as a button). NULLABLE + gated: only passed (non-null) when
+  // ChatSettings.systemNoteEnabled is on, so the item is HIDDEN by default
+  // and the menu stays uncluttered (Gui: "quase ninguém vai usar").
+  final VoidCallback? onAddSys;
   // Guide (Part 2): "Guide the reply" menu entry. Only surfaced when the
   // feature is enabled (callback non-null).
   final VoidCallback? onGuideReply;
@@ -5348,6 +5374,7 @@ class _InputBar extends StatelessWidget {
     required this.onStop,
     required this.onImpersonate,
     required this.onAddOOC,
+    this.onAddSys,
     this.onGuideReply,
     this.onGuideMessage,
   });
@@ -5379,7 +5406,7 @@ class _InputBar extends StatelessWidget {
             PopupMenuButton<String>(
               icon: const Icon(Icons.more_vert,
                   color: EmberColors.textMid),
-              tooltip: 'Guide / Impersonate / OOC',
+              tooltip: 'Guide / Impersonate / OOC / System',
               enabled: !generating,
               color: EmberColors.bgElevated,
               onSelected: (value) {
@@ -5387,6 +5414,7 @@ class _InputBar extends StatelessWidget {
                 if (value == 'guidemsg') onGuideMessage?.call();
                 if (value == 'impersonate') onImpersonate();
                 if (value == 'ooc') onAddOOC();
+                if (value == 'sys') onAddSys?.call();
               },
               itemBuilder: (_) => [
                 // Guide (Part 2 — Action 1): arm a one-shot guide for the next
@@ -5432,6 +5460,19 @@ class _InputBar extends StatelessWidget {
                     Text('Add OOC'),
                   ]),
                 ),
+                // liveoaktripper: surface the `/sys` command as a button — a
+                // one-off system-role instruction. HIDDEN unless enabled in
+                // Chat Settings → System note (then onAddSys is non-null).
+                if (onAddSys != null)
+                  const PopupMenuItem<String>(
+                    value: 'sys',
+                    child: Row(children: [
+                      Icon(Icons.smart_toy_outlined,
+                          size: 16, color: EmberColors.textMid),
+                      SizedBox(width: 10),
+                      Text('Add system note'),
+                    ]),
+                  ),
               ],
             ),
             Expanded(

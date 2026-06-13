@@ -221,16 +221,32 @@ class AttachmentStore {
   static ({String url, Map<String, String> headers})? webAttachmentRequest(
       String url) {
     if (!kIsWeb) return null;
-    if (!isPyreUrl(url)) return null;
-    final hash = url.substring(urlPrefix.length);
-    if (hash.isEmpty) return null;
     final client = LanClient.instance;
-    final base = client.baseUrl;
-    final bearer = client.bearerToken;
-    if (base == null || bearer == null || bearer.isEmpty) return null;
+    return webAttachmentRequestFor(url,
+        baseUrl: client.baseUrl, bearerToken: client.bearerToken);
+  }
+
+  /// Pure core of [webAttachmentRequest]: builds the `(url, headers)` from an
+  /// EXPLICIT baseUrl + bearer (no `kIsWeb`, no [LanClient] singleton), so it's
+  /// unit-testable. Returns null for a non-pyre url, an empty hash, or an
+  /// unpaired client (missing/blank baseUrl or bearer). A trailing slash on
+  /// [baseUrl] is trimmed so the path never doubles (`//attachments`).
+  static ({String url, Map<String, String> headers})? webAttachmentRequestFor(
+    String url, {
+    required String? baseUrl,
+    required String? bearerToken,
+  }) {
+    if (!isPyreUrl(url)) return null;
+    final hash = url.substring(urlPrefix.length).trim();
+    if (hash.isEmpty) return null;
+    if (baseUrl == null || baseUrl.isEmpty) return null;
+    if (bearerToken == null || bearerToken.isEmpty) return null;
+    final base = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
     return (
       url: '$base/attachments/$hash',
-      headers: {'authorization': 'Bearer $bearer'},
+      headers: {'authorization': 'Bearer $bearerToken'},
     );
   }
 

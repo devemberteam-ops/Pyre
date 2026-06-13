@@ -31,6 +31,8 @@ Map<String, dynamic> withoutProviderRolePointers(Map<String, dynamic> settings) 
   m.remove('activeProviderId');
   m.remove('creatorProviderId');
   m.remove('visionProviderId');
+  m.remove('impersonateProviderId');
+  m.remove('guideProviderId');
   return m;
 }
 
@@ -74,6 +76,19 @@ class AppStore extends ChangeNotifier {
   /// GPT) without having to use it for chat / sheet generation, where
   /// a text-only model like DeepSeek may be a better fit.
   String? visionProviderId;
+
+  /// Feature (A): optional override for "Impersonate me" (writing the user's
+  /// own message). Falls back to [activeProvider]. Lets the user pin a cleaner
+  /// / reasoning-off model for impersonation, which is more refusal-prone on a
+  /// safety-tuned chat model. Null means "use the same one as chat".
+  String? impersonateProviderId;
+
+  /// Feature (A): optional override for "Guide my message" (expanding the
+  /// user's outline into their message). Falls back to [impersonateProvider]
+  /// (which itself falls back to [activeProvider]) — guide-my-message is an
+  /// impersonation variant, so the impersonate override covers it unless pinned
+  /// separately. Null means "use the impersonate provider".
+  String? guideProviderId;
 
   List<Character> characters = [];
   List<Persona> personas = [];
@@ -265,6 +280,14 @@ class AppStore extends ChangeNotifier {
   /// rid of it. Same persisted-flag pattern as [exampleContentSeeded]:
   /// read `?? false` in load(), written only when true in _persist().
   bool defaultRegexRulesSeeded = false;
+
+  /// The "update available" version the user has DISMISSED (tapped Dismiss/View
+  /// on the launch snackbar, or ✕ on the More-footer pill). While this equals
+  /// the published `latestVersion`, BOTH the launch snackbar and the footer pill
+  /// stay hidden — so the update notice no longer re-nags on every app load. A
+  /// NEWER published version differs from this and surfaces the notice again.
+  /// Device-local UI pref; null = nothing dismissed yet.
+  String? dismissedUpdateVersion;
 
   /// Wave CY.18.40: per-model load errors captured during `load()`.
   /// Each entry is a human-readable string describing what failed
@@ -516,6 +539,8 @@ class AppStore extends ChangeNotifier {
       activeProviderId = raw['activeProviderId'] as String?;
       creatorProviderId = raw['creatorProviderId'] as String?;
       visionProviderId = raw['visionProviderId'] as String?;
+      impersonateProviderId = raw['impersonateProviderId'] as String?;
+      guideProviderId = raw['guideProviderId'] as String?;
       // Wave CY.18.99: per-provider refusal history (self-learning).
       final rawRefusals = raw['providerRefusals'];
       if (rawRefusals is Map) {
@@ -590,6 +615,7 @@ class AppStore extends ChangeNotifier {
       personaFavoritesExpanded =
           (raw['personaFavoritesExpanded'] as bool?) ?? true;
       seenOnboarding = (raw['seenOnboarding'] as bool?) ?? false;
+      dismissedUpdateVersion = raw['dismissedUpdateVersion'] as String?;
       // Wave CY.18.121: example-seed latch. Missing on pre-Wave backups
       // → false, but the seed gate's `charactersEmpty` + `!seenOnboarding`
       // clauses still protect any non-fresh install from re-seeding.
@@ -990,6 +1016,14 @@ class AppStore extends ChangeNotifier {
         !providerIds.contains(visionProviderId)) {
       visionProviderId = null;
     }
+    if (impersonateProviderId != null &&
+        !providerIds.contains(impersonateProviderId)) {
+      impersonateProviderId = null;
+    }
+    if (guideProviderId != null &&
+        !providerIds.contains(guideProviderId)) {
+      guideProviderId = null;
+    }
     // Wave CY.18.99: drop refusal records for providers that no longer
     // exist so the map doesn't grow unbounded across deletes.
     providerRefusals.removeWhere((id, _) => !providerIds.contains(id));
@@ -1231,6 +1265,8 @@ class AppStore extends ChangeNotifier {
       'activeProviderId': activeProviderId,
       'creatorProviderId': creatorProviderId,
       'visionProviderId': visionProviderId,
+      'impersonateProviderId': impersonateProviderId,
+      'guideProviderId': guideProviderId,
       // Wave CY.18.99: refusal history (omit when empty to keep blobs clean).
       if (providerRefusals.isNotEmpty) 'providerRefusals': providerRefusals,
       'characters': characters.map((c) => c.toJson()).toList(),
@@ -1271,6 +1307,8 @@ class AppStore extends ChangeNotifier {
       // Wave CY.18.121: example-seed latch (omit when false, mirroring
       // seenOnboarding, to keep fresh-install blobs clean).
       if (exampleContentSeeded) 'exampleContentSeeded': true,
+      if (dismissedUpdateVersion != null)
+        'dismissedUpdateVersion': dismissedUpdateVersion,
       // Wave CY.18.188: stale-Vesna-persona sweep latch.
       if (vesnaExamplePersonaSwept) 'vesnaExamplePersonaSwept': true,
       // Wave CY.18.204: persona-defaults migration latch.
@@ -1564,6 +1602,54 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
+  /// Feature (A): provider for "Impersonate me". Falls back to the chat
+  /// provider when no impersonate-specific override is set.
+  ApiProvider? get impersonateProvider {
+    if (impersonateProviderId == null) return activeProvider;
+    for (final p in providers) {
+      if (p.id == impersonateProviderId) return p;
+    }
+    // ID points to a deleted provider — fall back to active.
+    return activeProvider;
+  }
+
+  /// Pass null to clear the override (impersonate will reuse the chat provider).
+  void setImpersonateProvider(String? id) {
+    impersonateProviderId = id;
+    _touchSettings(); // SYNC W3: role pointer rides the LWW settings unit.
+    _bump();
+  }
+
+  /// Feature (A): provider for "Guide my message". Falls back to the
+  /// impersonate provider (then the chat provider) — guide-my-message is an
+  /// impersonation variant, so the impersonate override covers it unless the
+  /// user pins guide separately.
+  ApiProvider? get guideProvider {
+    if (guideProviderId == null) return impersonateProvider;
+    for (final p in providers) {
+      if (p.id == guideProviderId) return p;
+    }
+    return impersonateProvider;
+  }
+
+  /// Pass null to clear the override (guide will reuse the impersonate
+  /// provider, which itself falls back to chat).
+  void setGuideProvider(String? id) {
+    guideProviderId = id;
+    _touchSettings(); // SYNC W3: role pointer rides the LWW settings unit.
+    _bump();
+  }
+
+  /// Record that the user dismissed the "update available" notice for [version]
+  /// (launch snackbar or More-footer pill). Suppresses BOTH surfaces until a
+  /// newer version ships (which differs from [dismissedUpdateVersion]). No-op if
+  /// already dismissed for that version.
+  void dismissUpdate(String version) {
+    if (dismissedUpdateVersion == version) return;
+    dismissedUpdateVersion = version;
+    notifyAndPersist();
+  }
+
   ApiProvider addProvider({
     String name = 'New provider',
     ProviderKind kind = ProviderKind.external_,
@@ -1634,9 +1720,40 @@ class AppStore extends ChangeNotifier {
       visionProviderId = null;
       pointerChanged = true;
     }
+    if (impersonateProviderId == id) {
+      impersonateProviderId = null;
+      pointerChanged = true;
+    }
+    if (guideProviderId == id) {
+      guideProviderId = null;
+      pointerChanged = true;
+    }
     if (pointerChanged) _touchSettings();
     SecureKeys.delete(id);
     _bump();
+  }
+
+  /// clarkarch: duplicate an existing API connection — same config, fresh id +
+  /// "(copy)" name — so the user can keep e.g. one copy with reasoning ON and
+  /// one OFF, or fork a working setup. The OS-secure API key is copied to the
+  /// clone's slot so it's usable immediately. Inserted right after the source.
+  /// Returns the clone, or null if [id] is unknown.
+  ApiProvider? duplicateProvider(String id) {
+    final i = providers.indexWhere((p) => p.id == id);
+    if (i < 0) return null;
+    final original = providers[i];
+    final clone = ApiProvider.fromJson(original.toJson())
+      ..id = newId('prov')
+      ..name = '${original.name} (copy)'
+      ..apiKey = original.apiKey
+      ..mtime = DateTime.now().millisecondsSinceEpoch;
+    if (clone.apiKey.isNotEmpty) {
+      // Mirror addProvider — the key never lives in the JSON blob.
+      SecureKeys.write(clone.id, clone.apiKey);
+    }
+    providers.insert(i + 1, clone);
+    _bump();
+    return clone;
   }
 
   void setActiveProvider(String id) {
@@ -2364,6 +2481,8 @@ class AppStore extends ChangeNotifier {
     activeProviderId = null;
     creatorProviderId = null;
     visionProviderId = null;
+    impersonateProviderId = null;
+    guideProviderId = null;
     characters = [];
     personas = [];
     activePersonaId = null;
@@ -2411,6 +2530,11 @@ class AppStore extends ChangeNotifier {
       characterIds: [character.id],
       characterSnapshots: {character.id: snapshot},
       personaId: activePersonaId,
+      // Feature (B): a new chat inherits the global "start new chats with
+      // Checkpoints / Live Sheet ON/OFF" defaults (both default true → today's
+      // behaviour). ensureLiveSheetSeed below no-ops when the sheet is off.
+      memoryEnabled: memorySettings.newChatsEnabled,
+      liveSheetEnabled: liveSheetSettings.newChatsEnabled,
     );
     // Seed with the character's first message + alternate greetings as variants
     final firstMes = (character.firstMes).trim();
@@ -3030,6 +3154,8 @@ class AppStore extends ChangeNotifier {
       'activeProviderId': activeProviderId,
       'creatorProviderId': creatorProviderId,
       'visionProviderId': visionProviderId,
+      'impersonateProviderId': impersonateProviderId,
+      'guideProviderId': guideProviderId,
     };
   }
 
@@ -3088,6 +3214,12 @@ class AppStore extends ChangeNotifier {
     }
     if (j.containsKey('visionProviderId')) {
       visionProviderId = j['visionProviderId'] as String?;
+    }
+    if (j.containsKey('impersonateProviderId')) {
+      impersonateProviderId = j['impersonateProviderId'] as String?;
+    }
+    if (j.containsKey('guideProviderId')) {
+      guideProviderId = j['guideProviderId'] as String?;
     }
 
     settingsMtime = m;

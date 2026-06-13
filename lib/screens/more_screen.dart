@@ -274,7 +274,9 @@ class _VersionFooterState extends State<_VersionFooter> {
                     color: EmberColors.textDim, fontSize: 11),
               ),
             ),
-            if (update != null) ...[
+            if (update != null &&
+                update.latestVersion !=
+                    context.watch<AppStore>().dismissedUpdateVersion) ...[
               const SizedBox(height: 12),
               Center(
                 child: InkWell(
@@ -336,6 +338,18 @@ class _VersionFooterState extends State<_VersionFooter> {
                         const SizedBox(width: 10),
                         const Icon(Icons.download_rounded,
                             size: 20, color: EmberColors.primary),
+                        // Dismiss ✕ — remembers this version so the pill stays
+                        // hidden until a newer release ships (tapping it does
+                        // NOT open the release page).
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 18),
+                          color: EmberColors.textDim,
+                          visualDensity: VisualDensity.compact,
+                          tooltip: 'Dismiss',
+                          onPressed: () => context
+                              .read<AppStore>()
+                              .dismissUpdate(update.latestVersion),
+                        ),
                       ],
                     ),
                   ),

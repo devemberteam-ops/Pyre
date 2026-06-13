@@ -122,8 +122,8 @@ void main() {
     });
   });
 
-  group('datamodel-...-03 — ST import surfaces role-not-honored warning', () {
-    test('non-system block role adds a user-visible skipped note', () {
+  group('Prompt Manager Core — ST import HONORS role (no flatten warning)', () {
+    test('a non-system block keeps its role and adds NO flatten warning', () {
       final json = jsonEncode({
         'name': 'Role Preset',
         'prompts': [
@@ -152,11 +152,14 @@ void main() {
       });
 
       final result = parseSillyTavernPreset(json);
-      // The block is still imported (role is round-tripped on the model)...
+      // The block is imported with its role preserved...
       expect(result.preset.promptBlocks.length, 2);
-      // ...but a user-visible note flags the flattening so it isn't silent.
+      expect(result.preset.promptBlocks[1].role, 'assistant');
+      // ...and Prompt Manager Core now honours it as a real chat turn, so the
+      // old "role flattened / not honored yet" import warning is gone.
       final joined = result.skipped.join(' | ').toLowerCase();
-      expect(joined, contains('role'));
+      expect(joined, isNot(contains('flatten')));
+      expect(joined, isNot(contains('honor')));
     });
 
     test('all-system preset adds NO role note', () {

@@ -60,6 +60,7 @@ import '../services/generation_keepalive.dart';
 import '../services/png_encoder.dart';
 import '../services/png_parser.dart';
 import '../services/token_estimate.dart';
+import '../services/web_download.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/chat_text.dart';
@@ -3199,12 +3200,10 @@ class _CharacterAssistantScreenState
           final filename =
               '${safeName.isEmpty ? 'card' : safeName}.card.png';
           if (kIsWeb) {
-            final dataUrl =
-                'data:image/png;base64,${base64Encode(pngBytes)}';
-            await Clipboard.setData(ClipboardData(text: dataUrl));
-            messenger.showSnackBar(const SnackBar(
-                content: Text(
-                    'Web: copied PNG as data URL to clipboard. Paste into an image editor to save.')));
+            // Web has no filesystem — trigger a real browser download.
+            downloadBytesToBrowser(pngBytes, filename, 'image/png');
+            messenger.showSnackBar(
+                SnackBar(content: Text('Downloading $filename')));
           } else {
             final dir = await getApplicationDocumentsDirectory();
             final outDir = Directory('${dir.path}/PyreExports');
@@ -3401,16 +3400,29 @@ class _CharacterAssistantScreenState
         // sessions hamburger. leadingWidth bumped so they don't
         // squeeze the title.
         automaticallyImplyLeading: false,
-        leadingWidth: 88,
+        // Bumped from 88 → 100 so the sessions-count Badge has room and isn't
+        // clipped by the title area.
+        leadingWidth: 100,
         leading: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             const BackButton(),
-            IconButton(
-              tooltip: 'Sessions',
-              icon: const Icon(Icons.menu),
-              onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-            ),
+            // liveoaktripper: he wanted to "resume a prior session instead of
+            // always starting new" — but never found the drawer. The resume
+            // feature already exists here; the gap was discovery. A count badge
+            // appears once there's more than one saved session, drawing the eye
+            // to the drawer, plus a clearer tooltip ("drafts" not just "menu").
+            Builder(builder: (_) {
+              final n = store.creatorSessions.length;
+              final btn = IconButton(
+                tooltip: n > 1
+                    ? 'Saved drafts & past sessions ($n)'
+                    : 'Saved drafts & sessions',
+                icon: const Icon(Icons.menu),
+                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+              );
+              return n > 1 ? Badge.count(count: n, child: btn) : btn;
+            }),
           ],
         ),
         actions: [

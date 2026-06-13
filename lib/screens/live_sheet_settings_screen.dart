@@ -27,16 +27,20 @@ class LiveSheetSettingsScreen extends StatefulWidget {
 
 class _LiveSheetSettingsScreenState extends State<LiveSheetSettingsScreen> {
   late int _autoEvery;
+  late bool _newChatsEnabled;
 
   @override
   void initState() {
     super.initState();
-    _autoEvery = context.read<AppStore>().liveSheetSettings.autoEvery;
+    final ls = context.read<AppStore>().liveSheetSettings;
+    _autoEvery = ls.autoEvery;
+    _newChatsEnabled = ls.newChatsEnabled;
   }
 
   void _commit() {
     final store = context.read<AppStore>();
     store.liveSheetSettings.autoEvery = _autoEvery;
+    store.liveSheetSettings.newChatsEnabled = _newChatsEnabled;
     store.notifyAndPersist();
   }
 
@@ -125,6 +129,21 @@ class _LiveSheetSettingsScreenState extends State<LiveSheetSettingsScreen> {
                     'it.'),
               ]),
             ],
+          ),
+          Card(
+            margin: const EdgeInsets.symmetric(vertical: 6),
+            child: SwitchListTile(
+              value: _newChatsEnabled,
+              onChanged: (v) {
+                setState(() => _newChatsEnabled = v);
+                _commit();
+              },
+              title: const Text('New chats start with the Live Sheet on'),
+              subtitle: const Text(
+                  'When off, a brand-new chat begins with state-tracking '
+                  'disabled. Existing chats and the per-chat toggle are '
+                  'unaffected; manual "Update state now" always works.'),
+            ),
           ),
           // ── Auto-update cadence ───────────────────────────────────────
           SliderCard(

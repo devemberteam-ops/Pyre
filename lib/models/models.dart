@@ -107,6 +107,20 @@ const String kExplicitNoPersonaId = '__pyre_explicit_none__';
 /// self-hosted on the same machine or LAN).
 enum ProviderKind { external_, proxy, localhost }
 
+/// Pyre 1.1.3: the WIRE FORMAT a provider speaks. [openai] = the
+/// OpenAI-compatible `/chat/completions` dialect (OpenAI, OpenRouter, Venice, LM
+/// Studio, Ollama — the default, every provider pre-1.1.3). [anthropic] = the
+/// native Anthropic `/v1/messages` dialect (x-api-key + anthropic-version
+/// headers, top-level `system`, content-block SSE) so a Claude API key plugs in
+/// directly without an OpenAI-compatible proxy.
+enum ApiFormat { openai, anthropic }
+
+String apiFormatToString(ApiFormat f) =>
+    f == ApiFormat.anthropic ? 'anthropic' : 'openai';
+
+ApiFormat apiFormatFromString(String? s) =>
+    s == 'anthropic' ? ApiFormat.anthropic : ApiFormat.openai;
+
 class ApiProvider {
   String id;
   String name;
@@ -153,6 +167,11 @@ class ApiProvider {
   /// meaningful for localhost providers. Default true.
   bool warmUpOnLaunch;
 
+  /// Pyre 1.1.3: the wire format this provider speaks (OpenAI-compatible vs
+  /// native Anthropic `/v1/messages`). Default [ApiFormat.openai] → unchanged
+  /// for every existing provider.
+  ApiFormat format;
+
   /// Wave CY.18.258: last-write-wins clock for encrypted key-sync. Bumped
   /// whenever the provider's config or key changes; the sync engine emits
   /// only providers with `mtime > since` and resolves conflicts by the
@@ -178,6 +197,7 @@ class ApiProvider {
     this.promptPostProcessing = PromptPostProcessing.none,
     this.contextWindow,
     this.warmUpOnLaunch = true,
+    this.format = ApiFormat.openai,
     this.mtime = 0,
   })  : headers = headers ?? <String, String>{},
         extraParams = extraParams ?? <String, dynamic>{};
@@ -203,6 +223,8 @@ class ApiProvider {
       // Wave CY.18.120: default true so pre-Wave backups (no field) opt
       // every localhost provider into warm-up automatically.
       warmUpOnLaunch: (j['warmUpOnLaunch'] as bool?) ?? true,
+      // Pyre 1.1.3: default openai (unchanged) for records without the field.
+      format: apiFormatFromString(j['format'] as String?),
       // Wave CY.18.258: default 0 for pre-Wave / never-synced records.
       mtime: (j['mtime'] as num?)?.toInt() ?? 0,
     );
@@ -241,6 +263,9 @@ class ApiProvider {
         // Wave CY.18.120: always persisted (cheap bool) so the user's
         // explicit on/off choice round-trips through backups.
         'warmUpOnLaunch': warmUpOnLaunch,
+        // Pyre 1.1.3: only emit when non-default so existing providers' JSON
+        // stays byte-identical to pre-1.1.3 backups.
+        if (format != ApiFormat.openai) 'format': apiFormatToString(format),
         // Wave CY.18.258: LWW clock for encrypted key-sync. Cheap int,
         // always persisted so it survives backups.
         'mtime': mtime,
@@ -1179,6 +1204,13 @@ class PromptBlock {
   String role;
   PromptBlockPosition position;
 
+  /// Prompt Manager Core: in-chat injection depth. `null` → use [position]
+  /// (before/after history) exactly as before. Non-null → inject this block as
+  /// a turn `depth` messages from the END of the chat history (mirrors ST
+  /// `injection_depth`; depth 0 = after the last message). Honoured together
+  /// with [role] in services/preset_assembly.dart.
+  int? depth;
+
   PromptBlock({
     required this.id,
     required this.name,
@@ -1186,6 +1218,7 @@ class PromptBlock {
     this.enabled = true,
     this.role = 'system',
     this.position = PromptBlockPosition.beforeHistory,
+    this.depth,
   });
 
   factory PromptBlock.fromJson(Map<String, dynamic> j) => PromptBlock(
@@ -1195,6 +1228,7 @@ class PromptBlock {
         enabled: (j['enabled'] as bool?) ?? true,
         role: (j['role'] as String?) ?? 'system',
         position: promptBlockPositionFromString(j['position'] as String?),
+        depth: (j['depth'] as num?)?.toInt(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -1204,6 +1238,7 @@ class PromptBlock {
         'enabled': enabled,
         'role': role,
         'position': promptBlockPositionToString(position),
+        if (depth != null) 'depth': depth,
       };
 }
 
@@ -1973,6 +2008,12 @@ class MemorySettings {
   /// change can force-reset [summaryPrompt] exactly once on the next launch.
   int summaryPromptVersion;
 
+  /// Feature (B): whether a freshly-created chat starts with Checkpoints
+  /// (per-chat `memoryEnabled`) ON. Default true (unchanged behaviour). When
+  /// false, new chats start with auto-checkpoints OFF — the per-chat toggle and
+  /// manual "Summarise now" still work.
+  bool newChatsEnabled;
+
   /// Wave CY.18.2: each checkpoint is the NEXT PARAGRAPH of an
   /// ongoing chapter, not a standalone synopsis. The prompt walks
   /// the LLM through both modes — open the chapter when there is no
@@ -2035,6 +2076,7 @@ class MemorySettings {
     this.memoryLimit = 1000,
     this.summaryPrompt = _defaultPrompt,
     this.summaryPromptVersion = kSummaryPromptVersion,
+    this.newChatsEnabled = true,
   });
 
   factory MemorySettings.fromJson(Map<String, dynamic> j) {
@@ -2054,6 +2096,7 @@ class MemorySettings {
       summaryPrompt: mustReset ? _defaultPrompt : stored,
       // Stamp the current version so the reset happens exactly once.
       summaryPromptVersion: kSummaryPromptVersion,
+      newChatsEnabled: (j['newChatsEnabled'] as bool?) ?? true,
     );
   }
 
@@ -2062,6 +2105,7 @@ class MemorySettings {
         'memoryLimit': memoryLimit,
         'summaryPrompt': summaryPrompt,
         'summaryPromptVersion': summaryPromptVersion,
+        'newChatsEnabled': newChatsEnabled,
       };
 }
 
@@ -2169,6 +2213,12 @@ class LiveSheetSettings {
   int autoEvery;
   String updatePrompt;
   String seedPrompt;
+
+  /// Feature (B): whether a freshly-created chat starts with the Live Sheet
+  /// (per-chat `liveSheetEnabled`) ON. Default true (unchanged behaviour). When
+  /// false, new chats start with state-tracking OFF — the per-chat toggle and
+  /// manual "Update state now" still work.
+  bool newChatsEnabled;
   static const _defaultUpdatePrompt =
       'You maintain a CURRENT-STATE sheet for an ongoing roleplay. You are '
       'given each tracked entity\'s current mini-sheet, then the most recent '
@@ -2210,12 +2260,13 @@ class LiveSheetSettings {
       'state as of the latest message (e.g. if they were undressed in the scene, '
       'say so). Keep each fact a short phrase. Invent nothing not supported by the '
       'description or conversation.';
-  LiveSheetSettings({this.autoEvery = 10, this.updatePrompt = _defaultUpdatePrompt, this.seedPrompt = _defaultSeedPrompt});
+  LiveSheetSettings({this.autoEvery = 10, this.updatePrompt = _defaultUpdatePrompt, this.seedPrompt = _defaultSeedPrompt, this.newChatsEnabled = true});
   factory LiveSheetSettings.fromJson(Map<String, dynamic> j) => LiveSheetSettings(
         autoEvery: _jInt(j['autoEvery']) ?? 10,
         updatePrompt: (j['updatePrompt'] as String?) ?? _defaultUpdatePrompt,
-        seedPrompt: (j['seedPrompt'] as String?) ?? _defaultSeedPrompt);
-  Map<String, dynamic> toJson() => {'autoEvery': autoEvery, 'updatePrompt': updatePrompt, 'seedPrompt': seedPrompt};
+        seedPrompt: (j['seedPrompt'] as String?) ?? _defaultSeedPrompt,
+        newChatsEnabled: (j['newChatsEnabled'] as bool?) ?? true);
+  Map<String, dynamic> toJson() => {'autoEvery': autoEvery, 'updatePrompt': updatePrompt, 'seedPrompt': seedPrompt, 'newChatsEnabled': newChatsEnabled};
 }
 
 /// Script (story-direction) configuration — global, stored alongside
@@ -2436,6 +2487,12 @@ class ChatSettings {
   /// This is the user-facing "bubble size" control.
   double bubbleTextScale;
 
+  /// Pyre 1.1.3 (liveoaktripper / Gui): whether the "Add system note" action
+  /// (a one-off `/sys` system-role insert) shows in the chat input's ⋮ menu.
+  /// Defaults OFF — it's a power-user feature most people never touch, so the
+  /// menu stays uncluttered; opt in via Chat Settings → System note.
+  bool systemNoteEnabled;
+
   ChatSettings({
     this.deleteBehavior = DeleteBehavior.onlyThis,
     this.hideReasoning = true,
@@ -2452,6 +2509,7 @@ class ChatSettings {
     this.bubbleBorderColor,
     this.bubbleBlurSigma = 0.0,
     this.bubbleTextScale = 1.0,
+    this.systemNoteEnabled = false,
   });
 
   bool get cascadeDelete => deleteBehavior == DeleteBehavior.thisAndAfter;
@@ -2480,6 +2538,7 @@ class ChatSettings {
     int? bubbleBorderColor,
     double? bubbleBlurSigma,
     double? bubbleTextScale,
+    bool? systemNoteEnabled,
   }) {
     return ChatSettings(
       deleteBehavior: deleteBehavior ?? this.deleteBehavior,
@@ -2498,6 +2557,7 @@ class ChatSettings {
       bubbleBorderColor: bubbleBorderColor ?? this.bubbleBorderColor,
       bubbleBlurSigma: bubbleBlurSigma ?? this.bubbleBlurSigma,
       bubbleTextScale: bubbleTextScale ?? this.bubbleTextScale,
+      systemNoteEnabled: systemNoteEnabled ?? this.systemNoteEnabled,
     );
   }
 
@@ -2535,6 +2595,7 @@ class ChatSettings {
       bubbleBorderColor: (j['bubbleBorderColor'] as num?)?.toInt(),
       bubbleBlurSigma: (j['bubbleBlurSigma'] as num?)?.toDouble() ?? 0.0,
       bubbleTextScale: (j['bubbleTextScale'] as num?)?.toDouble() ?? 1.0,
+      systemNoteEnabled: (j['systemNoteEnabled'] as bool?) ?? false,
     );
   }
 
@@ -2592,6 +2653,7 @@ class ChatSettings {
         if (bubbleBorderColor != null) 'bubbleBorderColor': bubbleBorderColor,
         'bubbleBlurSigma': bubbleBlurSigma,
         'bubbleTextScale': bubbleTextScale,
+        'systemNoteEnabled': systemNoteEnabled,
       };
 }
 

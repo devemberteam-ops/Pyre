@@ -209,9 +209,21 @@ StImportResult parseSillyTavernPreset(String jsonText) {
     // (`injection_position: 1` — rendered at depth as a reminder/jailbreak).
     final injectionPosition =
         item['injection_position'] ?? p['injection_position'];
-    final position = (blockPastHistory || injectionPosition == 1)
+    final isInChatInjection = injectionPosition == 1;
+    final position = (blockPastHistory || isInChatInjection)
         ? PromptBlockPosition.afterHistory
         : PromptBlockPosition.beforeHistory;
+    // Prompt Manager Core (Task 6): an ST in-chat injection
+    // (`injection_position: 1`) renders at a DEPTH inside the chat history.
+    // Carry its `injection_depth` (ST default 4) as `depth` so assembly injects
+    // the block mid-history at that depth — full ST fidelity — instead of merely
+    // after history. Non-in-chat blocks keep `depth: null` (position-based).
+    int? depth;
+    if (isInChatInjection) {
+      final rawDepth = item['injection_depth'] ?? p['injection_depth'];
+      final d = rawDepth is num ? rawDepth.toInt() : 4;
+      depth = d < 0 ? 0 : d;
+    }
     // `enabled` from the order entry; default true (the prompts[] fallback path
     // sets it true above, and a malformed order entry should still show up).
     final enabled = item['enabled'] != false;
@@ -223,25 +235,14 @@ StImportResult parseSillyTavernPreset(String jsonText) {
       enabled: enabled,
       role: role,
       position: position,
+      depth: depth,
     ));
   }
 
-  // datamodel-...-03: `PromptBlock.role` round-trips on the model but assembly
-  // flattens every enabled block into system / post-history TEXT — it does NOT
-  // yet inject user/assistant-role blocks as separate chat turns. If any enabled
-  // block carries a non-system role (e.g. an assistant prefill or a user-role
-  // nudge), surface a one-line note in the import summary so the fidelity loss
-  // isn't silent. (`role` is preserved, so a future role-as-turn assembly can
-  // honour it without re-importing.)
-  final rolefulCount = blocks
-      .where((b) => b.enabled && b.role.toLowerCase() != 'system')
-      .length;
-  if (rolefulCount > 0) {
-    skipped.add(
-      '$rolefulCount block${rolefulCount == 1 ? "" : "s"} with a non-system '
-      'role flattened to system text (role not honored yet)',
-    );
-  }
+  // Prompt Manager Core: role IS now honored — user/assistant blocks become
+  // real chat turns and `injection_position:1` blocks inject at their depth (see
+  // chat_prompt_builder.insertDepthTurns). So the old "role flattened to system
+  // text (not honored yet)" import warning is gone; nothing to surface here.
 
   // Pull sampling settings — ST uses snake_case + openai-prefix.
   double? readDouble(String key) {

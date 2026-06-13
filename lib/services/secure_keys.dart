@@ -71,6 +71,11 @@ class SecureKeys {
   /// completes (so async chains don't break), but the user-visible
   /// state will surface the failure on next Storage-screen open.
   static Future<void> write(String providerId, String key) async {
+    // 1.1.3: a web build proxies LLM calls through the paired desktop and NEVER
+    // uses a locally-stored key, but flutter_secure_storage_web can throw a
+    // null-check writing one — surfacing a scary "API key failed to write"
+    // banner for a key that would never be used. Skip secure storage on web.
+    if (kIsWeb) return;
     final slot = 'provider:$providerId';
     try {
       if (key.isEmpty) {
@@ -84,6 +89,7 @@ class SecureKeys {
   }
 
   static Future<String> read(String providerId) async {
+    if (kIsWeb) return ''; // web never stores keys (see write)
     final slot = 'provider:$providerId';
     try {
       final v = await _store.read(key: slot);
@@ -100,6 +106,7 @@ class SecureKeys {
   }
 
   static Future<void> delete(String providerId) async {
+    if (kIsWeb) return; // web never stores keys (see write)
     final slot = 'provider:$providerId';
     try {
       await _store.delete(key: slot);
@@ -110,6 +117,7 @@ class SecureKeys {
 
   /// Wipe every secret. Used by the Storage screen's "Wipe local data".
   static Future<void> clearAll() async {
+    if (kIsWeb) return; // web never stores keys (see write)
     try {
       await _store.deleteAll();
     } catch (e) {

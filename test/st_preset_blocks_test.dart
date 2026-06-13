@@ -23,6 +23,68 @@ import 'package:pyre/services/st_preset_import.dart';
 
 void main() {
   group('parseSillyTavernPreset → promptBlocks', () {
+    // Prompt Manager Core (Task 6): an ST in-chat injection
+    // (`injection_position: 1`) carries an `injection_depth` — import it onto
+    // the PromptBlock's `depth` so assembly injects it mid-history at that
+    // depth, not merely after history.
+    test('injection_position:1 imports depth from injection_depth', () {
+      final json = jsonEncode({
+        'name': 'Depth',
+        'prompts': [
+          {'identifier': 'main', 'role': 'system', 'content': 'sys'},
+          {'identifier': 'chatHistory', 'marker': true},
+          {
+            'identifier': 'reminder',
+            'role': 'system',
+            'content': 'Stay in character.',
+            'injection_position': 1,
+            'injection_depth': 4,
+          },
+        ],
+        'prompt_order': [
+          {
+            'character_id': 1,
+            'order': [
+              {'identifier': 'main', 'enabled': true},
+              {'identifier': 'chatHistory', 'enabled': true},
+              {'identifier': 'reminder', 'enabled': true},
+            ],
+          },
+        ],
+      });
+      final blocks = parseSillyTavernPreset(json).preset.promptBlocks;
+      expect(blocks.length, 2);
+      // A plain before-history block carries no depth.
+      expect(blocks[0].depth, isNull);
+      // In-chat injection → depth from injection_depth.
+      expect(blocks[1].depth, 4);
+    });
+
+    test('injection_position:1 with no injection_depth defaults to ST depth 4',
+        () {
+      final json = jsonEncode({
+        'name': 'DepthDefault',
+        'prompts': [
+          {
+            'identifier': 'reminder',
+            'role': 'system',
+            'content': 'Stay in character.',
+            'injection_position': 1,
+          },
+        ],
+        'prompt_order': [
+          {
+            'character_id': 1,
+            'order': [
+              {'identifier': 'reminder', 'enabled': true},
+            ],
+          },
+        ],
+      });
+      final blocks = parseSillyTavernPreset(json).preset.promptBlocks;
+      expect(blocks.single.depth, 4);
+    });
+
     test('realistic modular preset: order, enabled, position, markers', () {
       final json = jsonEncode({
         'name': 'Modular RP',
@@ -271,8 +333,12 @@ void main() {
       // System prompt = enabled beforeHistory blocks joined; excludes disabled.
       expect(assembled.systemPrompt, 'BASE SYSTEM\n\nENABLED MODULE');
       expect(assembled.systemPrompt, isNot(contains('DISABLED MODULE')));
-      // afterHistory block goes to post-history.
-      expect(assembled.postHistory, 'POST HISTORY');
+      // Prompt Manager Core (Task 6): the ST in-chat injection
+      // (`injection_position: 1`, no explicit depth → ST default 4) is now a
+      // DEPTH turn injected mid-history, NOT post-history TEXT.
+      expect(assembled.postHistory, '');
+      expect(assembled.depthTurns,
+          const [(depth: 4, role: 'system', content: 'POST HISTORY')]);
     });
 
     test('no prompt_order → falls back to prompts[] order, all enabled', () {

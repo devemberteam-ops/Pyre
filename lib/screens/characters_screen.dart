@@ -20,6 +20,7 @@ import '../services/lorebook_import.dart';
 import '../services/attachment_store.dart';
 import '../services/png_encoder.dart';
 import '../services/png_parser.dart';
+import '../services/web_download.dart';
 import '../services/resolvers.dart';
 import '../services/token_estimate.dart';
 import '../state/app_store.dart';
@@ -661,14 +662,11 @@ Future<void> _exportCharacterAsPng(BuildContext context, Character c) async {
         '${safeName.isEmpty ? 'card' : safeName}.card.png';
 
     if (kIsWeb) {
-      // Web has no filesystem; fall back to clipboard with a data URL.
-      final dataUrl =
-          'data:image/png;base64,${base64Encode(pngBytes)}';
-      await Clipboard.setData(ClipboardData(text: dataUrl));
+      // Web has no filesystem — trigger a real browser download instead of
+      // copying an unsaveable data URL to the clipboard.
+      downloadBytesToBrowser(pngBytes, filename, 'image/png');
       messenger.showSnackBar(
-        const SnackBar(
-            content: Text(
-                'Web: copied PNG as data URL to clipboard. Paste into an image editor or save as a file.')),
+        SnackBar(content: Text('Downloading $filename')),
       );
       return;
     }
@@ -782,12 +780,10 @@ Future<void> _exportPersonaAsPng(BuildContext context, Persona p) async {
     final filename = '${safeName.isEmpty ? 'persona' : safeName}.card.png';
 
     if (kIsWeb) {
-      final dataUrl = 'data:image/png;base64,${base64Encode(pngBytes)}';
-      await Clipboard.setData(ClipboardData(text: dataUrl));
+      // Web has no filesystem — trigger a real browser download.
+      downloadBytesToBrowser(pngBytes, filename, 'image/png');
       messenger.showSnackBar(
-        const SnackBar(
-            content: Text(
-                'Web: copied PNG as data URL to clipboard. Paste into an image editor or save as a file.')),
+        SnackBar(content: Text('Downloading $filename')),
       );
       return;
     }

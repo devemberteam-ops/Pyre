@@ -46,6 +46,7 @@ class _LongTermMemoryScreenState extends State<LongTermMemoryScreen> {
       autoEvery: src.autoEvery,
       memoryLimit: src.memoryLimit,
       summaryPrompt: src.summaryPrompt,
+      newChatsEnabled: src.newChatsEnabled,
     );
     _promptCtl = TextEditingController(text: src.summaryPrompt);
   }
@@ -176,6 +177,21 @@ class _LongTermMemoryScreenState extends State<LongTermMemoryScreen> {
                     'truncating, that\'s the provider, not the feature.'),
               ]),
             ],
+          ),
+          Card(
+            margin: const EdgeInsets.symmetric(vertical: 6),
+            child: SwitchListTile(
+              value: _draft.newChatsEnabled,
+              onChanged: (v) {
+                setState(() => _draft.newChatsEnabled = v);
+                _commit();
+              },
+              title: const Text('New chats start with Checkpoints on'),
+              subtitle: const Text(
+                  'When off, a brand-new chat begins with auto-checkpoints '
+                  'disabled. Existing chats and the per-chat toggle are '
+                  'unaffected; manual "Summarise now" always works.'),
+            ),
           ),
           _SliderCard(
             label: 'Auto-checkpoint frequency',

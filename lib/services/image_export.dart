@@ -1,11 +1,12 @@
-import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+
+import 'web_download.dart';
 
 /// Wave CY.18.250: shared "write image bytes to PyreExports + offer Share"
 /// helper. Mirrors `_exportCharacterAsPng`'s native write-to-PyreExports +
@@ -26,14 +27,11 @@ Future<void> saveImageBytesToExports(
   final messenger = ScaffoldMessenger.of(context);
   try {
     if (kIsWeb) {
-      // Web has no filesystem; fall back to clipboard with a data URL,
-      // matching the character-card export's web branch.
-      final dataUrl = 'data:image/png;base64,${base64Encode(bytes)}';
-      await Clipboard.setData(ClipboardData(text: dataUrl));
+      // Web has no filesystem — trigger a real browser download instead of the
+      // old data-URL→clipboard fallback (which couldn't actually save a file).
+      downloadBytesToBrowser(bytes, filename, 'image/png');
       messenger.showSnackBar(
-        const SnackBar(
-            content: Text(
-                'Web: copied image as a data URL to clipboard. Paste into an image editor or save as a file.')),
+        SnackBar(content: Text('Downloading $filename')),
       );
       return;
     }

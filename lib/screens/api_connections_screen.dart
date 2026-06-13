@@ -257,6 +257,8 @@ class _CreatorProviderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final creatorId = store.creatorProviderId;
     final visionId = store.visionProviderId;
+    final impersonateId = store.impersonateProviderId;
+    final guideId = store.guideProviderId;
     return Card(
       color: EmberColors.bgElevated,
       child: Padding(
@@ -281,7 +283,9 @@ class _CreatorProviderCard extends StatelessWidget {
               'By default every call uses your active chat provider. '
               'Pin a different one here for specific features — e.g. '
               'DeepSeek for chat and creator text, Qwen-VL only for '
-              'image analysis. Vision falls back to creator → chat.',
+              'image analysis, or a cleaner model for impersonation. '
+              'Vision falls back to creator → chat; Guide falls back to '
+              'Impersonate → chat.',
               style: TextStyle(
                   color: EmberColors.textMid, fontSize: 11, height: 1.4),
             ),
@@ -355,6 +359,77 @@ class _CreatorProviderCard extends StatelessWidget {
                   ),
               ],
               onChanged: (id) => store.setVisionProvider(id),
+            ),
+            const SizedBox(height: 14),
+            // Impersonate provider — used by "Impersonate me" (writing the
+            // user's own message). A cleaner / reasoning-off model here dodges
+            // refusals a safety-tuned chat model can throw on impersonation.
+            const Padding(
+              padding: EdgeInsets.only(bottom: 4),
+              child: Text(
+                'IMPERSONATE',
+                style: TextStyle(
+                  color: Color(0xFF8BE28B),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 10,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ),
+            DropdownButtonFormField<String?>(
+              initialValue: impersonateId,
+              decoration: const InputDecoration(
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+              ),
+              items: [
+                const DropdownMenuItem<String?>(
+                  value: null,
+                  child: Text('Same as chat provider'),
+                ),
+                for (final p in store.providers)
+                  DropdownMenuItem<String?>(
+                    value: p.id,
+                    child: Text(p.name),
+                  ),
+              ],
+              onChanged: (id) => store.setImpersonateProvider(id),
+            ),
+            const SizedBox(height: 14),
+            // Guide provider — used by "Guide my message" (expanding your
+            // outline into your message). Falls back to impersonate → chat.
+            const Padding(
+              padding: EdgeInsets.only(bottom: 4),
+              child: Text(
+                'GUIDE',
+                style: TextStyle(
+                  color: Color(0xFFD79BFF),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 10,
+                  letterSpacing: 1.2,
+                ),
+              ),
+            ),
+            DropdownButtonFormField<String?>(
+              initialValue: guideId,
+              decoration: const InputDecoration(
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+              ),
+              items: [
+                const DropdownMenuItem<String?>(
+                  value: null,
+                  child: Text('Same as impersonate provider'),
+                ),
+                for (final p in store.providers)
+                  DropdownMenuItem<String?>(
+                    value: p.id,
+                    child: Text(p.name),
+                  ),
+              ],
+              onChanged: (id) => store.setGuideProvider(id),
             ),
           ],
         ),
@@ -545,6 +620,8 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
         : '',
   );
   ProviderKind kind = existing?.kind ?? ProviderKind.external_;
+  // Pyre 1.1.3: the wire format (OpenAI-compatible vs native Anthropic).
+  ApiFormat format = existing?.format ?? ApiFormat.openai;
   // Wave CY.18.120: preload-on-launch toggle (localhost only). Mutated via
   // setState alongside `kind`, persisted onto the saved ApiProvider below.
   bool warmUp = existing?.warmUpOnLaunch ?? true;
@@ -594,6 +671,39 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                     });
                   },
                 ),
+                const SizedBox(height: 10),
+                SegmentedButton<ApiFormat>(
+                  segments: const [
+                    ButtonSegment(
+                        value: ApiFormat.openai,
+                        label: Text('OpenAI-compatible')),
+                    ButtonSegment(
+                        value: ApiFormat.anthropic, label: Text('Anthropic')),
+                  ],
+                  selected: {format},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (s) {
+                    setState(() {
+                      format = s.first;
+                      if (format == ApiFormat.anthropic &&
+                          urlCtl.text.isEmpty) {
+                        urlCtl.text = 'https://api.anthropic.com';
+                      }
+                    });
+                  },
+                ),
+                if (format == ApiFormat.anthropic) ...[
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Native Claude API — base URL https://api.anthropic.com, '
+                    'paste your Anthropic key (sk-ant-…). Heads-up: Claude '
+                    'refuses NSFW the same here as through any proxy.',
+                    style: TextStyle(
+                        color: EmberColors.textDim,
+                        fontSize: 11,
+                        height: 1.4),
+                  ),
+                ],
                 if (kind == ProviderKind.proxy) ...[
                   const SizedBox(height: 10),
                   Container(
@@ -1014,6 +1124,17 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
               child: const Text('Delete',
                   style: TextStyle(color: Colors.redAccent)),
             ),
+          // clarkarch: duplicate this connection (same config, fresh "(copy)"
+          // name + its saved key) — handy for one copy with reasoning ON and
+          // one OFF, or to fork a working setup.
+          if (!isNew)
+            TextButton(
+              onPressed: () {
+                store.duplicateProvider(existing.id);
+                Navigator.pop(ctx);
+              },
+              child: const Text('Duplicate'),
+            ),
           TextButton(
             onPressed: () => _testConnection(ctx, nameCtl, urlCtl, keyCtl,
                 modelCtl, kind),
@@ -1067,12 +1188,15 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                 // value diverges from the default-true (or extras/ctx are set)
                 // to avoid a redundant store bump on the common case.
                 p.warmUpOnLaunch = warmUp;
+                p.format = format;
                 // Wave CY.18.267: also force the second write when a non-default
-                // post-processing mode was picked, so it persists immediately.
+                // post-processing mode (or non-OpenAI format) was picked, so it
+                // persists immediately.
                 if (extras.isNotEmpty ||
                     ctxWindow != null ||
                     !warmUp ||
-                    postProcessing != PromptPostProcessing.none) {
+                    postProcessing != PromptPostProcessing.none ||
+                    format != ApiFormat.openai) {
                   p.extraParams = extras;
                   p.contextWindow = ctxWindow;
                   p.promptPostProcessing = postProcessing;
@@ -1090,7 +1214,9 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                   ..contextWindow = ctxWindow
                   ..warmUpOnLaunch = warmUp
                   // Wave CY.18.267: persist the post-processing mode.
-                  ..promptPostProcessing = postProcessing;
+                  ..promptPostProcessing = postProcessing
+                  // Pyre 1.1.3: persist the wire format (OpenAI vs Anthropic).
+                  ..format = format;
                 store.updateProvider(existing);
                 savedProvider = existing;
               }
@@ -1150,24 +1276,45 @@ class _ParamHint extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: GestureDetector(
-              onTap: () async {
+            // Pyre 1.1.3 (Gui, web): was a GestureDetector around a plain Text
+            // — invisible tap-to-copy AND not selectable, so on web (esp. an
+            // insecure-context LAN IP where the async clipboard is unavailable)
+            // there was NO way to grab the snippet. SelectableText always allows
+            // manual select + copy; the button below is the one-tap path.
+            child: SelectableText(
+              body,
+              style: const TextStyle(
+                color: EmberColors.primary,
+                fontSize: 11,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            iconSize: 16,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            tooltip: 'Copy',
+            icon: const Icon(Icons.copy, color: EmberColors.textMid),
+            onPressed: () async {
+              try {
                 await Clipboard.setData(ClipboardData(text: body));
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Copied.')),
                   );
                 }
-              },
-              child: Text(
-                body,
-                style: const TextStyle(
-                  color: EmberColors.primary,
-                  fontSize: 11,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ),
+              } catch (_) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text(
+                            'Copy unavailable here — select the text and copy manually.')),
+                  );
+                }
+              }
+            },
           ),
         ],
       ),

@@ -110,7 +110,7 @@ void main() {
       expect(asm.systemPrompt, 'one\n\ntwo');
     });
 
-    test('role does NOT change assembly in the MVP (text join only)', () {
+    test('role SPLITS user/assistant blocks out of the system text (Core)', () {
       final p = Preset(
         id: 'p',
         name: 'Modular',
@@ -122,10 +122,15 @@ void main() {
         ],
       );
       final asm = assemblePreset(p);
-      // All three land in the system slot as text, in order — role is
-      // preserved on the model but not honoured by assembly yet.
-      expect(asm.systemPrompt, 'sys part\n\nusr part\n\nast part');
+      // Prompt Manager Core (supersedes the MVP "text join only"): only the
+      // SYSTEM block joins the system text; the user/assistant blocks (both
+      // beforeHistory by default) become role-split `beforeTurns` in order.
+      expect(asm.systemPrompt, 'sys part');
       expect(asm.postHistory, '');
+      expect(asm.beforeTurns, const [
+        (role: 'user', content: 'usr part'),
+        (role: 'assistant', content: 'ast part'),
+      ]);
     });
   });
 

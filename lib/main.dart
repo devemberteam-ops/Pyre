@@ -267,7 +267,7 @@ Future<void> main() async {
   // repo, no latest.json, the user sees nothing. When a newer version
   // IS published, the user gets a one-line snackbar with a "View"
   // action that opens the release page in their browser.
-  _scheduleUpdateCheck();
+  _scheduleUpdateCheck(store);
   runApp(PyreApp(store: store));
 }
 
@@ -283,18 +283,22 @@ Future<void> _bootWebApp() async {
   runApp(PyreApp(store: store));
 }
 
-Future<void> _scheduleUpdateCheck() async {
+Future<void> _scheduleUpdateCheck(AppStore store) async {
   // Small delay so we don't compete with the first frame's network
   // budget (chub bookmarklet handoff, vision provider model probe,
   // etc.). 4s is conservative — by then the UI is steady.
   await Future<void>.delayed(const Duration(seconds: 4));
   final info = await checkForUpdate();
   if (info == null) return;
+  // Don't re-nag about a version the user already dismissed — the old behaviour
+  // re-showed this snackbar on EVERY app load (the "white footer that never
+  // leaves" complaint).
+  if (!shouldShowUpdateNotice(info, store.dismissedUpdateVersion)) return;
   final ctx = await _waitForNavContext(
       timeout: const Duration(seconds: 8));
   if (ctx == null || !ctx.mounted) return;
   final messenger = ScaffoldMessenger.of(ctx);
-  messenger.showSnackBar(
+  final controller = messenger.showSnackBar(
     SnackBar(
       content: Text(
         'Pyre ${info.latestVersion} is out'
@@ -304,11 +308,14 @@ Future<void> _scheduleUpdateCheck() async {
       ),
       duration: const Duration(seconds: 10),
       behavior: SnackBarBehavior.floating,
+      // An explicit ✕ so the user can dismiss WITHOUT being sent to GitHub.
+      showCloseIcon: true,
       action: info.url.isEmpty
           ? null
           : SnackBarAction(
               label: 'View',
               onPressed: () async {
+                store.dismissUpdate(info.latestVersion);
                 final uri = Uri.tryParse(info.url);
                 if (uri == null) return;
                 try {
@@ -319,6 +326,16 @@ Future<void> _scheduleUpdateCheck() async {
             ),
     ),
   );
+  // Remember an ACTIVE dismissal (View tap, the ✕, or a swipe-away) so the
+  // notice stops re-appearing on every launch. A plain timeout does NOT record
+  // — an ignored toast stays a gentle once-per-launch nudge until acknowledged.
+  controller.closed.then((reason) {
+    if (reason == SnackBarClosedReason.action ||
+        reason == SnackBarClosedReason.dismiss ||
+        reason == SnackBarClosedReason.swipe) {
+      store.dismissUpdate(info.latestVersion);
+    }
+  });
 }
 
 Future<void> _maybeHandleImportParam(AppStore store) async {

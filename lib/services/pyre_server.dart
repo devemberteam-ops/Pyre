@@ -25,6 +25,7 @@ import 'dart:io'
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:http/http.dart' as http;
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
@@ -968,7 +969,119 @@ class PyreServer {
       );
     });
 
+    // Pyre 1.1.3 (PoC, Gui): same-origin reverse-proxy so the botbooru Discover
+    // embed can work on WEB. exe/apk point a native webview at botbooru.com (a
+    // top-level navigation → their frame-ancestors / X-Frame-Options don't
+    // apply). The web can only <iframe>, which IS framing → botbooru blocks it.
+    // So the only way to show their front-end inside the Pyre web app is to
+    // SERVE it from THIS origin: fetch the page here, drop the frame-blocking
+    // headers, and rewrite root-relative URLs + runtime fetch/XHR back through
+    // the proxy. PUBLIC (an iframe navigation can't send a bearer); hardcoded
+    // to botbooru.com so it's never an open relay.
+    r.all('/bbx/<rest|.*>', _proxyBotbooru);
+
     return r;
+  }
+
+  /// Browser-ish UA so botbooru's Cloudflare serves the real page (a Dart
+  /// default UA risks a bot challenge). PoC — Discover proxy only.
+  static const String _kBbBrowserUA =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+  /// Pyre 1.1.3 (PoC): proxy a botbooru.com request through THIS origin so the
+  /// web Discover iframe can render their front-end. Forwards the method/body,
+  /// strips the frame-blocking + CSP headers, and rewrites HTML so the SPA's
+  /// assets + runtime calls route back through `/bbx/`.
+  Future<Response> _proxyBotbooru(Request req, String rest) async {
+    final q = req.requestedUri.query;
+    final target =
+        Uri.parse('https://botbooru.com/$rest${q.isNotEmpty ? '?$q' : ''}');
+    final client = http.Client();
+    try {
+      final fwd = http.Request(req.method, target)
+        ..followRedirects = true
+        ..headers['user-agent'] = _kBbBrowserUA
+        ..headers['accept'] = req.headers['accept'] ?? '*/*';
+      final lang = req.headers['accept-language'];
+      if (lang != null) fwd.headers['accept-language'] = lang;
+      if (req.method == 'POST' ||
+          req.method == 'PUT' ||
+          req.method == 'PATCH') {
+        fwd.bodyBytes =
+            await req.read().fold<List<int>>(<int>[], (b, d) => b..addAll(d));
+        final ct = req.headers['content-type'];
+        if (ct != null) fwd.headers['content-type'] = ct;
+      }
+      final upstream =
+          await client.send(fwd).timeout(const Duration(seconds: 30));
+      final bytes = await upstream.stream.toBytes();
+      final contentType =
+          upstream.headers['content-type'] ?? 'application/octet-stream';
+      // Fresh headers ONLY — this drops upstream's X-Frame-Options + CSP
+      // (incl. frame-ancestors) so the same-origin iframe can render it.
+      final outHeaders = <String, String>{'content-type': contentType};
+      if (contentType.contains('text/html')) {
+        return Response.ok(
+          _rewriteBotbooruHtml(utf8.decode(bytes, allowMalformed: true)),
+          headers: outHeaders,
+        );
+      }
+      return Response.ok(bytes, headers: outHeaders);
+    } catch (e) {
+      debugPrint('[PyreServer] botbooru proxy error: $e');
+      return Response.internalServerError(body: 'botbooru proxy error: $e');
+    } finally {
+      client.close();
+    }
+  }
+
+  /// PoC HTML rewrite: route botbooru's root-relative URLs + runtime fetch/XHR
+  /// back through `/bbx/`. Crude on purpose — the PoC proves the concept; a
+  /// real version would parse instead of string-replace.
+  static String _rewriteBotbooruHtml(String html) {
+    // 1) Root-relative URLs in attributes → through the proxy.
+    html = html
+        .replaceAll('href="/', 'href="/bbx/')
+        .replaceAll('src="/', 'src="/bbx/')
+        .replaceAll("href='/", "href='/bbx/")
+        .replaceAll("src='/", "src='/bbx/");
+    // 2) Shim runtime fetch/XHR (the SPA calls /api/... at runtime).
+    const shim = '''
+<script>
+(function(){
+  var P='/bbx/';
+  function rw(u){
+    try{
+      if(typeof u!=='string'||!u) return u;
+      if(u.indexOf('https://botbooru.com/')===0) return P+u.slice(21);
+      if(u.charAt(0)==='/' && u.indexOf('//')!==0 && u.indexOf(P)!==0) return P+u.slice(1);
+      return u;
+    }catch(e){return u;}
+  }
+  // 1) runtime data calls
+  var of=window.fetch;
+  window.fetch=function(i,init){ try{ if(typeof i==='string'){i=rw(i);} else if(i&&i.url){i=new Request(rw(i.url),i);} }catch(e){} return of.call(this,i,init); };
+  var oo=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(){ try{arguments[1]=rw(arguments[1]);}catch(e){} return oo.apply(this,arguments); };
+  // 2) setAttribute('src'|'href', ...)
+  var osa=Element.prototype.setAttribute;
+  Element.prototype.setAttribute=function(n,v){ try{ if(n==='src'||n==='href'){v=rw(v);} }catch(e){} return osa.call(this,n,v); };
+  // 3) direct .src / .href property assignment (img.src='/...')
+  function pp(c,p){ try{ var pr=window[c]&&window[c].prototype; if(!pr) return; var d=Object.getOwnPropertyDescriptor(pr,p); if(!d||!d.set) return; Object.defineProperty(pr,p,{configurable:true,enumerable:d.enumerable,get:function(){return d.get.call(this);},set:function(v){d.set.call(this,rw(v));}}); }catch(e){} }
+  pp('HTMLImageElement','src'); pp('HTMLScriptElement','src'); pp('HTMLSourceElement','src'); pp('HTMLMediaElement','src'); pp('HTMLLinkElement','href'); pp('HTMLAnchorElement','href');
+  // 4) safety net for innerHTML-inserted nodes
+  function fix(el){ try{ if(el.nodeType!==1) return; var s; if(el.hasAttribute('src')){s=el.getAttribute('src'); if(rw(s)!==s)el.setAttribute('src',s);} if(el.hasAttribute('href')){s=el.getAttribute('href'); if(rw(s)!==s)el.setAttribute('href',s);} if(el.querySelectorAll){var k=el.querySelectorAll('[src],[href]'); for(var j=0;j<k.length;j++)fix(k[j]);} }catch(e){} }
+  try{ new MutationObserver(function(ms){ for(var a=0;a<ms.length;a++){var nn=ms[a].addedNodes; if(nn)for(var b=0;b<nn.length;b++)fix(nn[b]);} }).observe(document.documentElement,{childList:true,subtree:true}); }catch(e){}
+})();
+</script>
+''';
+    if (html.contains('<head>')) {
+      html = html.replaceFirst('<head>', '<head>$shim');
+    } else {
+      html = shim + html;
+    }
+    return html;
   }
 
   /// Wave CY.18.76: locate the Flutter web build to self-host. Looks

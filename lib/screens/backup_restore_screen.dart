@@ -13,6 +13,7 @@ import '../models/models.dart';
 import '../services/attachment_store.dart';
 import '../services/regex_rules.dart';
 import '../services/secure_keys.dart';
+import '../services/web_download.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
@@ -301,15 +302,17 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     try {
       final json = const JsonEncoder.withIndent('  ').convert(
           _exportBlob(store, include: _allCategories, includeApiKeys: false));
+      final ts = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .split('.')
+          .first;
       if (kIsWeb) {
-        await Clipboard.setData(ClipboardData(text: json));
+        // Web: download the safety backup as a real file (was clipboard-only).
+        downloadBytesToBrowser(utf8.encode(json),
+            'pyre-pre-reset-backup-$ts.json', 'application/json');
       } else {
         final dir = await getApplicationDocumentsDirectory();
-        final ts = DateTime.now()
-            .toIso8601String()
-            .replaceAll(':', '-')
-            .split('.')
-            .first;
         final file =
             File('${dir.path}/pyre-pre-reset-backup-$ts.json');
         await file.writeAsString(json);
@@ -335,8 +338,8 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                   "You'll re-enter API keys after restoring. If you want a "
                   'totally clean slate afterwards, you can delete that file '
                   'yourself. Reset now?'
-              : 'Web: the full backup JSON (no API keys) was copied to your '
-                  'clipboard — paste it into a file to keep it. Reset now?',
+              : 'Web: a full backup (no API keys) was downloaded to your '
+                  'device. Keep that file safe. Reset now?',
         ),
         actions: [
           TextButton(
@@ -468,6 +471,8 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       blob['activeProviderId'] = s.activeProviderId;
       blob['creatorProviderId'] = s.creatorProviderId;
       blob['visionProviderId'] = s.visionProviderId;
+      blob['impersonateProviderId'] = s.impersonateProviderId;
+      blob['guideProviderId'] = s.guideProviderId;
     }
     if (include.contains(_catCharacters)) {
       blob['characters'] = s.characters.map((c) => c.toJson()).toList();
@@ -564,12 +569,17 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       await embedBackupAttachments(blob); // B-1: pack avatars/gallery/bg bytes.
       final json = const JsonEncoder.withIndent('  ').convert(blob);
       if (kIsWeb) {
-        // Web has no share sheet — fall back to clipboard.
-        await Clipboard.setData(ClipboardData(text: json));
+        // Web has no share sheet — download the backup as a real file.
+        final ts = DateTime.now()
+            .toIso8601String()
+            .replaceAll(':', '-')
+            .split('.')
+            .first;
+        final filename = 'pyre-backup-$ts.json';
+        downloadBytesToBrowser(
+            utf8.encode(json), filename, 'application/json');
         messenger.showSnackBar(
-          const SnackBar(
-              content: Text(
-                  'Web: copied JSON to clipboard. Paste into a file to save.')),
+          SnackBar(content: Text('Downloading $filename')),
         );
         return;
       }
@@ -623,12 +633,17 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       await embedBackupAttachments(blob); // B-1: pack avatars/gallery/bg bytes.
       final json = const JsonEncoder.withIndent('  ').convert(blob);
       if (kIsWeb) {
-        // Web cannot write arbitrary files — fall back to clipboard.
-        await Clipboard.setData(ClipboardData(text: json));
+        // Web cannot write to an arbitrary path — download the file instead.
+        final ts = DateTime.now()
+            .toIso8601String()
+            .replaceAll(':', '-')
+            .split('.')
+            .first;
+        final filename = 'emberchat-backup-$ts.json';
+        downloadBytesToBrowser(
+            utf8.encode(json), filename, 'application/json');
         messenger.showSnackBar(
-          const SnackBar(
-              content: Text(
-                  'Web: copied JSON to clipboard. Paste into a file to save.')),
+          SnackBar(content: Text('Downloading $filename')),
         );
         return;
       }
@@ -958,6 +973,12 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       if (raw.containsKey('visionProviderId')) {
         s.visionProviderId = raw['visionProviderId'] as String?;
       }
+      if (raw.containsKey('impersonateProviderId')) {
+        s.impersonateProviderId = raw['impersonateProviderId'] as String?;
+      }
+      if (raw.containsKey('guideProviderId')) {
+        s.guideProviderId = raw['guideProviderId'] as String?;
+      }
     }
     if (characters != null) s.characters = characters;
     if (personas != null) {
@@ -1058,6 +1079,14 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     if (s.visionProviderId != null &&
         !s.providers.any((p) => p.id == s.visionProviderId)) {
       s.visionProviderId = null;
+    }
+    if (s.impersonateProviderId != null &&
+        !s.providers.any((p) => p.id == s.impersonateProviderId)) {
+      s.impersonateProviderId = null;
+    }
+    if (s.guideProviderId != null &&
+        !s.providers.any((p) => p.id == s.guideProviderId)) {
+      s.guideProviderId = null;
     }
     if (s.activePersonaId != null &&
         !s.personas.any((p) => p.id == s.activePersonaId)) {

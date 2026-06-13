@@ -24,6 +24,7 @@ import 'llm_debug_log.dart';
 import 'param_policy.dart';
 import 'prompt_post_processing.dart';
 import 'resolvers.dart' show isProviderHostAllowed;
+import 'streaming_http_client.dart';
 
 typedef ChatRole = String; // 'system' | 'user' | 'assistant'
 
@@ -325,6 +326,328 @@ Map<String, dynamic> buildRequestBody({
   return safeBodyFor(provider, provider.model, body);
 }
 
+// ===========================================================================
+// Pyre 1.1.3: native Anthropic (/v1/messages) format adapter (pure helpers)
+// ===========================================================================
+//
+// Anthropic's API is NOT OpenAI-compatible: a `/v1/messages` endpoint, an
+// `x-api-key` + `anthropic-version` header pair, a TOP-LEVEL `system` field
+// (not a system message), a REQUIRED `max_tokens`, user/assistant-only messages
+// that must alternate starting with `user`, `stop_sequences` (not `stop`), and
+// a content-block SSE stream. These pure helpers translate Pyre's assembled
+// `List<ChatTurn>` into that shape and parse the stream. The OpenAI path is
+// untouched — these only run for `provider.format == ApiFormat.anthropic`.
+
+/// Parse a `data:<media>;base64,<data>` URL into an Anthropic image block.
+/// Returns null when [dataUrl] isn't a base64 data URL.
+Map<String, dynamic>? anthropicImageBlock(String dataUrl) {
+  final m =
+      RegExp(r'^data:([^;]+);base64,(.*)$', dotAll: true).firstMatch(dataUrl);
+  if (m == null) return null;
+  return {
+    'type': 'image',
+    'source': {
+      'type': 'base64',
+      'media_type': m.group(1),
+      'data': m.group(2),
+    },
+  };
+}
+
+/// The Anthropic `content` for one turn: a plain string when there are no
+/// images, else a content-block array (optional text block + image blocks).
+dynamic _anthropicContent(ChatTurn t) {
+  final imgs = t.imageDataUrls;
+  if (imgs == null || imgs.isEmpty) return t.content;
+  final blocks = <dynamic>[
+    if (t.content.isNotEmpty) {'type': 'text', 'text': t.content},
+  ];
+  for (final url in imgs) {
+    final b = anthropicImageBlock(url);
+    if (b != null) blocks.add(b);
+  }
+  return blocks.isEmpty ? t.content : blocks;
+}
+
+/// Build the native Anthropic `/v1/messages` request body. Pure + testable.
+/// Folds ALL `system` turns into the top-level `system` string; the rest become
+/// user/assistant messages with consecutive same-role turns MERGED and a
+/// leading assistant turn (the usual chat greeting) prefixed by a minimal user
+/// turn — Anthropic requires the first message to be `user`. `max_tokens` is
+/// required by Anthropic; `temperature` is clamped to its 0..1 range.
+Map<String, dynamic> buildAnthropicBody({
+  required List<ChatTurn> messages,
+  required ModelSettings settings,
+  Preset? preset,
+  required String model,
+  required bool stream,
+  List<String>? stop,
+  Map<String, dynamic>? extraParams,
+}) {
+  // 1. Fold system turns into the top-level `system` string.
+  final systemParts = <String>[];
+  final convo = <ChatTurn>[];
+  for (final m in messages) {
+    if (m.role == 'system') {
+      if (m.content.trim().isNotEmpty) systemParts.add(m.content);
+    } else {
+      convo.add(m);
+    }
+  }
+  // 2. user/assistant messages, merging consecutive same-role turns.
+  final msgs = <Map<String, dynamic>>[];
+  for (final m in convo) {
+    final role = m.role == 'assistant' ? 'assistant' : 'user';
+    final content = _anthropicContent(m);
+    if (msgs.isNotEmpty && msgs.last['role'] == role) {
+      final prev = msgs.last['content'];
+      if (prev is String && content is String) {
+        msgs.last['content'] = '$prev\n\n$content';
+      } else {
+        final a = prev is List
+            ? List<dynamic>.from(prev)
+            : <dynamic>[
+                {'type': 'text', 'text': prev}
+              ];
+        final b = content is List
+            ? content
+            : <dynamic>[
+                {'type': 'text', 'text': content}
+              ];
+        msgs.last['content'] = [...a, ...b];
+      }
+    } else {
+      msgs.add({'role': role, 'content': content});
+    }
+  }
+  // 3. Anthropic requires the FIRST message to be `user`. A chat usually opens
+  //    with the assistant greeting → prepend a minimal user turn.
+  if (msgs.isNotEmpty && msgs.first['role'] == 'assistant') {
+    msgs.insert(0, {'role': 'user', 'content': '.'});
+  }
+  // 4. Sampling — reuse the shared payload, map to Anthropic names/ranges.
+  final sampling = _samplingPayload(settings, preset);
+  final rawMax = (sampling['max_tokens'] as num?)?.toInt() ?? 4096;
+  final maxTokens = rawMax <= 0 ? 4096 : rawMax;
+  final body = <String, dynamic>{
+    ...?extraParams,
+    'model': model,
+    'max_tokens': maxTokens,
+    if (systemParts.isNotEmpty) 'system': systemParts.join('\n\n'),
+    'messages': msgs,
+    'stream': stream,
+  };
+  final temp = (sampling['temperature'] as num?)?.toDouble();
+  if (temp != null) body['temperature'] = temp.clamp(0.0, 1.0);
+  if (sampling['top_p'] != null) body['top_p'] = sampling['top_p'];
+  if (sampling['top_k'] != null) body['top_k'] = sampling['top_k'];
+  if (stop != null && stop.isNotEmpty) body['stop_sequences'] = stop;
+  return body;
+}
+
+/// Extract the visible text delta from one parsed Anthropic SSE event, or null
+/// for non-text events (message_start/stop, content_block_start/stop, ping,
+/// thinking deltas).
+String? anthropicTextDelta(Map<String, dynamic> event) {
+  if (event['type'] != 'content_block_delta') return null;
+  final delta = event['delta'];
+  if (delta is! Map) return null;
+  if (delta['type'] != 'text_delta') return null;
+  final t = delta['text'];
+  return t is String ? t : null;
+}
+
+/// Pull a human-readable error out of an Anthropic `error` SSE event / body,
+/// or null when it isn't an error event.
+String? anthropicErrorMessage(Map<String, dynamic> event) {
+  if (event['type'] != 'error') return null;
+  final err = event['error'];
+  if (err is Map) {
+    final msg = err['message'];
+    if (msg is String && msg.isNotEmpty) return msg;
+    final type = err['type'];
+    if (type is String) return type;
+  }
+  return 'Anthropic error';
+}
+
+/// Extract the concatenated visible text from a FULL Anthropic message response
+/// (`content` is a list of typed blocks; we join the `text` blocks, skipping
+/// thinking/tool blocks). Used by the non-streamed paths.
+String anthropicTextFromMessage(dynamic obj) {
+  if (obj is! Map) return '';
+  final content = obj['content'];
+  if (content is! List) return '';
+  final buf = StringBuffer();
+  for (final block in content) {
+    if (block is Map && block['type'] == 'text' && block['text'] is String) {
+      buf.write(block['text'] as String);
+    }
+  }
+  return buf.toString();
+}
+
+/// Pyre 1.1.3: native Anthropic streaming. Mirrors [streamChatCompletion]'s HTTP
+/// machinery (same timeouts + error classification + scrubbing) but speaks the
+/// `/v1/messages` dialect: `x-api-key` + `anthropic-version` headers,
+/// [buildAnthropicBody] for the request, and the content-block SSE stream parsed
+/// by [anthropicTextDelta]. Only reached for `provider.format ==
+/// ApiFormat.anthropic`; the OpenAI path stays untouched.
+Stream<String> _streamAnthropic({
+  required ApiProvider provider,
+  required ModelSettings settings,
+  required List<ChatTurn> messages,
+  Preset? preset,
+  List<String>? stop,
+}) async* {
+  final url = Uri.parse(buildChatUrl(provider.baseUrl, 'messages'));
+  final body = buildAnthropicBody(
+    messages: messages,
+    settings: settings,
+    preset: preset,
+    model: provider.model,
+    stream: true,
+    stop: stop,
+    extraParams: provider.extraParams.isEmpty ? null : provider.extraParams,
+  );
+  final client = http.Client();
+  try {
+    final req = http.Request('POST', url);
+    req.headers.addAll({
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+      'anthropic-version': '2023-06-01',
+      if (provider.apiKey.isNotEmpty) 'x-api-key': provider.apiKey,
+      ..._sanitiseHeaders(provider.headers),
+    });
+    req.body = jsonEncode(body);
+    http.StreamedResponse resp;
+    try {
+      resp = await client.send(req).timeout(
+            provider.kind == ProviderKind.localhost
+                ? _kLocalConnectTimeout
+                : const Duration(seconds: 25),
+            onTimeout: () => throw ChatApiError.timeout(
+                'Timed out connecting to the Anthropic provider.'),
+          );
+    } catch (e) {
+      throw _classifyNetworkError(e);
+    }
+    if (resp.statusCode >= 400) {
+      final errBody = await resp.stream.bytesToString();
+      throw ChatApiError(
+        scrubProviderBody(errBody, apiKey: provider.apiKey),
+        statusCode: resp.statusCode,
+      );
+    }
+    // A provider that ignored `stream:true` returns a single JSON message —
+    // parse its content blocks rather than try to read SSE.
+    final contentType = (resp.headers['content-type'] ?? '').toLowerCase();
+    if (contentType.contains('application/json')) {
+      final raw = await resp.stream.bytesToString();
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final err = anthropicErrorMessage(decoded.cast<String, dynamic>());
+        if (err != null) throw ChatApiError(err);
+      }
+      final text = anthropicTextFromMessage(decoded);
+      if (text.isNotEmpty) yield text;
+      return;
+    }
+    final lines = resp.stream
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .timeout(
+      provider.kind == ProviderKind.localhost
+          ? _kLocalStreamStallTimeout
+          : const Duration(seconds: 45),
+      onTimeout: (sink) {
+        sink.addError(ChatApiError(
+            'Stream stalled — no data from the Anthropic provider for a while.'));
+        sink.close();
+      },
+    );
+    await for (final line in lines) {
+      if (line.isEmpty) continue;
+      // Anthropic SSE interleaves `event:` and `data:` lines; we only need data.
+      if (!line.startsWith('data:')) continue;
+      final payload = sseDataPayload(line).trim();
+      if (payload.isEmpty) continue;
+      Map<String, dynamic>? obj;
+      try {
+        final decoded = jsonDecode(payload);
+        if (decoded is Map) obj = decoded.cast<String, dynamic>();
+      } catch (_) {
+        continue; // ignore unparseable SSE noise
+      }
+      if (obj == null) continue;
+      final err = anthropicErrorMessage(obj);
+      if (err != null) throw ChatApiError(err);
+      final text = anthropicTextDelta(obj);
+      if (text != null && text.isNotEmpty) yield text;
+    }
+  } finally {
+    client.close();
+  }
+}
+
+/// Pyre 1.1.3: native Anthropic non-streaming completion (mirrors [completeChat]
+/// for `/v1/messages`). Used when a caller wants a one-shot result from an
+/// Anthropic-format provider.
+Future<String> _completeAnthropic({
+  required ApiProvider provider,
+  required ModelSettings settings,
+  required List<ChatTurn> messages,
+  Preset? preset,
+  List<String>? stop,
+}) async {
+  final url = Uri.parse(buildChatUrl(provider.baseUrl, 'messages'));
+  final body = buildAnthropicBody(
+    messages: messages,
+    settings: settings,
+    preset: preset,
+    model: provider.model,
+    stream: false,
+    stop: stop,
+    extraParams: provider.extraParams.isEmpty ? null : provider.extraParams,
+  );
+  http.Response resp;
+  try {
+    resp = await http
+        .post(
+          url,
+          headers: {
+            'Content-Type': 'application/json',
+            'anthropic-version': '2023-06-01',
+            if (provider.apiKey.isNotEmpty) 'x-api-key': provider.apiKey,
+            ..._sanitiseHeaders(provider.headers),
+          },
+          body: jsonEncode(body),
+        )
+        .timeout(
+          provider.kind == ProviderKind.localhost
+              ? _kLocalCompleteTimeout
+              : const Duration(seconds: 75),
+          onTimeout: () =>
+              throw ChatApiError.timeout('Anthropic request timed out.'),
+        );
+  } catch (e) {
+    throw _classifyNetworkError(e);
+  }
+  if (resp.statusCode >= 400) {
+    throw ChatApiError(
+      scrubProviderBody(resp.body, apiKey: provider.apiKey),
+      statusCode: resp.statusCode,
+    );
+  }
+  final obj = jsonDecode(resp.body);
+  if (obj is Map) {
+    final err = anthropicErrorMessage(obj.cast<String, dynamic>());
+    if (err != null) throw ChatApiError(err);
+  }
+  return anthropicTextFromMessage(obj);
+}
+
 /// Streams partial completions as they arrive. The returned stream yields
 /// incremental text chunks (not the cumulative buffer). Cancel the
 /// subscription to abort the request.
@@ -380,6 +703,18 @@ Stream<String> streamChatCompletion({
   }
   if (provider.baseUrl.isEmpty) {
     throw ChatApiError('Provider has no baseUrl configured');
+  }
+  // Pyre 1.1.3: native Anthropic (/v1/messages) providers take a completely
+  // separate request/parse path; the OpenAI code below stays untouched.
+  if (provider.format == ApiFormat.anthropic) {
+    yield* _streamAnthropic(
+      provider: provider,
+      settings: settings,
+      messages: messages,
+      preset: preset,
+      stop: stop,
+    );
+    return;
   }
   final url = Uri.parse(buildChatUrl(provider.baseUrl, 'chat/completions'));
 
@@ -823,6 +1158,17 @@ Future<String> completeChat({
 }) async {
   if (provider.baseUrl.isEmpty) {
     throw ChatApiError('Provider has no baseUrl configured');
+  }
+  // Pyre 1.1.3: native Anthropic one-shot path (debugTag / extraBody are
+  // OpenAI-specific and not threaded into the Anthropic dialect).
+  if (provider.format == ApiFormat.anthropic) {
+    return _completeAnthropic(
+      provider: provider,
+      settings: settings,
+      messages: messages,
+      preset: preset,
+      stop: stop,
+    );
   }
   final url = Uri.parse(buildChatUrl(provider.baseUrl, 'chat/completions'));
   // Wave CY.18.214: build the body once so the diagnostics hook can log
@@ -1270,7 +1616,10 @@ Stream<String> _streamViaLanProxy({
     'accept': 'text/event-stream',
   });
   req.body = body;
-  final httpClient = http.Client();
+  // Web: a Fetch-API client that delivers the SSE body incrementally — the
+  // default BrowserClient (XHR) buffers the whole response, so token streaming
+  // never streamed on web. Native: a plain client (IOClient streams already).
+  final httpClient = makeStreamingClient();
   try {
     // Kind-aware connect timeout, matching the native path. When the paired
     // desktop is proxying a LOCAL model (localhost provider), the upstream
@@ -1326,7 +1675,7 @@ Stream<String> _streamViaLanProxy({
         String? eventName;
         for (final line in event.split('\n')) {
           if (line.startsWith('data:')) {
-            data = line.substring(5).trimLeft();
+            data = sseDataPayload(line);
           } else if (line.startsWith('event:')) {
             eventName = line.substring(6).trim();
           }
@@ -1342,6 +1691,17 @@ Stream<String> _streamViaLanProxy({
   } finally {
     httpClient.close();
   }
+}
+
+/// Extract the payload from an SSE `data:` line, stripping ONLY the single
+/// optional separator space right after the colon (per the SSE spec) — NOT all
+/// leading whitespace. The old `substring(5).trimLeft()` ate a token's OWN
+/// leading space (e.g. " world"), running words together on the web LAN-proxy
+/// path ("Hello"+"world" → "Helloworld"). Top-level + pure → unit-testable.
+String sseDataPayload(String dataLine) {
+  var d = dataLine.substring(5); // drop the "data:" prefix
+  if (d.startsWith(' ')) d = d.substring(1); // drop the ONE SSE separator space
+  return d;
 }
 
 /// Reverse the server-side escape applied in pyre_server.dart

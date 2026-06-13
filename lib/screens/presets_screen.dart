@@ -713,8 +713,7 @@ class _PresetDetailsScreen extends StatelessWidget {
                           ),
                         ),
                       ),
-                      if (b.position == PromptBlockPosition.afterHistory)
-                        const _PositionChip(),
+                      ..._blockMetaChips(b),
                     ],
                   ),
                   if (b.content.trim().isNotEmpty) ...[
@@ -1341,8 +1340,7 @@ class _BlockRow extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (block.position == PromptBlockPosition.afterHistory)
-                      const _PositionChip(),
+                    ..._blockMetaChips(block),
                   ],
                 ),
               ),
@@ -1373,10 +1371,25 @@ class _BlockRow extends StatelessWidget {
   }
 }
 
-/// Small "after history" hint chip on blocks whose content is appended AFTER
-/// the chat history (jailbreak / reminder / prefill slot).
-class _PositionChip extends StatelessWidget {
-  const _PositionChip();
+/// The little metadata chips shown on a block row / preview: a role chip for a
+/// non-system block (`user` / `assistant`) and a placement chip — `@depth N`
+/// for a depth-injected block, else `after history` for an afterHistory block.
+/// A plain system + before-history block shows nothing (the default).
+List<Widget> _blockMetaChips(PromptBlock b) {
+  final r = b.role.toLowerCase();
+  return [
+    if (r == 'user' || r == 'assistant') _MetaChip(r),
+    if (b.depth != null)
+      _MetaChip('@depth ${b.depth}')
+    else if (b.position == PromptBlockPosition.afterHistory)
+      const _MetaChip('after history'),
+  ];
+}
+
+/// Small hint chip on a block row (role / placement). See [_blockMetaChips].
+class _MetaChip extends StatelessWidget {
+  final String label;
+  const _MetaChip(this.label);
 
   @override
   Widget build(BuildContext context) {
@@ -1388,9 +1401,9 @@ class _PositionChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
         border: Border.all(color: EmberColors.stroke),
       ),
-      child: const Text(
-        'after history',
-        style: TextStyle(
+      child: Text(
+        label,
+        style: const TextStyle(
           color: EmberColors.textMid,
           fontSize: 9,
           fontWeight: FontWeight.w600,
@@ -1411,7 +1424,18 @@ Future<void> _showBlockEditor(
 ) async {
   final nameCtl = TextEditingController(text: block.name);
   final contentCtl = TextEditingController(text: block.content);
-  var position = block.position;
+  // ROLE: a non-system block becomes a real chat turn (Prompt Manager Core).
+  var role = const {'user', 'assistant'}.contains(block.role.toLowerCase())
+      ? block.role.toLowerCase()
+      : 'system';
+  // PLACEMENT: before / after history, or "at depth" (sets PromptBlock.depth,
+  // which overrides position in assembly).
+  var placement = block.depth != null
+      ? 'depth'
+      : (block.position == PromptBlockPosition.afterHistory
+          ? 'after'
+          : 'before');
+  final depthCtl = TextEditingController(text: (block.depth ?? 4).toString());
 
   await showDialog<void>(
     context: context,
@@ -1445,7 +1469,7 @@ Future<void> _showBlockEditor(
                 ),
                 const SizedBox(height: 16),
                 const Text(
-                  'POSITION',
+                  'ROLE',
                   style: TextStyle(
                     color: EmberColors.primary,
                     fontWeight: FontWeight.w700,
@@ -1454,22 +1478,77 @@ Future<void> _showBlockEditor(
                   ),
                 ),
                 const SizedBox(height: 8),
-                SegmentedButton<PromptBlockPosition>(
+                SegmentedButton<String>(
                   segments: const [
-                    ButtonSegment(
-                      value: PromptBlockPosition.beforeHistory,
-                      label: Text('Before history'),
-                    ),
-                    ButtonSegment(
-                      value: PromptBlockPosition.afterHistory,
-                      label: Text('After history'),
-                    ),
+                    ButtonSegment(value: 'system', label: Text('System')),
+                    ButtonSegment(value: 'user', label: Text('User')),
+                    ButtonSegment(value: 'assistant', label: Text('Assistant')),
                   ],
-                  selected: {position},
-                  onSelectionChanged: (s) =>
-                      setDialog(() => position = s.first),
+                  selected: {role},
+                  onSelectionChanged: (s) => setDialog(() => role = s.first),
                   showSelectedIcon: false,
                 ),
+                const SizedBox(height: 6),
+                Text(
+                  role == 'system'
+                      ? 'Joins the system prompt as plain instructions.'
+                      : 'Sent as a real "$role" chat turn (SillyTavern-style).',
+                  style: const TextStyle(
+                      color: EmberColors.textDim, fontSize: 11),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'PLACEMENT',
+                  style: TextStyle(
+                    color: EmberColors.primary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(
+                        value: 'before', label: Text('Before history')),
+                    ButtonSegment(value: 'after', label: Text('After history')),
+                    ButtonSegment(value: 'depth', label: Text('At depth')),
+                  ],
+                  selected: {placement},
+                  onSelectionChanged: (s) =>
+                      setDialog(() => placement = s.first),
+                  showSelectedIcon: false,
+                ),
+                if (placement == 'depth') ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Text('Depth from end:',
+                          style: TextStyle(
+                              color: EmberColors.textMid, fontSize: 12)),
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        width: 72,
+                        child: TextField(
+                          controller: depthCtl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 8),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    '0 = after the last message · 1 = before the last · higher '
+                    '= further back in the chat.',
+                    style:
+                        TextStyle(color: EmberColors.textDim, fontSize: 11),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1485,7 +1564,19 @@ Future<void> _showBlockEditor(
             setLocal(() {
               block.name = nameCtl.text.trim();
               block.content = contentCtl.text;
-              block.position = position;
+              block.role = role;
+              if (placement == 'depth') {
+                final d = int.tryParse(depthCtl.text.trim()) ?? 4;
+                block.depth = d < 0 ? 0 : d;
+                // Depth overrides position in assembly; keep afterHistory as the
+                // sane "in-chat" default for any reader of position.
+                block.position = PromptBlockPosition.afterHistory;
+              } else {
+                block.depth = null;
+                block.position = placement == 'after'
+                    ? PromptBlockPosition.afterHistory
+                    : PromptBlockPosition.beforeHistory;
+              }
             });
             Navigator.pop(ctx);
           },
@@ -1497,4 +1588,5 @@ Future<void> _showBlockEditor(
   // H-3: dispose the block-editor controllers once the dialog closes.
   nameCtl.dispose();
   contentCtl.dispose();
+  depthCtl.dispose();
 }

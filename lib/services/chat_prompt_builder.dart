@@ -124,6 +124,14 @@ class ChatPromptInputs {
   /// Where [guideNote] lands when present (`store.guideSettings.injectionPosition`).
   final GuideInjectionPosition guidePosition;
 
+  /// Impersonate/Guide fix: when FALSE, the preset's post-history instructions
+  /// (the char-voice jailbreak/"stay in character as {{char}}" reminder) are
+  /// SKIPPED. The "Impersonate me" / "Guide my message" path passes false so
+  /// that char-voice reminder doesn't CONTRADICT the OOC "write as {{user}}"
+  /// instruction appended after it — a contradiction that triggered refusals on
+  /// safety-tuned models. Default true → normal chat assembly is unchanged.
+  final bool includePostHistory;
+
   const ChatPromptInputs({
     required this.chat,
     required this.character,
@@ -137,6 +145,7 @@ class ChatPromptInputs {
     this.regexRules = const [],
     this.guideNote,
     this.guidePosition = GuideInjectionPosition.systemNoteAtEnd,
+    this.includePostHistory = true,
   });
 }
 
@@ -145,6 +154,45 @@ class ChatPromptResult {
   final List<ChatTurn> turns;
   final List<PromptSegment> segments;
   const ChatPromptResult({required this.turns, required this.segments});
+}
+
+/// Prompt Manager Core (Task 4): splice depth-injected preset turns into the
+/// replayed chat [history]. Each entry injects a turn `depth` messages from the
+/// END of the history — depth 0 = AFTER the last message, depth 1 = BEFORE the
+/// last, depth >= length = at the FRONT — mirroring SillyTavern's
+/// `injection_depth`. Multiple turns at the same depth keep their list order
+/// (stable). An EMPTY [depthTurns] returns the SAME list instance (no copy), so
+/// the common no-depth path stays byte-identical.
+List<ChatTurn> insertDepthTurns(
+  List<ChatTurn> history,
+  List<({int depth, String role, String content})> depthTurns,
+) {
+  if (depthTurns.isEmpty) return history;
+  final n = history.length;
+  // Resolve each entry to an insertion index (counted from the end) plus its
+  // original sequence, so ties at the same index keep list order after sort.
+  final inserts = <({int index, int seq, ChatTurn turn})>[];
+  for (var i = 0; i < depthTurns.length; i++) {
+    final d = depthTurns[i];
+    final idx = (n - d.depth).clamp(0, n);
+    inserts.add((index: idx, seq: i, turn: ChatTurn(d.role, d.content)));
+  }
+  inserts.sort((a, b) {
+    final c = a.index.compareTo(b.index);
+    return c != 0 ? c : a.seq.compareTo(b.seq);
+  });
+  // One pass: at each history position emit any inserts anchored there (i.e.
+  // BEFORE that message) then the message itself; index == n lands after last.
+  final out = <ChatTurn>[];
+  var p = 0;
+  for (var pos = 0; pos <= n; pos++) {
+    while (p < inserts.length && inserts[p].index == pos) {
+      out.add(inserts[p].turn);
+      p++;
+    }
+    if (pos < n) out.add(history[pos]);
+  }
+  return out;
 }
 
 /// PURE assembly of the chat turns. This is the verbatim move of
@@ -180,7 +228,13 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // modular → catches a {{summary}} living inside a block's content).
   var summaryMacroUsed = asm != null &&
       (summaryMacroRegex.hasMatch(asm.systemPrompt) ||
-          summaryMacroRegex.hasMatch(asm.postHistory));
+          summaryMacroRegex.hasMatch(asm.postHistory) ||
+          // Prompt Manager Core: a {{summary}} can also live inside a role-split
+          // or depth block. Pre-scan their content too so the hardcoded recap is
+          // suppressed (no double inject). Empty lists → no change (flat preset).
+          asm.beforeTurns.any((t) => summaryMacroRegex.hasMatch(t.content)) ||
+          asm.afterTurns.any((t) => summaryMacroRegex.hasMatch(t.content)) ||
+          asm.depthTurns.any((t) => summaryMacroRegex.hasMatch(t.content)));
 
   // Wave CB: lorebook gathering + scanning is a pair of pure functions in
   // `services/lorebook_inject.dart`.
@@ -407,6 +461,16 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     ChatTurn('system', buffer.toString().trim()),
   ];
 
+  // Prompt Manager Core: role-`user`/`assistant` blocks placed BEFORE history
+  // become REAL chat turns right after the system prompt. Empty for flat /
+  // all-system presets → no change. Content is `fill()`-resolved like the
+  // system text (the final name-only pass also runs over them).
+  if (asm != null) {
+    for (final t in asm.beforeTurns) {
+      turns.add(ChatTurn(t.role, fill(t.content).trim()));
+    }
+  }
+
   // Replay only the post-recap window so we don't blow the context.
   final start = ltm.firstUncoveredIndex(chat);
   final windowed =
@@ -428,7 +492,6 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
             'user',
             applyRegexRules(txt, inputs.regexRules,
                 stream: RegexStream.userInput, stage: RegexStage.prompt));
-        turns.add(t);
         historyTurns.add(t);
         break;
       case MessageKind.char:
@@ -446,27 +509,35 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
             'assistant',
             applyRegexRules(cleaned, inputs.regexRules,
                 stream: RegexStream.aiOutput, stage: RegexStage.prompt));
-        turns.add(t);
         historyTurns.add(t);
         break;
       case MessageKind.ooc:
         // Wave CY.14: send as a user-role turn (not system).
         final t = ChatTurn('user', '[OOC]: $txt');
-        turns.add(t);
         historyTurns.add(t);
         break;
       case MessageKind.scene:
         final t = ChatTurn('system', '[SCENE]: $txt');
-        turns.add(t);
         historyTurns.add(t);
         break;
       case MessageKind.system:
         final t = ChatTurn('system', txt);
-        turns.add(t);
         historyTurns.add(t);
         break;
     }
   }
+  // Prompt Manager Core: splice any depth-injected preset turns into the
+  // replayed history, then append the whole history block to the outgoing
+  // turns. For a flat / all-system preset `depthFilled` is empty, so
+  // `insertDepthTurns` returns `historyTurns` unchanged and this `addAll`
+  // reproduces the exact pre-Core order (which appended each message inline).
+  final depthFilled = asm == null
+      ? const <({int depth, String role, String content})>[]
+      : [
+          for (final t in asm.depthTurns)
+            (depth: t.depth, role: t.role, content: fill(t.content).trim()),
+        ];
+  turns.addAll(insertDepthTurns(historyTurns, depthFilled));
   if (historyTurns.isNotEmpty) {
     segments.add(PromptSegment(
       PromptSegmentKind.history,
@@ -486,12 +557,25 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
 
   // Post-history instructions — final system message AFTER the chat turns.
   // `asm.postHistory` is byte-identical to `preset.postHistoryInstructions`
-  // for a flat preset (no blocks).
-  if (asm != null && asm.postHistory.trim().isNotEmpty) {
+  // for a flat preset (no blocks). Skipped when [includePostHistory] is false
+  // (Impersonate/Guide) so the char-voice reminder doesn't contradict the OOC
+  // "write as {{user}}" instruction the caller appends after these turns.
+  if (inputs.includePostHistory &&
+      asm != null &&
+      asm.postHistory.trim().isNotEmpty) {
     final filled = fill(asm.postHistory).trim();
     turns.add(ChatTurn('system', filled));
     segments.add(PromptSegment(PromptSegmentKind.postHistory, filled,
         note: 'preset.postHistoryInstructions'));
+  }
+
+  // Prompt Manager Core: role-`user`/`assistant` blocks placed AFTER history
+  // become REAL chat turns at the very end (after post-history). Empty for flat
+  // presets → no change.
+  if (asm != null) {
+    for (final t in asm.afterTurns) {
+      turns.add(ChatTurn(t.role, fill(t.content).trim()));
+    }
   }
 
   // Wave CY.18.216: GLOBAL {{user}}/{{char}} substitution. Until now only
