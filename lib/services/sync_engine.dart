@@ -214,6 +214,16 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
   /// We must zero the PERSISTED watermark too, because `_tick` lazily reloads
   /// `_lastServerTime` from prefs whenever it's 0 at the top of a tick.
   Future<void> fullResync() async {
+    // BUGFIX (de-risk 2026-06-13, HIGH): if a periodic/resume tick is already in
+    // flight, its terminal `_lastServerTime = serverTime` write (the in-flight
+    // tick pulled with the OLD `since`, so it never fetched the providers) would
+    // clobber the watermark we're about to zero — defeating the since=0 re-pull,
+    // so newly-enabled provider-key sync silently fetches nothing. Wait that
+    // pre-existing tick out FIRST (bounded ~10s), THEN zero + tick: any tick
+    // that starts AFTER we've zeroed reads 0 and correctly re-pulls from scratch.
+    for (var i = 0; i < 200 && _tickInFlight; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
     _lastServerTime = 0;
     try {
       final prefs = await SharedPreferences.getInstance();

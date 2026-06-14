@@ -1,0 +1,7 @@
+﻿repo: C:\Users\Gui\Desktop\BotBooru chat app\flutter_app
+timestamp: 2026-06-14T16:57:19.6908563-03:00
+
+LIVE VISUAL PENDING
+No screenshots were captured by this helper because Flutter was not launchable in the PATH-based environment during this run.
+Required visual flows once launchable: desktop app, LAN server, paired web thin client with service-worker/cache pressure, web streaming/avatar/gallery/download, BotBooru /bbx embed, and provider calls where keys/endpoints are present.
+

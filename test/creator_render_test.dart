@@ -622,6 +622,29 @@ void main() {
           renderCard(back, CreatorMode.character)['description'] as String;
       expect(_norm(desc2), _norm(desc));
     });
+
+    test('a blank-line paragraph that starts Word: stays inside prose', () {
+      final fields = <String, dynamic>{
+        'fullName': 'Edge Case',
+        'background': 'He fled the capital after the coup.\n\n'
+            'Later: he resurfaced as a smuggler.',
+        'coreTraits': 'Wary.',
+      };
+      final desc =
+          renderCard(fields, CreatorMode.character)['description'] as String;
+      final back = decomposeDescription(desc, CreatorMode.character);
+
+      expect(
+        back['background'],
+        'He fled the capital after the coup.\n\n'
+        'Later: he resurfaced as a smuggler.',
+      );
+      expect(back.containsKey('Later'), isFalse);
+
+      final desc2 =
+          renderCard(back, CreatorMode.character)['description'] as String;
+      expect(_norm(desc2), _norm(desc));
+    });
   });
 
   group('missingRequired', () {

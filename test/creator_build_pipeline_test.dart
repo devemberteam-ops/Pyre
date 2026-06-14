@@ -91,6 +91,31 @@ void main() {
       expect(result, {'a': 'truncated value', 'b': 'y'});
     });
 
+    test('continuation that re-emits a full object after an outside-string '
+        'truncation is recovered', () async {
+      final batches = [
+        ['a', 'b'],
+      ];
+
+      Future<String> call(List<ChatTurn> turns) async {
+        final last = turns.last.content;
+        if (last.contains('Continue the JSON object')) {
+          // The model wrongly restarts from the beginning instead of resuming
+          // after the trailing comma.
+          return '{"a":"x","b":"y"}';
+        }
+        return '{"a":"x",'; // truncated outside a string
+      }
+
+      final result = await runStructuredBuild(
+        batches: batches,
+        call: call,
+        buildTurns: fakeBuild,
+      );
+
+      expect(result, {'a': 'x', 'b': 'y'});
+    });
+
     test('permanently unparseable batch → its keys absent, others intact',
         () async {
       final batches = [

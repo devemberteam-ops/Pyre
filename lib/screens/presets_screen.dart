@@ -513,6 +513,7 @@ Future<void> _openPresetKebab(BuildContext context, Preset p) async {
                       enabled: b.enabled,
                       role: b.role,
                       position: b.position,
+                      depth: b.depth,
                     ),
                 ],
               );
@@ -920,6 +921,7 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
         enabled: b.enabled,
         role: b.role,
         position: b.position,
+        depth: b.depth,
       ),
   ];
   final isModular = blocks.isNotEmpty;

@@ -27,8 +27,7 @@
 
 import 'chat_api.dart' show ChatTurn, stripStreamArtifacts;
 import 'creator_build_prompts.dart' show buildContinuationTurns;
-import 'creator_json.dart'
-    show extractJsonObject, looksTruncatedJson, endsInsideUnterminatedString;
+import 'creator_json.dart' show extractJsonObject, looksTruncatedJson;
 
 /// Maximum number of EXTRA continuation calls per batch when a response was
 /// truncated (on top of the 1 initial call). Bounds the loop so it terminates.
@@ -154,12 +153,10 @@ Future<Map<String, dynamic>?> _runBatch(
       // resuming where it stopped. Stitching that onto the partial corrupts the
       // scan (`{"a":"trunc{"a":…}`). So when the continuation on its OWN is a
       // complete, parseable object, prefer it and discard the partial.
-      if (endsInsideUnterminatedString(raw)) {
-        final standalone = extractJsonObject(more);
-        if (standalone != null) {
-          parsed = standalone;
-          break;
-        }
+      final standalone = extractJsonObject(more);
+      if (standalone != null) {
+        parsed = standalone;
+        break;
       }
       raw += more; // concat the partial + continuation
       parsed = extractJsonObject(raw); // re-parse the stitched text

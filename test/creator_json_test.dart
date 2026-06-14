@@ -54,6 +54,23 @@ void main() {
       expect(result['b'], 'y');
     });
 
+    test('6b. trailing-comma cleanup does not alter comma-brace text in strings',
+        () {
+      const reply = '{"notes":"items in his bag: rope, } a knife"}';
+      final result = extractJsonObject(reply);
+      expect(result, isNotNull);
+      expect(result!['notes'], 'items in his bag: rope, } a knife');
+    });
+
+    test(
+        '6c. trailing-comma cleanup does not alter comma-bracket text in strings',
+        () {
+      const reply = '{"notes":"the list ended with x, ] then silence"}';
+      final result = extractJsonObject(reply);
+      expect(result, isNotNull);
+      expect(result!['notes'], 'the list ended with x, ] then silence');
+    });
+
     test('7. truncated mid-string returns null', () {
       const reply = '{"a":"x","b":"unter';
       expect(extractJsonObject(reply), isNull);

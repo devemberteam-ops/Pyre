@@ -28,12 +28,8 @@ Map<String, dynamic>? extractJsonObject(String reply) {
   final result = _scanObject(reply, start);
   if (result == null) return null;
 
-  // Strip trailing commas before } or ] — safe simple regex for well-formed
-  // JSON-with-trailing-commas (this is pragmatically fine for the app's inputs).
-  final cleaned = result.replaceAllMapped(
-    RegExp(r',(\s*[}\]])'),
-    (m) => m.group(1)!,
-  );
+  // Strip trailing commas before } or ], without touching string values.
+  final cleaned = _stripTrailingCommasOutsideStrings(result);
 
   final decoded = _tryDecodeObject(cleaned);
   if (decoded != null) return decoded;
@@ -141,6 +137,52 @@ String _escapeControlCharsInStrings(String s) {
     buf.write(c);
   }
   return changed ? buf.toString() : s;
+}
+
+/// Remove structural trailing commas before `}` / `]` without touching string
+/// contents. This keeps tolerant model-output repair while preserving valid
+/// prose values that happen to contain `, }` or `, ]`.
+String _stripTrailingCommasOutsideStrings(String s) {
+  final out = StringBuffer();
+  bool inString = false;
+  bool escape = false;
+  var changed = false;
+
+  for (var i = 0; i < s.length; i++) {
+    final c = s[i];
+    if (escape) {
+      out.write(c);
+      escape = false;
+      continue;
+    }
+    if (c == r'\' && inString) {
+      out.write(c);
+      escape = true;
+      continue;
+    }
+    if (c == '"') {
+      inString = !inString;
+      out.write(c);
+      continue;
+    }
+    if (!inString && c == ',') {
+      var j = i + 1;
+      while (j < s.length) {
+        final code = s.codeUnitAt(j);
+        if (code != 0x20 && code != 0x0a && code != 0x0d && code != 0x09) {
+          break;
+        }
+        j++;
+      }
+      if (j < s.length && (s[j] == '}' || s[j] == ']')) {
+        changed = true;
+        continue;
+      }
+    }
+    out.write(c);
+  }
+
+  return changed ? out.toString() : s;
 }
 
 /// HIGH 5 — recover a structured object from a REASONING-INCLUSIVE buffer

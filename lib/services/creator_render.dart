@@ -402,9 +402,11 @@ Map<String, String> _decomposeLabeled(String text, CreatorMode mode) {
   // verbatim by the flat path (no `Sub: value` decomposition), and the renderer
   // re-bullets it identically — so a decompose→render round-trip is stable.
   final labelToKey = <String, String>{};
+  final keyToKind = <String, CardFieldKind>{};
   final nestedParents = <String>{};
   for (final f in schema) {
     labelToKey[f.label] = f.key;
+    keyToKind[f.key] = f.kind;
     if (f.kind == CardFieldKind.nestedBullets) nestedParents.add(f.key);
   }
 
@@ -428,9 +430,21 @@ Map<String, String> _decomposeLabeled(String text, CreatorMode mode) {
     final rawLabel = m.group(1)!.trim();
     final key = labelToKey[rawLabel];
     if (key != null) {
-      marks.add(_LabelMark(i, key, foreign: false, isNested: nestedParents.contains(key)));
+      marks.add(_LabelMark(
+        i,
+        key,
+        foreign: false,
+        isNested: nestedParents.contains(key),
+      ));
     } else {
       // Foreign top-level label — preserve under its literal label text.
+      if (marks.isNotEmpty) {
+        final previous = marks.last;
+        if (!previous.foreign &&
+            keyToKind[previous.key] == CardFieldKind.prose) {
+          continue;
+        }
+      }
       marks.add(_LabelMark(i, rawLabel, foreign: true, isNested: false));
     }
   }
