@@ -71,14 +71,34 @@ EntryDraft? extractEntryDraftFromReply(String raw) {
 ///
 /// [initialBookName] — pre-filled book name when [targetBook] is null.
 ///   The user can still rename the book later via the normal lorebook editor.
+///
+/// [onBookCreated] — optional callback fired ONCE when a new lorebook is
+///   created on first save (i.e. when [targetBook] was null). The caller
+///   receives the new book's id so it can bind it to a character/persona.
+///   Not called when [targetBook] was already provided.
+///
+/// [createHidden] — when true, the new lorebook is created with
+///   [Lorebook.hidden] = true (card-only/embedded, decluttered from the
+///   Lorebooks list). Default false (shared/reusable). Only takes effect
+///   when [targetBook] is null (a new book is being created).
 class LorebookCreatorScreen extends StatefulWidget {
   final Lorebook? targetBook;
   final String? initialBookName;
+
+  /// Fired once when a NEW lorebook is created on first-entry save.
+  /// Pass null to ignore (standalone entry points).
+  final void Function(String newBookId)? onBookCreated;
+
+  /// Whether the newly created book should be hidden (embedded/card-only).
+  /// Ignored when [targetBook] is already provided.
+  final bool createHidden;
 
   const LorebookCreatorScreen({
     super.key,
     this.targetBook,
     this.initialBookName,
+    this.onBookCreated,
+    this.createHidden = false,
   });
 
   @override
@@ -408,9 +428,12 @@ class _LorebookCreatorScreenState extends State<LorebookCreatorScreen> {
       final book = Lorebook(
         id: newId('lore'),
         name: bookName,
+        hidden: widget.createHidden,
       );
       store.addLorebook(book);
       setState(() => _book = book);
+      // Notify the caller so they can bind this book to their entity.
+      widget.onBookCreated?.call(book.id);
     }
 
     // Append the entry.

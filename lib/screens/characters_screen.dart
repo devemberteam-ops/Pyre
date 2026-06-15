@@ -18,6 +18,7 @@ import '../services/focus_bus.dart';
 import '../services/gallery_import.dart';
 import '../services/http_errors.dart';
 import '../services/lorebook_import.dart';
+import '../services/lorebook_merge.dart';
 import '../services/attachment_store.dart';
 import '../services/png_encoder.dart';
 import '../services/png_parser.dart';
@@ -649,6 +650,9 @@ Uint8List? _ensurePngBytes(Uint8List bytes) {
 /// a hint so the user knows what to do.
 Future<void> _exportCharacterAsPng(BuildContext context, Character c) async {
   final messenger = ScaffoldMessenger.of(context);
+  // D3: capture store reference before the first await so we can read it
+  // safely after any async gaps (avoids use_build_context_synchronously).
+  final store = context.read<AppStore>();
   try {
     // Wave CY.18.145: resolve via the shared helper so a migrated
     // `pyre://attachment/<hash>` avatar works — the old naive comma-split
@@ -673,7 +677,16 @@ Future<void> _exportCharacterAsPng(BuildContext context, Character c) async {
       );
       return;
     }
-    final pngBytes = encodeCharaCardPng(c, pngAvatarBytes);
+    // D3: gather bound lorebooks and merge into a single character_book so
+    // lore travels with the exported card (was never wired before this fix).
+    final boundBooks = c.lorebookIds
+        .map(store.lorebookById)
+        .whereType<Lorebook>()
+        .where((b) => !b.deleted)
+        .toList(growable: false);
+    final mergedLorebook = mergeBoundLorebooksForExport(boundBooks);
+    final pngBytes = encodeCharaCardPng(c, pngAvatarBytes,
+        lorebook: mergedLorebook);
 
     // Sanitise the filename — strip anything but ASCII alphanumerics and
     // a few safe punctuation chars, fall back to "card" if empty.
@@ -765,6 +778,8 @@ Future<void> _exportCharacterAsPng(BuildContext context, Character c) async {
 /// All other Character fields stay at their defaults.
 Future<void> _exportPersonaAsPng(BuildContext context, Persona p) async {
   final messenger = ScaffoldMessenger.of(context);
+  // D3: capture store reference before the first await (see _exportCharacterAsPng).
+  final personaStore = context.read<AppStore>();
   try {
     final avatarBytes = await resolveAvatarBytes(p.avatar);
     if (avatarBytes == null) {
@@ -804,7 +819,15 @@ Future<void> _exportPersonaAsPng(BuildContext context, Persona p) async {
         'pyre': <String, dynamic>{'kind': 'persona'},
       },
     );
-    final pngBytes = encodeCharaCardPng(asCard, pngAvatarBytes);
+    // D3: embed persona's bound lorebooks so lore travels with the exported card.
+    final personaBoundBooks = p.lorebookIds
+        .map(personaStore.lorebookById)
+        .whereType<Lorebook>()
+        .where((b) => !b.deleted)
+        .toList(growable: false);
+    final personaMergedLorebook = mergeBoundLorebooksForExport(personaBoundBooks);
+    final pngBytes = encodeCharaCardPng(asCard, pngAvatarBytes,
+        lorebook: personaMergedLorebook);
 
     final safeName = p.name
         .replaceAll(RegExp(r'[^A-Za-z0-9 _\-.]'), '')

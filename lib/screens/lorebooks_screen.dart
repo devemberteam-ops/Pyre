@@ -12,7 +12,8 @@ import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
 import '../widgets/empty_state.dart';
-import '../widgets/lorebook_binding_section.dart';
+import '../widgets/lorebook_binding_section.dart'
+    show LorebookUsedBySection, askEmbeddedChoice;
 import 'lorebook_creator_screen.dart';
 
 class LorebooksScreen extends StatelessWidget {
@@ -226,6 +227,14 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
             },
           ),
           ListTile(
+            leading: Icon(Icons.link, color: EmberColors.textMid),
+            title: const Text('Embed into a card…'),
+            onTap: () async {
+              Navigator.pop(sheet);
+              await _embedIntoCard(context, store, l, messenger);
+            },
+          ),
+          ListTile(
             leading: Icon(Icons.delete_outline,
                 color: EmberColors.danger),
             title: Text('Delete',
@@ -243,6 +252,139 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
             },
           ),
         ],
+      ),
+    ),
+  );
+}
+
+// ── Embed into a card ────────────────────────────────────────────────────────
+
+/// Pick a character, ask shared/embedded, then bind this lorebook to
+/// the chosen character. D1: always ask shared-vs-embedded.
+Future<void> _embedIntoCard(
+  BuildContext context,
+  AppStore store,
+  Lorebook l,
+  ScaffoldMessengerState messenger,
+) async {
+  final characters = store.characters.where((c) => !c.deleted).toList();
+  if (characters.isEmpty) {
+    messenger.showSnackBar(
+      const SnackBar(content: Text('No characters found. Create one first.')),
+    );
+    return;
+  }
+
+  // Step 1: pick a character.
+  Character? picked;
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: EmberColors.bgPanel,
+    isScrollControlled: true,
+    builder: (sheet) => SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(sheet).size.height * 0.7,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Row(
+                children: [
+                  Icon(Icons.person, color: EmberColors.primary),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'Embed into which card?',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: Icon(Icons.close, color: EmberColors.textMid),
+                    onPressed: () => Navigator.pop(sheet),
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                itemCount: characters.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 4),
+                itemBuilder: (_, i) {
+                  final c = characters[i];
+                  final alreadyBound = c.lorebookIds.contains(l.id);
+                  return Card(
+                    child: ListTile(
+                      enabled: !alreadyBound,
+                      leading: Icon(
+                        Icons.person,
+                        color: alreadyBound
+                            ? EmberColors.textDim
+                            : EmberColors.textMid,
+                      ),
+                      title: Text(
+                        c.name,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: alreadyBound
+                              ? EmberColors.textDim
+                              : EmberColors.textHigh,
+                        ),
+                      ),
+                      trailing: alreadyBound
+                          ? Icon(Icons.check,
+                              color: EmberColors.textDim, size: 18)
+                          : null,
+                      onTap: alreadyBound
+                          ? null
+                          : () {
+                              picked = c;
+                              Navigator.pop(sheet);
+                            },
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  if (picked == null) return;
+  if (!context.mounted) return;
+
+  // Step 2: D1 — ALWAYS ask shared-vs-embedded.
+  // We import the helper from lorebook_binding_section.
+  final embedded = await askEmbeddedChoice(context);
+  if (embedded == null) return; // cancelled
+  if (!context.mounted) return;
+
+  // Apply: set hidden per choice, bind to character.
+  final book = l;
+  if (book.hidden != embedded) {
+    book.hidden = embedded;
+    store.updateLorebook(book);
+  }
+  final char = picked!;
+  if (!char.lorebookIds.contains(book.id)) {
+    char.lorebookIds.add(book.id);
+    store.updateCharacter(char);
+  }
+
+  messenger.showSnackBar(
+    SnackBar(
+      content: Text(
+        embedded
+            ? 'Embedded "${l.name}" into ${char.name}. '
+                'It will travel when you export that card.'
+            : 'Linked "${l.name}" to ${char.name} as a shared lorebook.',
       ),
     ),
   );
