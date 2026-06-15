@@ -853,6 +853,57 @@ class _CharacterAssistantScreenState
           existing['scenario'] = curScenario;
         }
       }
+      // H1 (audit 2026-06-14): seed ALL top-level canvas fields so the edit
+      // prompt carries current values for verbatim echo. `existing` is built
+      // only from `decomposeDescription` — which only covers Description-section
+      // fields — leaving top-level fields absent. The model gets no current
+      // value and INVENTS fresh ones, silently overwriting the user's content
+      // on every edit. Mirror the scenario seed above for ALL modes.
+      //
+      // Schema key → canvas key mapping:
+      //   first_mes         → canvas 'first_mes'         (string)
+      //   dialogueExamples  → canvas 'mes_example'       (pre-rendered string)
+      //   tags              → canvas 'tags'               (List<String> → joined)
+      //   creator_notes     → canvas 'creator_notes'     (string)
+      //   tagline           → canvas 'tagline'           (string)
+      //   alternate_greetings → canvas 'alternate_greetings' (List<String> → joined)
+      //   post_history_instructions → canvas 'post_history_instructions' (string, scenario)
+      //   name              → canvas 'name'               (string, scenario)
+      //
+      // DO NOT seed Description-section fields here — those come from
+      // `decomposeDescription` above and live inside the Description text.
+      // DO NOT change create-mode: the `else` branch keeps `existing` empty.
+      final canvas = _sessionCanvas(store);
+      void seedStr(String schemaKey, String canvasKey) {
+        final v = (canvas[canvasKey] ?? '').toString().trim();
+        if (v.isNotEmpty) existing[schemaKey] = v;
+      }
+
+      void seedList(String schemaKey, String canvasKey) {
+        final raw = canvas[canvasKey];
+        final List<String> list;
+        if (raw is List) {
+          list = raw.whereType<String>().where((s) => s.trim().isNotEmpty).toList();
+        } else if (raw is String && raw.trim().isNotEmpty) {
+          list = [raw.trim()];
+        } else {
+          return;
+        }
+        if (list.isNotEmpty) existing[schemaKey] = list.join('; ');
+      }
+
+      seedStr('first_mes', 'first_mes');
+      seedStr('dialogueExamples', 'mes_example');
+      seedStr('creator_notes', 'creator_notes');
+      seedStr('tagline', 'tagline');
+      seedList('tags', 'tags');
+      seedList('alternate_greetings', 'alternate_greetings');
+      // Scenario-mode only.
+      if (mode == cs.CreatorMode.scenario) {
+        seedStr('name', 'name');
+        seedStr('scenario', 'scenario');
+        seedStr('post_history_instructions', 'post_history_instructions');
+      }
     } else {
       existing = <String, String>{};
     }
@@ -892,12 +943,25 @@ class _CharacterAssistantScreenState
     // the rest of THIS build (extractJsonObject tolerates prose/fenced JSON, so
     // structured mode degrades gracefully, not fatally).
     var jsonModeUnsupported = false;
+    // H2: create a fresh cancel token for this build. Stored on the state so
+    // `_stop()` can call cancel() on it, which causes `runStructuredBuild` to
+    // return after the current batch instead of running all remaining ones.
+    final cancelToken = BuildCancelToken();
+    _buildCancelToken = cancelToken;
+    // H3 (no keep-alive on the build): the architect chat turn holds the
+    // keep-alive but the LONG build that follows it does not. A memory-
+    // pressured Android device can reap the app mid-build, losing the whole
+    // build silently. Wrap the build in the same heavy keep-alive that the
+    // architect turn and vision use. try/finally guarantees it stops on
+    // normal completion, error, or cancellation.
+    await _keepAliveStart();
     try {
       final fields = await runStructuredBuild(
         batches: batches,
         // Back off between retries so a transient provider throttle (empty
         // reply) can recover before the next attempt.
         retryDelay: const Duration(seconds: 5),
+        cancelToken: cancelToken,
         buildTurns: (keys, decided) {
           // Advance the displayed pass only on a FRESH full batch — a targeted
           // missing-key re-request (a subset of a batch) reuses the same pass.
@@ -1063,7 +1127,13 @@ class _CharacterAssistantScreenState
             'is in the Sheet tab — you can re-run the build.');
       }
     } finally {
+      // H3: release the keep-alive started at the top of this build so the
+      // foreground service / notification is correctly stopped.
+      _keepAliveStop();
       if (mounted) setState(() => _structuredBuilding = false);
+      // H2: clear the cancel token so a stale pointer doesn't linger after
+      // the build finishes normally or via error.
+      if (_buildCancelToken == cancelToken) _buildCancelToken = null;
     }
   }
 
@@ -1284,6 +1354,13 @@ class _CharacterAssistantScreenState
   /// command both check it) and is independent of `_generating` (which gates
   /// the architect chat stream).
   bool _structuredBuilding = false;
+
+  /// H2 (Stop doesn't stop the build): cancellation token for the current
+  /// in-flight structured build. Created at the start of each build and stored
+  /// here so `_stop()` / `_abortInFlightStream()` can call [cancel] on it,
+  /// which causes `runStructuredBuild` to return after the current batch
+  /// finishes (no more LLM calls). Null when no build is in flight.
+  BuildCancelToken? _buildCancelToken;
 
 
   /// One-shot per-turn system-prompt override. When non-null,
@@ -2276,7 +2353,18 @@ class _CharacterAssistantScreenState
     // become no-ops if they fire after this point.
     _streamGen++;
     _keepAliveStop();
-    setState(() => _generating = false);
+    // H2 (Stop doesn't stop the build): cancel any in-flight structured
+    // build so `runStructuredBuild` stops after the current batch finishes
+    // instead of running ALL remaining batches (potentially minutes more).
+    // Also clear the building flag so the UI unblocks immediately.
+    // `_abortInFlightStream` already does both; `_stop` was asymmetrically
+    // missing them (it cleared `_generating` but not `_structuredBuilding`).
+    _buildCancelToken?.cancel();
+    _buildCancelToken = null;
+    setState(() {
+      _generating = false;
+      _structuredBuilding = false;
+    });
     context.read<AppStore>().flushPersist();
     _streamBuffer = '';
     _updatingCanvas = false;
@@ -2321,6 +2409,10 @@ class _CharacterAssistantScreenState
     // `[[BUILD_SHEET]]` marker can start a fresh build in the new session.
     // The aborted build's `finally` will also set this false — harmless.
     _structuredBuilding = false;
+    // H2: also cancel any in-flight build token so no more batches are
+    // fired after this session-switch tear-down.
+    _buildCancelToken?.cancel();
+    _buildCancelToken = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -2463,19 +2555,43 @@ class _CharacterAssistantScreenState
     // Truncate everything after this user message, then update its
     // content. Attachments stay (the user is editing the text, not the
     // attached image/card/doc).
-    final truncated = List<CreatorMessage>.from(messages.sublist(0, index));
-    truncated.add(CreatorMessage(
+    final updatedUser = CreatorMessage(
       role: 'user',
       content: newText,
       attachments: m.attachments,
-    ));
+    );
+    final truncated = List<CreatorMessage>.from(messages.sublist(0, index));
+    truncated.add(updatedUser);
     _persistMessages(store, truncated);
     setState(() {
       _generating = true;
       _streamBuffer = '';
     });
     _scrollToBottom();
-    await _runConversation();
+
+    // M1 (editing a user message that had an image drops vision analysis):
+    // if the edited user turn carried an image attachment, re-run the vision
+    // pipeline exactly as `_retry` does. Without this, `_runConversation`
+    // sends the architect chat without a re-analysed image profile, so the
+    // architect replies blind (no visual ground truth). Mirrors `_retry`'s
+    // "if the dropped assistant turn was a vision profile, re-run vision" branch.
+    final imageAttachment = updatedUser.attachments.firstWhere(
+      (a) => a.kind == 'image' && a.imageDataUrl != null,
+      orElse: () => CreatorAttachment(
+          kind: '', filename: '', imageDataUrl: null, extracted: ''),
+    );
+    final hasImage = imageAttachment.imageDataUrl != null;
+
+    if (hasImage) {
+      await _retryVisionTurn(
+        store: store,
+        messages: truncated,
+        userTurn: updatedUser,
+        imageAttachment: imageAttachment,
+      );
+    } else {
+      await _runConversation();
+    }
   }
 
   /// Delete a message. Cascade = drop everything from this index

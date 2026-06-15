@@ -29,6 +29,24 @@ import 'chat_api.dart' show ChatTurn, stripStreamArtifacts;
 import 'creator_build_prompts.dart' show buildContinuationTurns;
 import 'creator_json.dart' show extractJsonObject, looksTruncatedJson;
 
+/// H2 (Stop doesn't stop the build): a lightweight cancellation token for the
+/// structured-build pipeline. The UI layer creates one token per build, stores
+/// it, and calls [cancel] in `_stop()`. `runStructuredBuild` checks
+/// [isCancelled] between batches (and before the missing-key re-request) so it
+/// stops adding more LLM calls and returns whatever it has accumulated so far.
+///
+/// This is intentionally simple — just a bool flag — because the build is
+/// async-but-sequential (one batch at a time). No locking needed.
+class BuildCancelToken {
+  bool _cancelled = false;
+
+  /// True after [cancel] has been called.
+  bool get isCancelled => _cancelled;
+
+  /// Cancel the build. Idempotent.
+  void cancel() => _cancelled = true;
+}
+
 /// Maximum number of EXTRA continuation calls per batch when a response was
 /// truncated (on top of the 1 initial call). Bounds the loop so it terminates.
 const int _kMaxContinuations = 2;
@@ -74,6 +92,12 @@ bool _isEmpty(dynamic v) {
 /// [call]       — runs the model on a turn list and returns the full reply text
 ///                (e.g. a closure over completeChatStreamed(extraBody: response_format)).
 ///                Injected for testability.
+/// [cancelToken] — optional [BuildCancelToken] (H2). When cancelled between
+///                batches the function returns the fields accumulated SO FAR
+///                instead of running the remaining batches/re-requests. The
+///                in-flight `call` for the CURRENT batch is NOT interrupted
+///                (HTTP streams can't be cancelled mid-way), but no further
+///                LLM calls are made after it completes.
 Future<Map<String, dynamic>> runStructuredBuild({
   required List<List<String>> batches,
   required Future<String> Function(List<ChatTurn> turns) call,
@@ -81,22 +105,44 @@ Future<Map<String, dynamic>> runStructuredBuild({
           List<String> batchKeys, Map<String, dynamic> decidedSoFar)
       buildTurns,
   Duration retryDelay = Duration.zero,
+  BuildCancelToken? cancelToken,
 }) async {
   final fields = <String, dynamic>{};
   for (final batchKeys in batches) {
+    // H2 cancellation: if Stop was called, return what we have and stop
+    // adding more LLM calls. The current in-flight `call` already completed
+    // (we only check between batches — HTTP streams can't be cut mid-way),
+    // so this never leaks a hanging future.
+    if (cancelToken?.isCancelled ?? false) return fields;
+
     // FIX #3 carry-forward: every batch sees the facts decided by earlier
     // batches so it can stay consistent with them. A copy so the closure can't
     // mutate the live accumulator mid-batch.
     final decidedSoFar = Map<String, dynamic>.from(fields);
     final turns = buildTurns(batchKeys, decidedSoFar);
     final parsed = await _runBatch(turns, call, retryDelay);
-    if (parsed != null) fields.addAll(parsed); // merge; absent on permanent fail
+    // H5 (cross-batch empty clobber): a later batch can echo an earlier key
+    // empty (model over-emits, forgot the value). Apply the same empty-skip
+    // guard that the FIX #2 re-request already uses at line ~107:
+    //   - non-empty new value → set / overwrite (a better value wins)
+    //   - key not yet present → set (first write)
+    //   - new value IS empty AND existing IS non-empty → keep the existing value
+    // Only `addAll` (the unconditional overwrite) is replaced; all other
+    // behaviour (absent key, non-empty overwrite) is identical to before.
+    if (parsed != null) {
+      for (final entry in parsed.entries) {
+        if (_isEmpty(entry.value) && !_isEmpty(fields[entry.key])) continue;
+        fields[entry.key] = entry.value;
+      }
+    }
 
     // FIX #2 re-request missing: a valid-but-PARTIAL object can silently drop
     // requested keys (the real Clothing/Intimate Details/General Appearance
     // bug). After merging, compute the requested keys STILL empty/absent and do
     // ONE targeted re-request for just those — bounded, never loops.
     if (parsed != null) {
+      // H2: also check before the missing-key re-request.
+      if (cancelToken?.isCancelled ?? false) return fields;
       final missing = batchKeys.where((k) => _isEmpty(fields[k])).toList();
       if (missing.isNotEmpty) {
         for (var r = 0; r < _kMissingKeyReRequests; r++) {
@@ -152,8 +198,21 @@ Future<Map<String, dynamic>?> _runBatch(
       // EMITS the whole object from scratch (a leading `{…}`) instead of
       // resuming where it stopped. Stitching that onto the partial corrupts the
       // scan (`{"a":"trunc{"a":…}`). So when the continuation on its OWN is a
-      // complete, parseable object, prefer it and discard the partial.
-      final standalone = extractJsonObject(more);
+      // complete, parseable object AND it actually starts with `{` (i.e. the
+      // model opened a fresh object, not resumed a string), prefer it and
+      // discard the partial.
+      //
+      // H4 fix: the old guard ran extractJsonObject over the WHOLE continuation
+      // chunk — which is greedy and returns the FIRST balanced `{…}` anywhere
+      // in `more`, including a JSON-looking substring inside a resumed string
+      // value (e.g. "(see {\"ref\":\"X\"}) for details…"). Taking that inner
+      // fragment as the "re-emitted object" discarded the real partial+stitch
+      // and injected garbage. The fix: only activate the re-emit path when
+      // `more` actually starts with `{` (after trimming), which is true for a
+      // genuine whole-object re-emit but NOT for a mid-string continuation.
+      final standalone = more.trimLeft().startsWith('{')
+          ? extractJsonObject(more)
+          : null;
       if (standalone != null) {
         parsed = standalone;
         break;

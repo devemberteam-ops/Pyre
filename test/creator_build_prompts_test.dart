@@ -395,6 +395,94 @@ void main() {
     });
   });
 
+  // H1 tests: ensure the edit prompt carries the current value for every
+  // top-level card field — not just Description-section fields. In the bug,
+  // `existing` was built only from decomposeDescription so first_mes / tags /
+  // creator_notes / tagline / alternate_greetings / dialogueExamples were
+  // never seeded → the model invented fresh content on every edit, overwriting
+  // the user's hand-written values.
+  group('buildBatchTurns — H1: edit framing carries top-level fields', () {
+    // Helper: find the closing batch for a mode (the one with first_mes etc.)
+    List<String> closingBatch(CreatorMode mode) {
+      for (final batch in batchesFor(mode)) {
+        if (batch.contains('first_mes')) return batch;
+      }
+      return ['first_mes'];
+    }
+
+    test('H1 character: first_mes current value appears in the edit prompt',
+        () {
+      final turns = buildBatchTurns(
+        mode: CreatorMode.character,
+        batchKeys: closingBatch(CreatorMode.character),
+        transcript: [ChatTurn('user', 'make her 25 instead of 30')],
+        existingFields: {
+          'first_mes':
+              'She looked up from her book, startled by your arrival.',
+          'tags': 'Female; OC; Shy; NSFW',
+          'creator_notes': 'Keep responses in third person.',
+          'tagline': 'A quiet scholar with secrets.',
+          'alternate_greetings': 'A rainy afternoon greeting.; A night greeting.',
+          'dialogueExamples': '<START>\n{{user}}: Hello\n{{char}}: Hi...',
+        },
+      );
+      final all = _allContent(turns);
+
+      expect(all, contains('first_mes'),
+          reason: 'H1: first_mes key must appear');
+      expect(all, contains('She looked up from her book'),
+          reason: 'H1: first_mes current value must appear');
+      expect(all, contains('Keep responses in third person'),
+          reason: 'H1: creator_notes current value must appear');
+      expect(all, contains('A quiet scholar with secrets'),
+          reason: 'H1: tagline current value must appear');
+      expect(all, contains('Female; OC; Shy; NSFW'),
+          reason: 'H1: tags current value must appear');
+      expect(all, contains('THIS IS AN EDIT'),
+          reason: 'H1: edit framing header must be present');
+    });
+
+    test('H1 scenario: post_history_instructions + name current values appear',
+        () {
+      final turns = buildBatchTurns(
+        mode: CreatorMode.scenario,
+        batchKeys: closingBatch(CreatorMode.scenario),
+        transcript: [ChatTurn('user', 'make the first message more urgent')],
+        existingFields: {
+          'first_mes': 'The alarm blares. Gates are opening.',
+          'post_history_instructions': 'Maintain the tense, fast-paced tone.',
+          'creator_notes': 'Rated M.',
+          'tagline': 'The gates await.',
+        },
+      );
+      final all = _allContent(turns);
+
+      expect(all, contains('The alarm blares'),
+          reason: 'H1: first_mes must be in scenario edit prompt');
+      expect(all, contains('Maintain the tense'),
+          reason: 'H1: post_history_instructions must be in scenario edit prompt');
+      expect(all, contains('Rated M'),
+          reason: 'H1: creator_notes must be in scenario edit prompt');
+      expect(all, contains('The gates await'),
+          reason: 'H1: tagline must be in scenario edit prompt');
+    });
+
+    test('H1: in CREATE mode (existingFields null) the top-level fields are '
+        'NOT mentioned as current values (create-mode unchanged)', () {
+      final turns = buildBatchTurns(
+        mode: CreatorMode.character,
+        batchKeys: closingBatch(CreatorMode.character),
+        transcript: [ChatTurn('user', 'build a shy catgirl')],
+        // No existingFields → create mode
+      );
+      final all = _allContent(turns);
+      expect(all, isNot(contains('THIS IS AN EDIT')),
+          reason: 'H1: create mode must have no edit block');
+      expect(all, isNot(contains('current value')),
+          reason: 'H1: create mode must have no current-value framing');
+    });
+  });
+
   group('buildContinuationTurns', () {
     test('appends partial + a continue/JSON user turn', () {
       final prior = buildBatchTurns(
