@@ -349,7 +349,7 @@ Future<void> _showBackupSummary(
     builder: (ctx) => AlertDialog(
       backgroundColor: EmberColors.bgPanel,
       title: Row(
-        children: const [
+        children: [
           Icon(Icons.download_done, color: EmberColors.primary, size: 22),
           SizedBox(width: 10),
           Expanded(child: Text('SillyTavern backup imported')),
@@ -495,7 +495,7 @@ Future<void> _showSummary(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                 child: Row(
                   children: [
-                    const Icon(Icons.download_done,
+                    Icon(Icons.download_done,
                         color: EmberColors.primary, size: 22),
                     const SizedBox(width: 10),
                     Expanded(
@@ -515,7 +515,7 @@ Future<void> _showSummary(
                   alignment: Alignment.centerLeft,
                   child: Text(
                     summary,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textHigh,
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -525,7 +525,7 @@ Future<void> _showSummary(
                 ),
               ),
               const SizedBox(height: 8),
-              const Divider(color: EmberColors.stroke, height: 1),
+              Divider(color: EmberColors.stroke, height: 1),
               Expanded(
                 child: ListView.separated(
                   controller: scrollController,
@@ -585,7 +585,7 @@ class _ResultRow extends StatelessWidget {
               children: [
                 Text(
                   r.name,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textHigh,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,

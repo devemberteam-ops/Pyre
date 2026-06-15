@@ -197,7 +197,7 @@ class _SectionHeader extends StatelessWidget {
       padding: const EdgeInsets.only(left: 4, top: 4, bottom: 4),
       child: Text(
         text.toUpperCase(),
-        style: const TextStyle(
+        style: TextStyle(
           color: EmberColors.primary,
           fontWeight: FontWeight.w700,
           fontSize: 11,
@@ -231,7 +231,7 @@ class _ModelRecommendationsBanner extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            children: const [
+            children: [
               Icon(Icons.recommend_outlined,
                   size: 18, color: EmberColors.primary),
               SizedBox(width: 8),
@@ -247,7 +247,7 @@ class _ModelRecommendationsBanner extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          const Text(
+          Text(
             'For the Character Creator (this screen):',
             style: TextStyle(
               color: EmberColors.textHigh,
@@ -257,8 +257,8 @@ class _ModelRecommendationsBanner extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          const Padding(
-            padding: EdgeInsets.only(left: 6),
+          Padding(
+            padding: const EdgeInsets.only(left: 6),
             child: Text(
               '➤  DeepSeek V4 Pro — by far the best. Other DeepSeek '
               'family models (V3.2, V3 chat) also work well. Models '
@@ -272,7 +272,7 @@ class _ModelRecommendationsBanner extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
-          const Text(
+          Text(
             'For Vision (image analysis when building cards):',
             style: TextStyle(
               color: EmberColors.textHigh,
@@ -282,7 +282,7 @@ class _ModelRecommendationsBanner extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(left: 6),
             child: Text(
               '➤  Qwen 3.6 Plus Uncensored — available on Venice and '
@@ -302,7 +302,7 @@ class _ModelRecommendationsBanner extends StatelessWidget {
               color: EmberColors.bgDeep.withValues(alpha: 0.6),
               borderRadius: BorderRadius.circular(6),
             ),
-            child: const Row(
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(Icons.info_outline,
@@ -369,7 +369,7 @@ class _YourAdditionsCard extends StatelessWidget {
                     ),
                     child: Text(
                       tokens!,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: EmberColors.textDim,
                         fontSize: 10,
                       ),
@@ -378,7 +378,7 @@ class _YourAdditionsCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 4),
-            const Text(
+            Text(
               'Custom rules appended to the architect\'s prompt. '
               'Examples: "Always respond in Brazilian Portuguese.", '
               '"Keep appearances PG-13 unless I say otherwise.", '
@@ -462,10 +462,10 @@ class _GenerationSettingsCardState extends State<_GenerationSettingsCard> {
       child: ExpansionTile(
         tilePadding: const EdgeInsets.symmetric(horizontal: 16),
         childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-        leading: const Icon(Icons.tune, color: EmberColors.primary, size: 20),
+        leading: Icon(Icons.tune, color: EmberColors.primary, size: 20),
         title: const Text('Generation settings',
             style: TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: const Text(
+        subtitle: Text(
           'Sampling knobs for the Creator only (chat, image analysis, '
           'sheet update). Defaults work for most setups.',
           style: TextStyle(color: EmberColors.textMid, fontSize: 12),
@@ -481,7 +481,7 @@ class _GenerationSettingsCardState extends State<_GenerationSettingsCard> {
                 const Text('Description size',
                     style: TextStyle(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 2),
-                const Text(
+                Text(
                   'How long a Description the Creator writes for characters and '
                   'personas. A soft target, not a cap — Standard matches Pyre\'s '
                   'default.',
@@ -642,7 +642,7 @@ class _ArchitectPresetCard extends StatelessWidget {
                           color:
                               EmberColors.primary.withValues(alpha: 0.5)),
                     ),
-                    child: const Text(
+                    child: Text(
                       'DEFAULT',
                       style: TextStyle(
                         color: EmberColors.primary,
@@ -662,7 +662,7 @@ class _ArchitectPresetCard extends StatelessWidget {
               'read-only — fork it to a custom preset to rewrite the '
               'base prompts. Your additions above still append on top '
               'of whichever preset is active.',
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textMid,
                 fontSize: 12,
                 height: 1.4,
@@ -682,7 +682,7 @@ class _ArchitectPresetCard extends StatelessWidget {
                   preview,
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textHigh,
                     fontSize: 11,
                     height: 1.4,

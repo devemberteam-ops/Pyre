@@ -62,7 +62,7 @@ class DesktopShortcutsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
         children: [
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(4, 4, 4, 8),
             child: Text(
               'Remappable',
@@ -80,7 +80,7 @@ class DesktopShortcutsScreen extends StatelessWidget {
               children: [
                 for (var i = 0; i < ShortcutAction.all.length; i++) ...[
                   if (i > 0)
-                    const Divider(
+                    Divider(
                       color: EmberColors.stroke,
                       height: 1,
                       indent: 16,
@@ -92,7 +92,7 @@ class DesktopShortcutsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 20),
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(4, 4, 4, 8),
             child: Text(
               'Fixed (chat input)',
@@ -107,7 +107,7 @@ class DesktopShortcutsScreen extends StatelessWidget {
           Card(
             margin: EdgeInsets.zero,
             child: Column(
-              children: const [
+              children: [
                 _ReadOnlyShortcutRow(
                   label: 'Send message',
                   binding: 'Enter',
@@ -188,7 +188,7 @@ class _ShortcutRow extends StatelessWidget {
                   ),
                   if (isOverridden) ...[
                     const SizedBox(height: 2),
-                    const Text(
+                    Text(
                       'Custom',
                       style: TextStyle(
                         color: EmberColors.textDim,
@@ -210,7 +210,7 @@ class _ShortcutRow extends StatelessWidget {
               ),
               child: Text(
                 binding.label(),
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: 'monospace',
                   fontSize: 12,
                   color: EmberColors.textHigh,
@@ -218,7 +218,7 @@ class _ShortcutRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 6),
-            const Icon(Icons.edit, size: 16, color: EmberColors.textDim),
+            Icon(Icons.edit, size: 16, color: EmberColors.textDim),
           ],
         ),
       ),
@@ -298,7 +298,7 @@ class _ReadOnlyShortcutRow extends StatelessWidget {
             ),
             child: Text(
               binding,
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 12,
                 color: EmberColors.textHigh,
@@ -405,7 +405,7 @@ class _CaptureDialogState extends State<_CaptureDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
+              Text(
                 'Press a key combination, or Esc to cancel.',
                 style: TextStyle(
                     color: EmberColors.textMid, fontSize: 13),
@@ -422,7 +422,7 @@ class _CaptureDialogState extends State<_CaptureDialog> {
                 child: Text(
                   _liveLabel,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 15,
                     color: EmberColors.textHigh,
@@ -430,7 +430,7 @@ class _CaptureDialogState extends State<_CaptureDialog> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 'Esc to cancel · Modifiers alone won\'t save — they '
                 'need a key.',
                 style: TextStyle(

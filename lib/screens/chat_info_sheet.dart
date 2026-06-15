@@ -68,7 +68,7 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Center(
+            Center(
               child: Padding(
                 padding: EdgeInsets.only(bottom: 12),
                 child: SizedBox(
@@ -92,7 +92,7 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
               'Approximate token weight of every component sent to the '
               'model on the next turn. Counts use the chars/4 heuristic '
               '(close enough for the "is this big or small" question).',
-              style: const TextStyle(
+              style: TextStyle(
                   color: EmberColors.textMid,
                   fontSize: 12,
                   height: 1.4),
@@ -111,10 +111,10 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.toll,
+                  Icon(Icons.toll,
                       color: EmberColors.primary, size: 22),
                   const SizedBox(width: 10),
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Total context',
                       style: TextStyle(
@@ -124,7 +124,7 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
                   ),
                   Text(
                     formatTokenCount(breakdown.total) ?? '~0 tokens',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.primary,
                       fontWeight: FontWeight.w700,
                       fontSize: 16,
@@ -234,7 +234,7 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
                     subtitle,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                         color: EmberColors.textMid, fontSize: 11),
                   ),
                 ],
@@ -246,7 +246,7 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
               children: [
                 Text(
                   tokenLabel,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textHigh,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -312,7 +312,7 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.person,
+            Icon(Icons.person,
                 size: 16, color: EmberColors.textMid),
             const SizedBox(width: 10),
             Expanded(
@@ -338,7 +338,7 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
                     headerSubtitle,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                         color: EmberColors.textMid, fontSize: 11),
                   ),
                 ],
@@ -350,7 +350,7 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
               children: [
                 Text(
                   tokenLabel,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textHigh,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -398,7 +398,7 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
           padding: const EdgeInsets.fromLTRB(34, 2, 0, 6),
           child: Row(
             children: [
-              const Icon(Icons.arrow_right,
+              Icon(Icons.arrow_right,
                   size: 14, color: EmberColors.textMid),
               const SizedBox(width: 4),
               Expanded(
@@ -406,13 +406,13 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
                   entry.key,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                       color: EmberColors.textMid, fontSize: 12),
                 ),
               ),
               Text(
                 entryLabel,
-                style: const TextStyle(
+                style: TextStyle(
                   color: EmberColors.textHigh,
                   fontSize: 11,
                   fontWeight: FontWeight.w500,
@@ -647,7 +647,7 @@ class _ContextWindowRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (loading) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.symmetric(vertical: 2),
         child: Text(
           'Checking model context window…',
@@ -656,7 +656,7 @@ class _ContextWindowRow extends StatelessWidget {
       );
     }
     if (window == null || window! <= 0) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.symmetric(vertical: 2),
         child: Text(
           'Context window: unknown — set it manually in More → API '
@@ -676,13 +676,13 @@ class _ContextWindowRow extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Icon(Icons.data_usage,
+            Icon(Icons.data_usage,
                 size: 14, color: EmberColors.textMid),
             const SizedBox(width: 6),
             Expanded(
               child: Text(
                 '${_compact(used)} of ~${_compact(window!)} window',
-                style: const TextStyle(
+                style: TextStyle(
                     color: EmberColors.textMid, fontSize: 12),
               ),
             ),

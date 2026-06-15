@@ -110,7 +110,7 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
                           color: EmberColors.primary.withValues(alpha: 0.18),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.local_fire_department,
                           color: EmberColors.primary,
                           size: 20,
@@ -134,7 +134,7 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
                         fontWeight: FontWeight.w600, fontSize: 14),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'BYOK: bring your own API key. All characters, '
                     'chats, presets and lorebooks live on this '
                     'device. Pyre connects directly to the AI '
@@ -147,7 +147,7 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'Imports SillyTavern v1/v2 cards, presets, and '
                     'lorebooks. Browses botbooru.com inside the app.',
                     style: TextStyle(
@@ -163,7 +163,7 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
           const SizedBox(height: 16),
 
           // -------- Privacy --------
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(4, 4, 4, 8),
             child: Text(
               'Privacy',
@@ -180,15 +180,15 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  Text(
+                children: [
+                  const Text(
                     'Pyre collects nothing',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  SizedBox(height: 6),
+                  const SizedBox(height: 6),
                   Text(
                     'No analytics, no telemetry, no crash reports — '
                     'nothing leaves your device. There\'s no Pyre '
@@ -199,7 +199,7 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
                       height: 1.5,
                     ),
                   ),
-                  SizedBox(height: 8),
+                  const SizedBox(height: 8),
                   Text(
                     'Your characters, chats and keys live only on your '
                     'device — and, if you turn it on, sync directly to '
@@ -217,7 +217,7 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
 
           // -------- Legal & support --------
           const SizedBox(height: 20),
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(4, 4, 4, 8),
             child: Text(
               'Legal & support',
@@ -233,45 +233,45 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
             child: Column(
               children: [
                 ListTile(
-                  leading: const Icon(Icons.coffee_outlined,
+                  leading: Icon(Icons.coffee_outlined,
                       color: EmberColors.primary),
                   title: const Text('Support Pyre'),
-                  subtitle: const Text(
+                  subtitle: Text(
                     'Free, obviously. Throw a coffee on the bonfire if you want.',
                     style: TextStyle(
                         color: EmberColors.textMid, fontSize: 12),
                   ),
-                  trailing: const Icon(Icons.open_in_new,
+                  trailing: Icon(Icons.open_in_new,
                       size: 18, color: EmberColors.textDim),
                   onTap: () => _open(_koFiUrl),
                 ),
-                const Divider(
+                Divider(
                     color: EmberColors.stroke, height: 1, indent: 16),
                 ListTile(
-                  leading: const Icon(Icons.shield_outlined,
+                  leading: Icon(Icons.shield_outlined,
                       color: EmberColors.primary),
                   title: const Text('Privacy Policy'),
-                  trailing: const Icon(Icons.open_in_new,
+                  trailing: Icon(Icons.open_in_new,
                       size: 18, color: EmberColors.textDim),
                   onTap: () => _open(_privacyPolicyUrl),
                 ),
-                const Divider(
+                Divider(
                     color: EmberColors.stroke, height: 1, indent: 16),
                 ListTile(
-                  leading: const Icon(Icons.description_outlined,
+                  leading: Icon(Icons.description_outlined,
                       color: EmberColors.primary),
                   title: const Text('Terms of Use'),
-                  trailing: const Icon(Icons.open_in_new,
+                  trailing: Icon(Icons.open_in_new,
                       size: 18, color: EmberColors.textDim),
                   onTap: () => _open(_termsOfServiceUrl),
                 ),
-                const Divider(
+                Divider(
                     color: EmberColors.stroke, height: 1, indent: 16),
                 ListTile(
-                  leading: const Icon(Icons.help_outline,
+                  leading: Icon(Icons.help_outline,
                       color: EmberColors.primary),
                   title: const Text('Help & support'),
-                  trailing: const Icon(Icons.open_in_new,
+                  trailing: Icon(Icons.open_in_new,
                       size: 18, color: EmberColors.textDim),
                   onTap: () => _open(_supportUrl),
                 ),
@@ -288,7 +288,7 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
           // window interaction.
           if (StabilityMode.supported) ...[
             const SizedBox(height: 20),
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(4, 4, 4, 8),
               child: Text(
                 'Troubleshooting',
@@ -312,7 +312,7 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
                       contentPadding:
                           const EdgeInsets.symmetric(horizontal: 12),
                       title: const Text('Stability mode'),
-                      subtitle: const Text(
+                      subtitle: Text(
                         'For rare crashes during heavy use on some NVIDIA '
                         'setups (often when the GeForce overlay is on). Uses a '
                         'safer graphics + accessibility path. Takes effect '
@@ -323,7 +323,7 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
                             height: 1.4),
                       ),
                     ),
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.fromLTRB(16, 2, 16, 6),
                       child: Text(
                         'Tip: if crashes continue, turning off the NVIDIA '
@@ -344,7 +344,7 @@ class _AboutPyreScreenState extends State<AboutPyreScreen> {
           Center(
             child: Text(
               _version.isEmpty ? 'Pyre' : 'Pyre $_version',
-              style: const TextStyle(color: EmberColors.textDim, fontSize: 11),
+              style: TextStyle(color: EmberColors.textDim, fontSize: 11),
             ),
           ),
         ],

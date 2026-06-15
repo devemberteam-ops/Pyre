@@ -84,7 +84,7 @@ Future<bool?> showSyncConflictDialog(
                       child: Text(
                         '• ${_kindLabel(c.kind)}: $name  '
                         '(newer: $newer$deletedNote)',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
                           color: EmberColors.textMid,
                         ),

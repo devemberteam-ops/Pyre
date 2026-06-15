@@ -193,7 +193,7 @@ class _ScriptScreenState extends State<ScriptScreen> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
+                children: [
                   Icon(Icons.map_outlined, size: 18, color: EmberColors.primary),
                   SizedBox(width: 10),
                   Expanded(
@@ -221,7 +221,7 @@ class _ScriptScreenState extends State<ScriptScreen> {
               child: Center(
                 child: Text(
                   'No directions yet — write one below.',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textDim,
                     fontSize: 13,
                   ),
@@ -233,7 +233,7 @@ class _ScriptScreenState extends State<ScriptScreen> {
           if (activeBeats.isNotEmpty) ...[
             Padding(
               padding: const EdgeInsets.only(top: 8, bottom: 4, left: 4),
-              child: const Text(
+              child: Text(
                 'ACTIVE',
                 style: TextStyle(
                   color: EmberColors.textMid,
@@ -269,7 +269,7 @@ class _ScriptScreenState extends State<ScriptScreen> {
                     minLines: 2,
                     maxLines: 8,
                     style: const TextStyle(fontSize: 13),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       hintText: 'One direction per line…',
                       hintStyle: TextStyle(color: EmberColors.textDim),
                       border: OutlineInputBorder(),
@@ -296,7 +296,7 @@ class _ScriptScreenState extends State<ScriptScreen> {
           if (doneBeats.isNotEmpty) ...[
             Padding(
               padding: const EdgeInsets.only(top: 20, bottom: 4, left: 4),
-              child: const Text(
+              child: Text(
                 'COMPLETED',
                 style: TextStyle(
                   color: EmberColors.textMid,
@@ -372,7 +372,7 @@ class _ActiveBeatRow extends StatelessWidget {
           // Mark done
           IconButton(
             tooltip: 'Mark as done',
-            icon: const Icon(Icons.check_circle_outline,
+            icon: Icon(Icons.check_circle_outline,
                 size: 20, color: EmberColors.primary),
             onPressed: onMarkDone,
             visualDensity: VisualDensity.compact,
@@ -380,7 +380,7 @@ class _ActiveBeatRow extends StatelessWidget {
           // Delete
           IconButton(
             tooltip: 'Remove beat',
-            icon: const Icon(Icons.close,
+            icon: Icon(Icons.close,
                 size: 18, color: EmberColors.textMid),
             onPressed: onDelete,
             visualDensity: VisualDensity.compact,
@@ -417,7 +417,7 @@ class _DoneBeatRow extends StatelessWidget {
           Expanded(
             child: Text(
               beat.text,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
                 decoration: TextDecoration.lineThrough,
                 decorationColor: EmberColors.textDim,
@@ -428,7 +428,7 @@ class _DoneBeatRow extends StatelessWidget {
           // Reactivate
           IconButton(
             tooltip: 'Reactivate beat',
-            icon: const Icon(Icons.undo,
+            icon: Icon(Icons.undo,
                 size: 18, color: EmberColors.textMid),
             onPressed: onReactivate,
             visualDensity: VisualDensity.compact,
@@ -436,7 +436,7 @@ class _DoneBeatRow extends StatelessWidget {
           // Delete
           IconButton(
             tooltip: 'Remove beat',
-            icon: const Icon(Icons.close,
+            icon: Icon(Icons.close,
                 size: 18, color: EmberColors.textMid),
             onPressed: onDelete,
             visualDensity: VisualDensity.compact,

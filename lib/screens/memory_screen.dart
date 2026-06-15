@@ -164,7 +164,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Row(
-                    children: const [
+                    children: [
                       Icon(Icons.edit_outlined,
                           size: 18, color: EmberColors.primary),
                       SizedBox(width: 8),
@@ -176,7 +176,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
                     ],
                   ),
                   const SizedBox(height: 4),
-                  const Text(
+                  Text(
                     'Fix typos or small mistakes without regenerating. '
                     'Anchor and branch validity stay the same.',
                     style: TextStyle(
@@ -258,7 +258,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
           builder: (d) => AlertDialog(
             backgroundColor: EmberColors.bgPanel,
             title: const Text('Delete checkpoint?'),
-            content: const Text(
+            content: Text(
               'This summary will be removed from the chain. The next '
               'auto-summarisation will re-summarise the same range from '
               'scratch.',
@@ -295,7 +295,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
           builder: (d) => AlertDialog(
             backgroundColor: EmberColors.bgPanel,
             title: const Text('Wipe all checkpoints?'),
-            content: const Text(
+            content: Text(
               'Every checkpoint on every branch of this chat will be '
               'erased. The model will lose its recap until you '
               're-summarise.',
@@ -364,8 +364,8 @@ class _MemoryScreenState extends State<MemoryScreen> {
       ),
       body: Column(
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Text(
               'Branch-aware checkpoints — each one summarises a chunk '
               'of the conversation and gets fed back into the model so '
@@ -381,7 +381,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
           ),
           SwitchListTile(
             title: const Text('Auto-summariser'),
-            subtitle: const Text(
+            subtitle: Text(
               'Off = no auto-checkpoints fire and existing ones are not '
               'fed to the model. "Summarise now" still works.',
               style: TextStyle(
@@ -395,7 +395,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
               setState(() {});
             },
           ),
-          const Divider(color: EmberColors.stroke, height: 1),
+          Divider(color: EmberColors.stroke, height: 1),
           // Wave CY.18.24: surface the cap-N notice when the chain
           // is longer than `kMaxCheckpointsInPrompt`. The runtime
           // injects only the most recent N at chat-time, so older
@@ -416,7 +416,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
                 'still appear here but no longer shape the recap. '
                 'Consider editing or deleting old ones if the story has '
                 'moved past them.',
-                style: const TextStyle(
+                style: TextStyle(
                     color: EmberColors.primary,
                     fontSize: 11,
                     height: 1.4),
@@ -545,7 +545,7 @@ class _CheckpointCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.psychology_outlined,
+                  Icon(Icons.psychology_outlined,
                       size: 16, color: EmberColors.primary),
                   const SizedBox(width: 6),
                   Text(
@@ -563,7 +563,7 @@ class _CheckpointCard extends StatelessWidget {
                   else
                     Text(
                       anchorLabel,
-                      style: const TextStyle(
+                      style: TextStyle(
                           color: EmberColors.textMid, fontSize: 11),
                     ),
                 ],
@@ -573,14 +573,14 @@ class _CheckpointCard extends StatelessWidget {
                 checkpoint.summary,
                 maxLines: 4,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   color: EmberColors.textHigh,
                   fontSize: 13,
                   height: 1.45,
                 ),
               ),
               const SizedBox(height: 4),
-              const Align(
+              Align(
                 alignment: Alignment.centerRight,
                 child: Text(
                   'Tap to read · edit · retry',
@@ -665,12 +665,12 @@ class _CheckpointDetailScreenState extends State<_CheckpointDetailScreen> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Row(
               children: [
-                const Icon(Icons.psychology_outlined,
+                Icon(Icons.psychology_outlined,
                     size: 14, color: EmberColors.primary),
                 const SizedBox(width: 6),
                 Text(
                   widget.anchorLabel,
-                  style: const TextStyle(
+                  style: TextStyle(
                       color: EmberColors.textMid, fontSize: 12),
                 ),
               ],
@@ -681,7 +681,7 @@ class _CheckpointDetailScreenState extends State<_CheckpointDetailScreen> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
               child: SelectableText(
                 ckpt.summary,
-                style: const TextStyle(
+                style: TextStyle(
                   color: EmberColors.textHigh,
                   fontSize: 14,
                   height: 1.5,

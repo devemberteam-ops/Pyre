@@ -81,10 +81,10 @@ class CreatorPresetsScreen extends StatelessWidget {
                     : _previewLine(p),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: EmberColors.textMid),
+                style: TextStyle(color: EmberColors.textMid),
               ),
               trailing: IconButton(
-                icon: const Icon(Icons.more_vert,
+                icon: Icon(Icons.more_vert,
                     color: EmberColors.textMid),
                 tooltip: 'Preset actions',
                 onPressed: () => _openCreatorPresetKebab(context, p),
@@ -119,7 +119,7 @@ class _Pill extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           color: EmberColors.primary,
           fontSize: 9,
           fontWeight: FontWeight.w700,
@@ -142,7 +142,7 @@ Future<void> _openCreatorPresetKebab(
         mainAxisSize: MainAxisSize.min,
         children: [
           ListTile(
-            leading: const Icon(Icons.check_circle_outline,
+            leading: Icon(Icons.check_circle_outline,
                 color: EmberColors.primary),
             title: const Text('Select (activate now)'),
             onTap: () {
@@ -194,9 +194,9 @@ Future<void> _openCreatorPresetKebab(
             ),
           if (!p.locked)
             ListTile(
-              leading: const Icon(Icons.delete_outline,
+              leading: Icon(Icons.delete_outline,
                   color: EmberColors.danger),
-              title: const Text('Delete',
+              title: Text('Delete',
                   style: TextStyle(color: EmberColors.danger)),
               onTap: () async {
                 Navigator.pop(sheet);
@@ -246,7 +246,7 @@ class _CreatorPresetDetailsScreen extends StatelessWidget {
         children: [
           Text(
             title.toUpperCase(),
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.primary,
               fontWeight: FontWeight.w700,
               fontSize: 11,
@@ -263,7 +263,7 @@ class _CreatorPresetDetailsScreen extends StatelessWidget {
             ),
             child: SelectableText(
               value,
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textHigh,
                 fontSize: 12,
                 height: 1.45,
@@ -285,7 +285,7 @@ class _CreatorPresetDetailsScreen extends StatelessWidget {
         title: const Text('Creator preset details'),
         actions: [
           if (live.locked)
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 12),
               child: Center(
                 child: Row(
@@ -329,7 +329,7 @@ class _CreatorPresetDetailsScreen extends StatelessWidget {
                     color: EmberColors.primary.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: const Text(
+                  child: Text(
                     'DEFAULT',
                     style: TextStyle(
                       color: EmberColors.primary,
@@ -343,7 +343,7 @@ class _CreatorPresetDetailsScreen extends StatelessWidget {
           ),
           if (live.locked) ...[
             const SizedBox(height: 6),
-            const Text(
+            Text(
               'The shipped Creator architect prompts — read-only so they stay '
               'as a known-good fallback. Use "Copy (editable)" from the kebab '
               'to fork them into a preset you can modify freely.',
@@ -381,7 +381,7 @@ Future<void> _editCreatorPreset(
         padding: const EdgeInsets.only(top: 18, bottom: 6),
         child: Text(
           text.toUpperCase(),
-          style: const TextStyle(
+          style: TextStyle(
             color: EmberColors.primary,
             fontWeight: FontWeight.w700,
             fontSize: 11,

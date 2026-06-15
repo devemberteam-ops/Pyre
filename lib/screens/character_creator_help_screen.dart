@@ -113,7 +113,7 @@ class CharacterCreatorHelpScreen extends StatelessWidget {
         padding: const EdgeInsets.only(top: 20, bottom: 6),
         child: Text(
           text.toUpperCase(),
-          style: const TextStyle(
+          style: TextStyle(
             color: EmberColors.primary,
             fontWeight: FontWeight.w700,
             fontSize: 11,
@@ -126,7 +126,7 @@ class CharacterCreatorHelpScreen extends StatelessWidget {
         padding: const EdgeInsets.only(bottom: 8),
         child: Text(
           text,
-          style: const TextStyle(
+          style: TextStyle(
             color: EmberColors.textHigh,
             fontSize: 13,
             height: 1.5,
@@ -139,14 +139,14 @@ class CharacterCreatorHelpScreen extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(right: 8, top: 6),
               child: Icon(Icons.circle, size: 4, color: EmberColors.textMid),
             ),
             Expanded(
               child: Text(
                 text,
-                style: const TextStyle(
+                style: TextStyle(
                   color: EmberColors.textHigh,
                   fontSize: 13,
                   height: 1.45,

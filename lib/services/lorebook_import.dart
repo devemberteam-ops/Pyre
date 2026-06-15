@@ -335,13 +335,13 @@ Future<bool> confirmLorebookImport({
           Text(
             '"$bookName" — $entryCount '
             '${entryCount == 1 ? "entry" : "entries"}',
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.textHigh,
               fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Lorebook entries are injected into the model\'s context during '
             'chat. Only import books from sources you trust.',
             style: TextStyle(color: EmberColors.textMid),
@@ -402,13 +402,13 @@ Future<EmbeddedBookChoice?> showEmbeddedBookDialog({
           Text(
             '"$bookName" — $entryCount '
             '${entryCount == 1 ? "entry" : "entries"}',
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.textHigh,
               fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'What should Pyre do with it?',
             style: TextStyle(color: EmberColors.textMid),
           ),

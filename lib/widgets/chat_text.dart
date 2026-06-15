@@ -75,11 +75,11 @@ class ChatText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final base = (baseStyle ??
-            const TextStyle(color: EmberColors.textHigh, height: 1.4))
+            TextStyle(color: EmberColors.textHigh, height: 1.4))
         .copyWith(fontSize: 15);
     final visible = _cleaned();
     if (visible.isEmpty) {
-      return const Text('…', style: TextStyle(color: EmberColors.textDim));
+      return Text('…', style: TextStyle(color: EmberColors.textDim));
     }
     return Text.rich(
       TextSpan(children: _parseMemo(visible, base)),
@@ -305,14 +305,14 @@ class _InlineImage extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.broken_image_outlined,
+            Icon(Icons.broken_image_outlined,
                 size: 18, color: EmberColors.textDim),
             const SizedBox(width: 8),
             Flexible(
               child: Text(
                 alt.trim().isNotEmpty ? alt.trim() : 'image unavailable',
                 style:
-                    const TextStyle(color: EmberColors.textDim, fontSize: 13),
+                    TextStyle(color: EmberColors.textDim, fontSize: 13),
               ),
             ),
           ],

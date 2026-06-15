@@ -458,7 +458,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
                       'Card weight: $label',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: EmberColors.textDim,
                         fontSize: 11,
                         fontFeatures: [FontFeature.tabularFigures()],
@@ -554,7 +554,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
             child: ExpansionTile(
               tilePadding: EdgeInsets.zero,
               childrenPadding: EdgeInsets.zero,
-              title: const Text(
+              title: Text(
                 'ADVANCED',
                 style: TextStyle(
                   color: EmberColors.primary,
@@ -563,7 +563,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                   letterSpacing: 1.2,
                 ),
               ),
-              subtitle: const Text(
+              subtitle: Text(
                 'Personality (kept empty by spec), system prompts, '
                 'alternate greetings, talkativeness, depth prompt, '
                 'raw extensions.',
@@ -610,7 +610,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
           ),
 
           if (isOverride)
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
               child: Text(
                 'Edits here only affect this chat. They do not touch the global character.',
@@ -642,7 +642,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
                 child: Align(
                   alignment: Alignment.centerLeft,
@@ -656,7 +656,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                   ),
                 ),
               ),
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
                 child: Align(
                   alignment: Alignment.centerLeft,
@@ -677,7 +677,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                   padding: const EdgeInsets.only(bottom: 8),
                   itemCount: drafts.length,
                   separatorBuilder: (_, _) =>
-                      const Divider(height: 1, color: EmberColors.stroke),
+                      Divider(height: 1, color: EmberColors.stroke),
                   itemBuilder: (_, i) {
                     final d = drafts[i];
                     final isCurrent = d.id == widget.draftId;
@@ -695,7 +695,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                       ),
                       title: Text(
                         title,
-                        style: const TextStyle(
+                        style: TextStyle(
                             color: EmberColors.textHigh),
                       ),
                       subtitle: d.tagline != null && d.tagline!.isNotEmpty
@@ -703,13 +703,13 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                               d.tagline!,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   color: EmberColors.textMid,
                                   fontSize: 11),
                             )
                           : null,
                       trailing: isCurrent
-                          ? const Text(
+                          ? Text(
                               'editing',
                               style: TextStyle(
                                 color: EmberColors.primary,
@@ -774,7 +774,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                 ),
               ),
               if (drafts.isEmpty)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.all(20),
                   child: Text(
                     'No drafts yet.',
@@ -794,7 +794,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
         padding: const EdgeInsets.fromLTRB(0, 16, 0, 4),
         child: Text(
           text.toUpperCase(),
-          style: const TextStyle(
+          style: TextStyle(
             color: EmberColors.primary,
             fontWeight: FontWeight.w700,
             fontSize: 11,
@@ -856,7 +856,7 @@ class _GreetingsEditor extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(bottom: 6, left: 4),
             child: Text(
               'Alternate greetings',
@@ -913,7 +913,7 @@ class _GreetingsEditor extends StatelessWidget {
                       controller: controllers[i],
                       minLines: 3,
                       maxLines: 10,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: EmberColors.textHigh,
                         fontSize: 13,
                         height: 1.4,

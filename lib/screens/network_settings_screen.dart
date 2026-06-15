@@ -270,7 +270,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                             ? 'Listening on http://$_lanIp:$actualPort'
                             : 'Configured but not running')
                         : 'Off — phones / web tabs can\'t reach this Pyre',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textMid,
                       fontSize: 12,
                     ),
@@ -278,7 +278,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                   activeThumbColor: EmberColors.primary,
                 ),
                 if (enabled && running) ...[
-                  const Divider(height: 1, color: EmberColors.stroke),
+                  Divider(height: 1, color: EmberColors.stroke),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
                     child: Row(
@@ -336,7 +336,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                     onPressed: () => _applyPortChange(store),
                     child: const Text('Apply port'),
                   ),
-                  const Divider(color: EmberColors.stroke, height: 24),
+                  Divider(color: EmberColors.stroke, height: 24),
                   const Text('Bind address',
                       style: TextStyle(fontWeight: FontWeight.w600)),
                   // ignore: deprecated_member_use
@@ -382,7 +382,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: RichText(
-                          text: const TextSpan(
+                          text: TextSpan(
                             style: TextStyle(
                               color: EmberColors.textMid,
                               fontSize: 12,
@@ -411,7 +411,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                       ),
                     ],
                   ),
-                  const Divider(color: EmberColors.stroke, height: 24),
+                  Divider(color: EmberColors.stroke, height: 24),
                   // Wave CY.18.263: opt-in to syncing AI providers + their
                   // API keys to paired NATIVE devices (phones / other PCs).
                   // Off by default; the web view never receives keys.
@@ -426,7 +426,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                     },
                     title: const Text(
                         'Sync providers & API keys to paired devices'),
-                    subtitle: const Text(
+                    subtitle: Text(
                       'Encrypted. Only your paired phones/PCs — never the '
                       'web view. Keys never leave in plaintext.',
                       style: TextStyle(
@@ -437,8 +437,8 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                     activeThumbColor: EmberColors.primary,
                     contentPadding: EdgeInsets.zero,
                   ),
-                  const Padding(
-                    padding: EdgeInsets.only(top: 2, left: 0, right: 0),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2, left: 0, right: 0),
                     child: Text(
                       'Turn this ON on BOTH devices — the one holding the keys '
                       'AND the one receiving them; the receiver ignores synced '
@@ -479,7 +479,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                   ),
                   const SizedBox(height: 6),
                   if (devices.isEmpty)
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.symmetric(vertical: 12),
                       child: Text(
                         'No paired devices. Tap "Pair new" to add your phone.',
@@ -495,7 +495,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                         padding: const EdgeInsets.symmetric(vertical: 6),
                         child: Row(
                           children: [
-                            const Icon(Icons.phone_android,
+                            Icon(Icons.phone_android,
                                 size: 18, color: EmberColors.textMid),
                             const SizedBox(width: 10),
                             Expanded(
@@ -508,7 +508,7 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
                                           fontWeight: FontWeight.w600)),
                                   Text(
                                     'last seen ${_relative(d.lastSeen)}',
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                         color: EmberColors.textDim,
                                         fontSize: 11),
                                   ),
@@ -529,8 +529,8 @@ class _NetworkSettingsScreenState extends State<NetworkSettingsScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Text(
               'About Pyre LAN sync:\n'
               'When the server is on, paired phones and browser tabs can '
@@ -679,15 +679,15 @@ class _PairModalState extends State<_PairModal> {
                   'Scan QR. Token expires in '
                   '${minutes.toString().padLeft(2, '0')}:'
                   '${seconds.toString().padLeft(2, '0')}.',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textMid,
                     fontSize: 12,
                   ),
                 ),
                 const SizedBox(height: 12),
-                const Divider(color: EmberColors.stroke),
+                Divider(color: EmberColors.stroke),
                 const SizedBox(height: 8),
-                const Text(
+                Text(
                   'No camera (web/PWA)? Type these into the manual form:',
                   style:
                       TextStyle(color: EmberColors.textMid, fontSize: 12),
@@ -713,7 +713,7 @@ class _PairModalState extends State<_PairModal> {
           SizedBox(
             width: 56,
             child: Text(label,
-                style: const TextStyle(
+                style: TextStyle(
                     color: EmberColors.textDim, fontSize: 12)),
           ),
           Expanded(

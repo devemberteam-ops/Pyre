@@ -828,11 +828,14 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 node.getAttribute('data-src'))) || node.href || '';
               var hm = String(href).match(/\/download\/png\/(\d+)/);
               if (hm) return hm[1];
+              // BUGFIX 2026-06-14: read ONLY this element's OWN aria-label /
+              // title — NEVER node.textContent. textContent includes ALL
+              // descendant text, so any ancestor container that wraps the
+              // "Download PNG" button matched here → EVERY click on a card
+              // page triggered an import. Own-attribute match only.
               var label = ((node.getAttribute &&
                 (node.getAttribute('aria-label') ||
-                 node.getAttribute('title'))) || '') + ' ' +
-                (node.textContent || '');
-              label = label.toLowerCase();
+                 node.getAttribute('title'))) || '').toLowerCase();
               // Confirmed live (2026-06): the button is <button id=
               // "download-png-btn" aria-label="Download character card as PNG">
               // with NO href and NO data id.
@@ -844,8 +847,10 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 node.getAttribute('data-post-id') ||
                 node.getAttribute('data-character-id') ||
                 node.getAttribute('data-id'));
-              if (pid && /^\d+$/.test(pid) &&
-                  (isPng || label.indexOf('png') >= 0)) {
+              // Only trust a data-id when THIS element IS the download control.
+              // The old `|| label.indexOf('png')` fired on any container whose
+              // subtree text mentioned png (the root of the any-click bug).
+              if (pid && /^\d+$/.test(pid) && isPng) {
                 return pid;
               }
             } catch (_) {}
@@ -1304,7 +1309,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const CircularProgressIndicator(color: EmberColors.primary),
+              CircularProgressIndicator(color: EmberColors.primary),
               const SizedBox(height: 12),
               Text(_status ?? 'Working…',
                   style: const TextStyle(color: Colors.white)),
@@ -1333,7 +1338,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 color: EmberColors.primary.withValues(alpha: 0.18),
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.explore_outlined,
                 color: EmberColors.primary,
                 size: 30,
@@ -1345,7 +1350,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Browse botbooru.com inside the app. When you find a card you like, tap "Download PNG" — Pyre intercepts it and offers a one-tap import.',
               style: TextStyle(
                 color: EmberColors.textMid,
@@ -1354,7 +1359,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               ),
             ),
             const SizedBox(height: 24),
-            const Text(
+            Text(
               'HOW TO IMPORT',
               style: TextStyle(
                 color: EmberColors.primary,
@@ -1400,7 +1405,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: EmberColors.stroke),
               ),
-              child: const Row(
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(Icons.info_outline,
@@ -1440,7 +1445,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             child: Center(
               child: Text(
                 n,
-                style: const TextStyle(
+                style: TextStyle(
                   color: EmberColors.primary,
                   fontWeight: FontWeight.w700,
                   fontSize: 12,
@@ -1452,7 +1457,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           Expanded(
             child: Text(
               body,
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textHigh,
                 fontSize: 13,
                 height: 1.45,
@@ -1489,9 +1494,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.cookie_outlined,
+              leading: Icon(Icons.cookie_outlined,
                   color: EmberColors.danger),
-              title: const Text('Sign out / clear cookies',
+              title: Text('Sign out / clear cookies',
                   style: TextStyle(color: EmberColors.danger)),
               onTap: () async {
                 Navigator.pop(sheet);
@@ -1530,7 +1535,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
-                  children: const [
+                  children: [
                     Icon(Icons.public, color: EmberColors.primary),
                     SizedBox(width: 8),
                     Text(
@@ -1541,7 +1546,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text(
+                Text(
                   'On Android and Windows, this tab embeds botbooru.com '
                   'directly so you can browse + import without leaving '
                   'Pyre.\n\n'
@@ -1613,7 +1618,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'Paste a botbooru / chub character page URL, or a direct PNG link.',
                 style: TextStyle(color: EmberColors.textMid),
               ),
@@ -1625,7 +1630,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               ),
               if (err != null) ...[
                 const SizedBox(height: 8),
-                Text(err!, style: const TextStyle(color: EmberColors.danger)),
+                Text(err!, style: TextStyle(color: EmberColors.danger)),
               ],
             ],
           ),
@@ -1766,7 +1771,7 @@ class _CharacterPickerSheetState extends State<_CharacterPickerSheet> {
                   ),
                 ),
               ),
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
                 child: Align(
                   alignment: Alignment.centerLeft,
@@ -1782,7 +1787,7 @@ class _CharacterPickerSheetState extends State<_CharacterPickerSheet> {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                 child: TextField(
                   controller: _searchCtl,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     isDense: true,
                     prefixIcon:
                         Icon(Icons.search, size: 18, color: EmberColors.textDim),
@@ -1791,11 +1796,11 @@ class _CharacterPickerSheetState extends State<_CharacterPickerSheet> {
                   onChanged: (v) => setState(() => _query = v),
                 ),
               ),
-              const Divider(color: EmberColors.stroke, height: 1),
+              Divider(color: EmberColors.stroke, height: 1),
               Flexible(
                 child: widget.characters.isEmpty
-                    ? const Padding(
-                        padding: EdgeInsets.symmetric(
+                    ? Padding(
+                        padding: const EdgeInsets.symmetric(
                             horizontal: 24, vertical: 32),
                         child: Text(
                           "You don't have any characters yet. Create or "
@@ -1806,7 +1811,7 @@ class _CharacterPickerSheetState extends State<_CharacterPickerSheet> {
                         ),
                       )
                     : filtered.isEmpty
-                        ? const Padding(
+                        ? Padding(
                             padding: EdgeInsets.symmetric(
                                 horizontal: 24, vertical: 32),
                             child: Text(
@@ -1819,7 +1824,7 @@ class _CharacterPickerSheetState extends State<_CharacterPickerSheet> {
                         : ListView.separated(
                             shrinkWrap: true,
                             itemCount: filtered.length,
-                            separatorBuilder: (_, _) => const Divider(
+                            separatorBuilder: (_, _) => Divider(
                                 color: EmberColors.stroke,
                                 height: 1,
                                 indent: 80),
@@ -1867,7 +1872,7 @@ class _CharacterPickerSheetState extends State<_CharacterPickerSheet> {
                             },
                           ),
               ),
-              const Divider(color: EmberColors.stroke, height: 1),
+              Divider(color: EmberColors.stroke, height: 1),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                 child: Column(
@@ -1962,7 +1967,7 @@ class _CharacterPickerRow extends StatelessWidget {
                       ),
                     ),
                     if (disabled)
-                      const Text(
+                      Text(
                         'No avatar — set one to upload',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -1974,7 +1979,7 @@ class _CharacterPickerRow extends StatelessWidget {
                         tagline,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                             color: EmberColors.textDim, fontSize: 11),
                       ),
                   ],
@@ -1987,7 +1992,7 @@ class _CharacterPickerRow extends StatelessWidget {
                   activeColor: EmberColors.primary,
                 )
               else if (!disabled)
-                const Icon(Icons.chevron_right,
+                Icon(Icons.chevron_right,
                     color: EmberColors.textDim, size: 20),
             ],
           ),

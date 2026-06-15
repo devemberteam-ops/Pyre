@@ -93,7 +93,7 @@ class _GalleryEditorSectionState extends State<GalleryEditorSection> {
           padding: const EdgeInsets.fromLTRB(0, 16, 0, 4),
           child: Text(
             'GALLERY',
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.primary,
               fontWeight: FontWeight.w700,
               fontSize: 11,
@@ -101,7 +101,7 @@ class _GalleryEditorSectionState extends State<GalleryEditorSection> {
             ),
           ),
         ),
-        const Padding(
+        Padding(
           padding: EdgeInsets.only(bottom: 8),
           child: Text(
             'Extra images beyond the avatar. Tap a thumbnail for options.',
@@ -113,7 +113,7 @@ class _GalleryEditorSectionState extends State<GalleryEditorSection> {
           ),
         ),
         if (gallery.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(bottom: 8),
             child: Text(
               'No gallery images yet.',
@@ -137,7 +137,7 @@ class _GalleryEditorSectionState extends State<GalleryEditorSection> {
             ],
           ),
         if (kIsWeb)
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(top: 4),
             child: Text(
               'Add gallery images on desktop or mobile.',
@@ -202,7 +202,7 @@ class _GalleryThumb extends StatelessWidget {
           children: [
             if (onUseAsAvatar != null)
               ListTile(
-                leading: const Icon(Icons.account_circle_outlined,
+                leading: Icon(Icons.account_circle_outlined,
                     color: EmberColors.textMid),
                 title: const Text('Use as avatar'),
                 onTap: () {
@@ -212,7 +212,7 @@ class _GalleryThumb extends StatelessWidget {
               ),
             ListTile(
               leading:
-                  const Icon(Icons.delete_outline, color: EmberColors.danger),
+                  Icon(Icons.delete_outline, color: EmberColors.danger),
               title: const Text('Remove from gallery'),
               onTap: () {
                 Navigator.pop(sheet);
@@ -243,7 +243,7 @@ class _GalleryThumb extends StatelessWidget {
               : DecorationImage(image: image, fit: BoxFit.cover),
         ),
         child: image == null
-            ? const Center(
+            ? Center(
                 child: Icon(
                   Icons.broken_image_outlined,
                   color: EmberColors.textDim,

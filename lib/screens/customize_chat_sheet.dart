@@ -48,7 +48,7 @@ class CustomizeChatSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Center(
+            Center(
               child: Padding(
                 padding: EdgeInsets.only(bottom: 12),
                 child: SizedBox(
@@ -404,7 +404,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
+        Padding(
           padding: EdgeInsets.symmetric(vertical: 8),
           child: Text(
             'Background',
@@ -433,7 +433,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
                   title: Text(_label(s)),
                   subtitle: Text(
                     _subtitle(s),
-                    style: const TextStyle(
+                    style: TextStyle(
                         color: EmberColors.textMid, fontSize: 11),
                   ),
                   onTap: () {
@@ -478,9 +478,9 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
               const SizedBox(width: 8),
               if (chat.customBackgroundDataUrl != null)
                 TextButton.icon(
-                  icon: const Icon(Icons.delete_outline,
+                  icon: Icon(Icons.delete_outline,
                       size: 16, color: EmberColors.danger),
-                  label: const Text('Clear',
+                  label: Text('Clear',
                       style: TextStyle(color: EmberColors.danger)),
                   onPressed: () {
                     chat.customBackgroundDataUrl = null;
@@ -508,7 +508,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
                   color: EmberColors.stroke.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(4),
                 ),
-                child: const Text(
+                child: Text(
                   'experimental',
                   style:
                       TextStyle(fontSize: 9, color: EmberColors.textMid),
@@ -524,7 +524,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
             maxLines: 1,
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _commitLocation(),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               isDense: true,
               hintText: 'e.g. the Serpent’s Fang guild hall',
               helperMaxLines: 3,
@@ -538,7 +538,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
             ),
           ),
           const SizedBox(height: 10),
-          const Text(
+          Text(
             'The background follows the scene automatically as you chat. '
             'You can also let Pyre read the recent chat and figure out the '
             'location + background right now:',
@@ -568,7 +568,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
               child: Text(
                 'Current: ${chat.sceneBgFile}',
                 style:
-                    const TextStyle(color: EmberColors.textMid, fontSize: 10),
+                    TextStyle(color: EmberColors.textMid, fontSize: 10),
               ),
             ),
         ],
@@ -582,7 +582,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
               Text(
                 '${(effectiveOpacity * 100).round()}%'
                 '${chat.backgroundOpacity == null ? "  · app default" : ""}',
-                style: const TextStyle(
+                style: TextStyle(
                     color: EmberColors.textMid, fontSize: 12),
               ),
               if (chat.backgroundOpacity != null)
@@ -633,7 +633,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
                 ),
             ],
           ),
-          const Text(
+          Text(
             'Contain shows the whole image — most useful on wide windows. "App default" follows Chat Settings.',
             style: TextStyle(color: EmberColors.textMid, fontSize: 11),
           ),

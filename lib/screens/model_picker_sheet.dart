@@ -104,7 +104,7 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
         child: Column(
           children: [
             const SizedBox(height: 8),
-            const SizedBox(
+            SizedBox(
               width: 40,
               height: 4,
               child: DecoratedBox(
@@ -123,7 +123,7 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
                           fontSize: 17, fontWeight: FontWeight.w600)),
                   const Spacer(),
                   IconButton(
-                    icon: const Icon(Icons.refresh,
+                    icon: Icon(Icons.refresh,
                         color: EmberColors.textMid),
                     onPressed: () {
                       setState(() {
@@ -150,7 +150,7 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
             const SizedBox(height: 8),
             Expanded(
               child: _loading
-                  ? const Center(
+                  ? Center(
                       child: CircularProgressIndicator(
                           color: EmberColors.primary))
                   : _error != null
@@ -159,7 +159,7 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
                             padding: const EdgeInsets.all(24),
                             child: Text(
                               _error!,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   color: EmberColors.danger),
                             ),
                           ),

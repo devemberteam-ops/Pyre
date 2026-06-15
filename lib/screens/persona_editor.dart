@@ -176,7 +176,7 @@ class _PersonaEditorSheetState extends State<PersonaEditorSheet> {
           controller: scroll,
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
-            const Center(
+            Center(
               child: SizedBox(
                 width: 40,
                 height: 4,

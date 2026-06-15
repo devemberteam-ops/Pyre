@@ -33,7 +33,7 @@ Future<bool> confirmDelete(
       title: Text(title),
       content: Text(
         message,
-        style: const TextStyle(color: EmberColors.textMid),
+        style: TextStyle(color: EmberColors.textMid),
       ),
       actions: [
         TextButton(

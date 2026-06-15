@@ -90,7 +90,7 @@ class HowItWorksCard extends StatelessWidget {
           childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           title: Row(
             children: [
-              const Icon(Icons.help_outline,
+              Icon(Icons.help_outline,
                   size: 16, color: EmberColors.primary),
               const SizedBox(width: 8),
               Expanded(
@@ -106,7 +106,7 @@ class HowItWorksCard extends StatelessWidget {
             padding: const EdgeInsets.only(top: 2, left: 24),
             child: Text(
               subtitle,
-              style: const TextStyle(color: EmberColors.textMid, fontSize: 11),
+              style: TextStyle(color: EmberColors.textMid, fontSize: 11),
             ),
           ),
           children: children,
@@ -121,7 +121,7 @@ class HowItWorksCard extends StatelessWidget {
         padding: const EdgeInsets.only(top: 16, bottom: 6),
         child: Text(
           text.toUpperCase(),
-          style: const TextStyle(
+          style: TextStyle(
             color: EmberColors.primary,
             fontWeight: FontWeight.w700,
             fontSize: 11,
@@ -135,7 +135,7 @@ class HowItWorksCard extends StatelessWidget {
         child: Text.rich(
           TextSpan(
             children: _parseInline(text),
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.textHigh,
               fontSize: 13,
               height: 1.5,
@@ -149,7 +149,7 @@ class HowItWorksCard extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(right: 8, top: 6),
               child: Icon(Icons.circle, size: 4, color: EmberColors.textMid),
             ),
@@ -157,7 +157,7 @@ class HowItWorksCard extends StatelessWidget {
               child: Text.rich(
                 TextSpan(
                   children: _parseInline(text),
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textHigh,
                     fontSize: 13,
                     height: 1.45,

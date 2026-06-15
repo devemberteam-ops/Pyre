@@ -51,7 +51,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   color: EmberColors.primary.withValues(alpha: 0.18),
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.local_fire_department,
                   color: EmberColors.primary,
                   size: 30,
@@ -64,7 +64,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 'A powerful, private roleplay frontend. You bring the AI — '
                 'Pyre is the interface.',
                 style: TextStyle(
@@ -142,7 +142,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
               ),
               const SizedBox(height: 10),
-              const Text(
+              Text(
                 'By continuing, you accept the Terms of Use and Privacy '
                 'Policy.',
                 textAlign: TextAlign.center,
@@ -181,7 +181,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 const SizedBox(height: 3),
                 Text(
                   body,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textMid,
                     fontSize: 12,
                     height: 1.45,

@@ -56,7 +56,7 @@ class GalleryStrip extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
+        Padding(
           padding: EdgeInsets.only(top: 14, bottom: 8),
           child: Text(
             'GALLERY',
@@ -155,7 +155,7 @@ class _Thumb extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.fullscreen,
+              leading: Icon(Icons.fullscreen,
                   color: EmberColors.textMid),
               title: const Text('View fullscreen'),
               onTap: () {
@@ -164,7 +164,7 @@ class _Thumb extends StatelessWidget {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.account_circle_outlined,
+              leading: Icon(Icons.account_circle_outlined,
                   color: EmberColors.textMid),
               title: const Text('Use as avatar'),
               onTap: () {
@@ -198,7 +198,7 @@ class _Thumb extends StatelessWidget {
               : DecorationImage(image: image, fit: BoxFit.cover),
         ),
         child: image == null
-            ? const Center(
+            ? Center(
                 child: Icon(
                   Icons.broken_image_outlined,
                   color: EmberColors.textDim,

@@ -1918,7 +1918,7 @@ class _CharacterAssistantScreenState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (isList)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.only(bottom: 8),
                   child: Text(
                     'One item per line.',
@@ -1927,7 +1927,7 @@ class _CharacterAssistantScreenState
                   ),
                 )
               else if (isMap)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.only(bottom: 8),
                   child: Text(
                     'JSON object. Invalid JSON keeps the previous value.',
@@ -2035,7 +2035,7 @@ class _CharacterAssistantScreenState
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                   child: Row(
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           'Alternative Greetings',
                           style: TextStyle(
@@ -2053,7 +2053,7 @@ class _CharacterAssistantScreenState
                     ],
                   ),
                 ),
-                const Padding(
+                Padding(
                   padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: Text(
                     'Extra opening scenes the runtime can pick between. '
@@ -2119,7 +2119,7 @@ class _CharacterAssistantScreenState
                             controller: controllers[i],
                             minLines: 4,
                             maxLines: 12,
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: EmberColors.textHigh,
                               fontSize: 13,
                               height: 1.4,
@@ -2128,7 +2128,7 @@ class _CharacterAssistantScreenState
                               hintText:
                                   '*She glances up from the counter.* '
                                   '**"Back again?"**',
-                              hintStyle: const TextStyle(
+                              hintStyle: TextStyle(
                                 color: EmberColors.textDim,
                                 fontSize: 12,
                               ),
@@ -2354,7 +2354,7 @@ class _CharacterAssistantScreenState
           children: [
             if (canRetry)
               ListTile(
-                leading: const Icon(Icons.refresh,
+                leading: Icon(Icons.refresh,
                     color: EmberColors.primary),
                 title: const Text('Retry (regenerate this reply)'),
                 onTap: () {
@@ -2376,7 +2376,7 @@ class _CharacterAssistantScreenState
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
                 title: const Text('Edit + re-run from here'),
-                subtitle: const Text(
+                subtitle: Text(
                   'Replaces your message and drops everything that came after — the assistant generates a fresh reply.',
                   style: TextStyle(
                       color: EmberColors.textMid, fontSize: 11),
@@ -2386,18 +2386,18 @@ class _CharacterAssistantScreenState
                   _editUserMessage(m);
                 },
               ),
-            const Divider(color: EmberColors.stroke),
+            Divider(color: EmberColors.stroke),
             Builder(builder: (_) {
               final cascade = store.chatSettings.cascadeDelete;
               return ListTile(
-                leading: const Icon(Icons.delete_outline,
+                leading: Icon(Icons.delete_outline,
                     color: EmberColors.danger),
                 title: Text(
                   cascade ? 'Delete this and after' : 'Delete just this',
-                  style: const TextStyle(color: EmberColors.danger),
+                  style: TextStyle(color: EmberColors.danger),
                 ),
                 subtitle: cascade
-                    ? const Text(
+                    ? Text(
                         'Chat Settings → Delete behavior is on "This and after".',
                         style: TextStyle(
                             color: EmberColors.textMid, fontSize: 11),
@@ -3383,7 +3383,7 @@ class _CharacterAssistantScreenState
                 color: EmberColors.primary.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(5),
               ),
-              child: const Text(
+              child: Text(
                 'experimental',
                 style: TextStyle(
                   color: EmberColors.primary,
@@ -3434,7 +3434,7 @@ class _CharacterAssistantScreenState
             ),
             label: Text(
               _showCanvas ? 'Chat' : 'Sheet',
-              style: const TextStyle(color: EmberColors.primary),
+              style: TextStyle(color: EmberColors.primary),
             ),
             onPressed: () => setState(() => _showCanvas = !_showCanvas),
           ),
@@ -3632,7 +3632,7 @@ class _CharacterAssistantScreenState
                           InkWell(
                             customBorder: const CircleBorder(),
                             onTap: () => _showMessageMenu(m),
-                            child: const Padding(
+                            child: Padding(
                               padding: EdgeInsets.all(6),
                               child: Icon(
                                 Icons.more_horiz,
@@ -3666,7 +3666,7 @@ class _CharacterAssistantScreenState
                   child: Material(
                     color: EmberColors.bgPanel,
                     elevation: 4,
-                    shape: const StadiumBorder(
+                    shape: StadiumBorder(
                       side: BorderSide(color: EmberColors.stroke),
                     ),
                     child: InkWell(
@@ -3675,7 +3675,7 @@ class _CharacterAssistantScreenState
                         setState(() => _stickToBottom = true);
                         _scrollToBottom(force: true);
                       },
-                      child: const Padding(
+                      child: Padding(
                         padding: EdgeInsets.symmetric(
                             horizontal: 12, vertical: 8),
                         child: Row(
@@ -3707,7 +3707,7 @@ class _CharacterAssistantScreenState
         // keeps the `/build` fallback discoverable, shown only for a buildable
         // mode and hidden while a build (or chat turn) is in flight.
         if (_canStructuredBuild(store))
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(16, 4, 16, 0),
             child: Text(
               'Tell me when to build the sheet, or type /build',
@@ -3765,7 +3765,7 @@ class _CharacterAssistantScreenState
                   onEdit: _editCanvasField,
                   mode: store.activeCreatorSession?.mode,
                 )
-              : const Center(
+              : Center(
                   child: Padding(
                     padding: EdgeInsets.all(32),
                     child: Text(
@@ -3777,7 +3777,7 @@ class _CharacterAssistantScreenState
                 ),
         ),
         Container(
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             color: EmberColors.bgPanel,
             border: Border(top: BorderSide(color: EmberColors.stroke)),
           ),
@@ -3885,7 +3885,7 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                           ),
                           child: Text(
                             '${all.length}',
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: EmberColors.textMid,
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
@@ -3912,12 +3912,12 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                 decoration: InputDecoration(
                   hintText: 'Search sessions…',
                   hintStyle: const TextStyle(fontSize: 13),
-                  prefixIcon: const Icon(Icons.search,
+                  prefixIcon: Icon(Icons.search,
                       size: 16, color: EmberColors.textMid),
                   suffixIcon: _query.isEmpty
                       ? null
                       : IconButton(
-                          icon: const Icon(Icons.close,
+                          icon: Icon(Icons.close,
                               size: 14, color: EmberColors.textMid),
                           onPressed: () {
                             _searchCtl.clear();
@@ -3930,7 +3930,7 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                 ),
               ),
             ),
-            const Divider(color: EmberColors.stroke, height: 1),
+            Divider(color: EmberColors.stroke, height: 1),
             Expanded(
               child: sessions.isEmpty
                   ? Center(
@@ -3941,7 +3941,7 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                               ? 'No sessions yet. Start chatting and one will appear here.'
                               : 'No sessions match "$_query".',
                           textAlign: TextAlign.center,
-                          style: const TextStyle(
+                          style: TextStyle(
                               color: EmberColors.textDim),
                         ),
                       ),
@@ -3958,7 +3958,7 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                           selectedTileColor:
                               EmberColors.primary.withValues(alpha: 0.10),
                           leading: s.pinned
-                              ? const Icon(Icons.push_pin,
+                              ? Icon(Icons.push_pin,
                                   size: 14, color: EmberColors.primary)
                               : null,
                           title: Text(
@@ -3974,12 +3974,12 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                           subtitle: Text(
                             _relTime(s.updatedAt) +
                                 (saved ? ' · saved' : ''),
-                            style: const TextStyle(
+                            style: TextStyle(
                                 color: EmberColors.textDim, fontSize: 11),
                           ),
                           trailing: PopupMenuButton<String>(
                             tooltip: 'Session',
-                            icon: const Icon(Icons.more_vert,
+                            icon: Icon(Icons.more_vert,
                                 size: 18, color: EmberColors.textMid),
                             onSelected: (v) async {
                               if (v == 'rename') {
@@ -4155,7 +4155,7 @@ class _CanvasFieldsViewState extends State<_CanvasFieldsView> {
                     color: EmberColors.textMid,
                   ),
                   const SizedBox(width: 6),
-                  const Text(
+                  Text(
                     'ADVANCED SETTINGS',
                     style: TextStyle(
                       color: EmberColors.textMid,
@@ -4299,7 +4299,7 @@ class _CanvasField extends StatelessWidget {
               Expanded(
                 child: Text(
                   label.toUpperCase(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.primary,
                     fontWeight: FontWeight.w700,
                     fontSize: 11,
@@ -4310,7 +4310,7 @@ class _CanvasField extends StatelessWidget {
               InkWell(
                 onTap: onEdit,
                 customBorder: const CircleBorder(),
-                child: const Padding(
+                child: Padding(
                   padding: EdgeInsets.all(4),
                   child: Icon(
                     Icons.edit_outlined,
@@ -4323,7 +4323,7 @@ class _CanvasField extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           if (empty)
-            const Text(
+            Text(
               '—',
               style: TextStyle(color: EmberColors.textDim, fontSize: 13),
             )
@@ -4363,7 +4363,7 @@ class _CanvasField extends StatelessWidget {
                           const SizedBox(height: 6),
                           SelectableText(
                             '${value[i]}',
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: EmberColors.textHigh,
                               fontSize: 13,
                               height: 1.45,
@@ -4390,7 +4390,7 @@ class _CanvasField extends StatelessWidget {
                       border: Border.all(color: EmberColors.stroke),
                     ),
                     child: Text('$v',
-                        style: const TextStyle(
+                        style: TextStyle(
                             color: EmberColors.textMid, fontSize: 12)),
                   )
               ],
@@ -4398,7 +4398,7 @@ class _CanvasField extends StatelessWidget {
           else if (value is Map)
             SelectableText(
               const JsonEncoder.withIndent('  ').convert(value),
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 12,
                 color: EmberColors.textMid,
@@ -4407,7 +4407,7 @@ class _CanvasField extends StatelessWidget {
           else
             SelectableText(
               '$value',
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textHigh,
                 fontSize: 13,
                 height: 1.45,
@@ -4501,7 +4501,7 @@ class _FreeformWarningCard extends StatelessWidget {
             // info bubble is short enough that bold loss is fine.
             child: Text(
               text.replaceAll('**', ''),
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textHigh,
                 fontSize: 12.5,
                 height: 1.45,
@@ -4560,7 +4560,7 @@ class _InputBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: EmberColors.bgPanel,
         border: Border(top: BorderSide(color: EmberColors.stroke)),
       ),
@@ -4580,7 +4580,7 @@ class _InputBar extends StatelessWidget {
             // the ChatGPT mobile pattern.
             PopupMenuButton<String>(
               tooltip: 'Attach',
-              icon: const Icon(Icons.add_circle_outline,
+              icon: Icon(Icons.add_circle_outline,
                   color: EmberColors.textMid, size: 26),
               enabled: !generating && !modeLocked,
               onSelected: (v) {
@@ -4748,7 +4748,7 @@ class _MessageBodyState extends State<_MessageBody> {
     final rawText = widget.message.content;
     final hasText = rawText.trim().isNotEmpty;
     if (!hasAttachments && !hasText) {
-      return const Text('…',
+      return Text('…',
           style: TextStyle(color: EmberColors.textDim));
     }
     final hideReasoning = _override ?? widget.hideReasoning;
@@ -4826,7 +4826,7 @@ class _MessageBodyState extends State<_MessageBody> {
                     hideReasoning
                         ? 'Show reasoning'
                         : 'Hide reasoning',
-                    style: const TextStyle(
+                    style: TextStyle(
                         color: EmberColors.textMid,
                         fontSize: 11,
                         fontWeight: FontWeight.w500),
@@ -4879,7 +4879,7 @@ class _CollapsibleNoteBlock extends StatelessWidget {
                 const SizedBox(width: 4),
                 Text(
                   expanded ? expandedLabel : collapsedLabel,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textMid,
                     fontSize: 11,
                     fontWeight: FontWeight.w500,
@@ -4964,7 +4964,7 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
                         width: 160,
                         height: 160,
                         color: EmberColors.bgDeep,
-                        child: const Icon(Icons.broken_image_outlined,
+                        child: Icon(Icons.broken_image_outlined,
                             color: EmberColors.textDim),
                       ),
                     ),
@@ -4996,7 +4996,7 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
                           a.filename,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: EmberColors.textHigh,
                             fontSize: 12,
                           ),
@@ -5028,7 +5028,7 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
                     _expanded
                         ? 'Hide attachment details'
                         : 'Show attachment details',
-                    style: const TextStyle(
+                    style: TextStyle(
                         color: EmberColors.textMid, fontSize: 11),
                   ),
                 ],
@@ -5050,10 +5050,10 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   for (var i = 0; i < widget.attachments.length; i++) ...[
-                    if (i > 0) const Divider(color: EmberColors.stroke, height: 16),
+                    if (i > 0) Divider(color: EmberColors.stroke, height: 16),
                     Text(
                       widget.attachments[i].filename,
-                      style: const TextStyle(
+                      style: TextStyle(
                           color: EmberColors.primary,
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
@@ -5064,7 +5064,7 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
                       widget.attachments[i].extracted.trim().isEmpty
                           ? '(no extracted content)'
                           : widget.attachments[i].extracted,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: EmberColors.textMid,
                         fontSize: 12,
                         height: 1.4,
@@ -5179,7 +5179,7 @@ class _PendingChipState extends State<_PendingChip> {
                   item.imageBytes!,
                   fit: BoxFit.cover,
                   gaplessPlayback: true,
-                  errorBuilder: (_, _, _) => const Icon(
+                  errorBuilder: (_, _, _) => Icon(
                       Icons.broken_image_outlined,
                       color: EmberColors.textDim),
                 ),
@@ -5206,7 +5206,7 @@ class _PendingChipState extends State<_PendingChip> {
                       item.filename,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                           color: EmberColors.textHigh, fontSize: 12),
                     ),
                   ),
@@ -5261,13 +5261,13 @@ class _PendingChipState extends State<_PendingChip> {
             top: -6,
             child: Material(
               color: EmberColors.bgPanel,
-              shape: const CircleBorder(
+              shape: CircleBorder(
                 side: BorderSide(color: EmberColors.stroke),
               ),
               child: InkWell(
                 customBorder: const CircleBorder(),
                 onTap: widget.onRemove,
-                child: const Padding(
+                child: Padding(
                   padding: EdgeInsets.all(2),
                   child: Icon(Icons.close,
                       size: 12, color: EmberColors.textMid),
@@ -5322,11 +5322,11 @@ class _SessionSizeBanner extends StatelessWidget {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: (hard ? EmberColors.danger : const Color(0xFFE9A35A))
+        color: (hard ? EmberColors.danger : Color(0xFFE9A35A))
             .withValues(alpha: 0.12),
         border: Border(
           top: BorderSide(
-            color: (hard ? EmberColors.danger : const Color(0xFFE9A35A))
+            color: (hard ? EmberColors.danger : Color(0xFFE9A35A))
                 .withValues(alpha: 0.35),
           ),
         ),
@@ -5336,7 +5336,7 @@ class _SessionSizeBanner extends StatelessWidget {
         children: [
           Icon(
             hard ? Icons.error_outline : Icons.warning_amber_outlined,
-            color: hard ? EmberColors.danger : const Color(0xFFE9A35A),
+            color: hard ? EmberColors.danger : Color(0xFFE9A35A),
             size: 14,
           ),
           const SizedBox(width: 8),
@@ -5409,7 +5409,7 @@ class _SheetStatusPill extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         child: Container(
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             border: Border(
               bottom: BorderSide(color: EmberColors.stroke),
             ),
@@ -5424,7 +5424,7 @@ class _SheetStatusPill extends StatelessWidget {
                   color: EmberColors.primary.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(7),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.article_outlined,
                   color: EmberColors.primary,
                   size: 15,
@@ -5465,7 +5465,7 @@ class _SheetStatusPill extends StatelessWidget {
                             ),
                             child: Text(
                               modeLabel,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 color: EmberColors.primary,
                                 fontSize: 10,
                                 fontWeight: FontWeight.w600,
@@ -5486,7 +5486,7 @@ class _SheetStatusPill extends StatelessWidget {
                         '$filled/$total fields'
                         '${tagsCount > 0 ? ' · $tagsCount tags' : ''}'
                         '${tokenLabel != null ? ' · $tokenLabel' : ''}',
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: EmberColors.textDim,
                           fontSize: 11,
                         ),
@@ -5495,7 +5495,7 @@ class _SheetStatusPill extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(
+              Icon(
                 Icons.chevron_right,
                 size: 18,
                 color: EmberColors.textDim,
@@ -5756,7 +5756,7 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                             : null,
                       ),
                       child: _previewBytes == null
-                          ? const Center(
+                          ? Center(
                               child: Icon(Icons.add_a_photo_outlined,
                                   color: EmberColors.textMid, size: 26),
                             )
@@ -5785,7 +5785,7 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                         Text(
                           '$filledFields fields filled'
                           '${tags.isNotEmpty ? ' · ${tags.length} tags' : ''}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: EmberColors.textDim,
                             fontSize: 12,
                           ),
@@ -5809,7 +5809,7 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                             _previewBytes == null
                                 ? 'Pick avatar image'
                                 : 'Change image',
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: EmberColors.primary,
                               fontSize: 12,
                             ),
@@ -5841,7 +5841,7 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                   onChanged: (ids) => setState(() => _lorebookIds = ids),
                 ),
               ),
-            const Divider(color: EmberColors.stroke, height: 1),
+            Divider(color: EmberColors.stroke, height: 1),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
               child: widget.personaMode
@@ -5863,8 +5863,8 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                           ),
                         ),
                         const SizedBox(height: 4),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 4),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
                           child: Text(
                             'The avatar is optional — you can pick one now '
                             'or add it later from the Personas list.',
@@ -5935,7 +5935,7 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                                 ? 'PNG export needs an avatar image so the chara_card_v2 metadata can be embedded.'
                                 : 'PNG is saved to PyreExports and opened in your share sheet.',
                             textAlign: TextAlign.center,
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: EmberColors.textDim,
                               fontSize: 11,
                               height: 1.4,

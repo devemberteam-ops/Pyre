@@ -150,7 +150,7 @@ class _PersonaPickerScreenState extends State<PersonaPickerScreen> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Text(
               widget.subtitle,
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textMid,
                 fontSize: 12,
                 height: 1.4,
@@ -178,22 +178,22 @@ class _PersonaPickerScreenState extends State<PersonaPickerScreen> {
             child: Builder(
               builder: (context) {
                 final noPersonaTile = ListTile(
-                  leading: const Icon(Icons.person_off_outlined,
+                  leading: Icon(Icons.person_off_outlined,
                       color: EmberColors.textDim),
                   title: const Text('No persona'),
-                  subtitle: const Text(
+                  subtitle: Text(
                     'Send messages without a {{user}} identity.',
                     style: TextStyle(
                         color: EmberColors.textMid, fontSize: 12),
                   ),
                   trailing: (widget.showCurrentSelection &&
                           widget.selectedPersonaId == null)
-                      ? const Icon(Icons.check, color: EmberColors.primary)
+                      ? Icon(Icons.check, color: EmberColors.primary)
                       : null,
                   onTap: () =>
                       Navigator.pop(context, pickerNoPersonaSentinel),
                 );
-                const divider =
+                final divider =
                     Divider(color: EmberColors.stroke, height: 1);
                 // Optional empty-state shown right under the header.
                 Widget? emptyState;
@@ -237,13 +237,13 @@ class _PersonaPickerScreenState extends State<PersonaPickerScreen> {
                               p.tagline!,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   color: EmberColors.textMid, fontSize: 12),
                             )
                           : null,
                       trailing: (widget.showCurrentSelection &&
                               p.id == widget.selectedPersonaId)
-                          ? const Icon(Icons.check,
+                          ? Icon(Icons.check,
                               color: EmberColors.primary)
                           : null,
                       onTap: () => Navigator.pop(context, p.id),
@@ -300,7 +300,7 @@ class _CharacterPickerScreenState extends State<CharacterPickerScreen> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Text(
               widget.subtitle,
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textMid,
                 fontSize: 12,
                 height: 1.4,
@@ -339,7 +339,7 @@ class _CharacterPickerScreenState extends State<CharacterPickerScreen> {
                   )
                 : ListView.separated(
                     itemCount: candidates.length,
-                    separatorBuilder: (_, _) => const Divider(
+                    separatorBuilder: (_, _) => Divider(
                         color: EmberColors.stroke, height: 1),
                     itemBuilder: (_, i) {
                       final c = candidates[i];
@@ -356,7 +356,7 @@ class _CharacterPickerScreenState extends State<CharacterPickerScreen> {
                                     c.tagline!,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                         color: EmberColors.textMid,
                                         fontSize: 12),
                                   )
@@ -422,7 +422,7 @@ class _LorebookAttachPickerScreenState
       appBar: AppBar(title: const Text('Attach lorebooks to this chat')),
       body: Column(
         children: [
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Text(
               'Books toggled here are injected ONLY in this chat. '
@@ -459,7 +459,7 @@ class _LorebookAttachPickerScreenState
                   )
                 : ListView.separated(
                     itemCount: available.length,
-                    separatorBuilder: (_, _) => const Divider(
+                    separatorBuilder: (_, _) => Divider(
                         color: EmberColors.stroke, height: 1),
                     itemBuilder: (_, i) {
                       final l = available[i];
@@ -470,7 +470,7 @@ class _LorebookAttachPickerScreenState
                         title: Text(l.name),
                         subtitle: Text(
                           '${l.entries.length} entries',
-                          style: const TextStyle(
+                          style: TextStyle(
                               color: EmberColors.textMid, fontSize: 12),
                         ),
                         value: attached,

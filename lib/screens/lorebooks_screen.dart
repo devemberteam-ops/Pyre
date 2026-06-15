@@ -67,7 +67,7 @@ class LorebooksScreen extends StatelessWidget {
                 final l = visibleBooks[i];
                 return Card(
                   child: ListTile(
-                    leading: const Icon(Icons.menu_book_outlined,
+                    leading: Icon(Icons.menu_book_outlined,
                         color: EmberColors.textMid),
                     title: Text(l.name,
                         style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -88,7 +88,7 @@ class LorebooksScreen extends StatelessWidget {
                               base,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   color: EmberColors.textMid),
                             ),
                           ),
@@ -98,7 +98,7 @@ class LorebooksScreen extends StatelessWidget {
                               padding: const EdgeInsets.only(top: 1),
                               child: Text(
                                 tokenLabel,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   color: EmberColors.textDim,
                                   fontSize: 10,
                                   fontFeatures: [
@@ -112,7 +112,7 @@ class LorebooksScreen extends StatelessWidget {
                       );
                     }),
                     trailing: IconButton(
-                      icon: const Icon(Icons.more_vert,
+                      icon: Icon(Icons.more_vert,
                           color: EmberColors.textMid),
                       tooltip: 'Lorebook actions',
                       onPressed: () => _openLorebookKebab(context, l),
@@ -204,9 +204,9 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
             },
           ),
           ListTile(
-            leading: const Icon(Icons.delete_outline,
+            leading: Icon(Icons.delete_outline,
                 color: EmberColors.danger),
-            title: const Text('Delete',
+            title: Text('Delete',
                 style: TextStyle(color: EmberColors.danger)),
             onTap: () async {
               Navigator.pop(sheet);
@@ -394,7 +394,7 @@ class LorebookEditScreen extends StatelessWidget {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(color: EmberColors.stroke, width: 0.5),
               ),
@@ -427,7 +427,7 @@ class LorebookEditScreen extends StatelessWidget {
                       entry.content,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: EmberColors.textMid),
+                      style: TextStyle(color: EmberColors.textMid),
                     ),
                     trailing: Switch(
                       value: entry.enabled,
@@ -467,7 +467,7 @@ class LorebookEditScreen extends StatelessWidget {
                                 ),
                                 const SizedBox(width: 8),
                                 IconButton(
-                                  icon: const Icon(Icons.delete_outline,
+                                  icon: Icon(Icons.delete_outline,
                                       color: EmberColors.danger),
                                   tooltip: 'Delete entry',
                                   // Completeness-gaps: confirm like every other
@@ -593,7 +593,7 @@ Future<void> _editEntry(
                         () => logic = v ?? LoreSelectiveLogic.andAny),
                   ),
                 ] else
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.only(top: 6),
                     child: Text(
                       'Add secondary keywords to enable AND/NOT logic.',
@@ -671,7 +671,7 @@ Future<void> _editEntry(
                           '$probability%',
                           textAlign: TextAlign.end,
                           style:
-                              const TextStyle(color: EmberColors.textMid),
+                              TextStyle(color: EmberColors.textMid),
                         ),
                       ),
                     ],

@@ -47,7 +47,7 @@ class GroupAndLorebooksSheet extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Center(
+              Center(
                 child: Padding(
                   padding: EdgeInsets.only(bottom: 12),
                   child: SizedBox(
@@ -67,7 +67,7 @@ class GroupAndLorebooksSheet extends StatelessWidget {
                 style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 16),
-              const Padding(
+              Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
                 child: Text(
                   'Members',
@@ -86,8 +86,8 @@ class GroupAndLorebooksSheet extends StatelessWidget {
                   onPressed: () => _showAddMember(context, chatId),
                 ),
               ),
-              const Divider(color: EmberColors.stroke),
-              const Padding(
+              Divider(color: EmberColors.stroke),
+              Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
                 child: Text(
                   'Lorebooks',
@@ -214,7 +214,7 @@ List<Widget> _buildLorebookSections(
   // libraries. Now we render a summary + a button that opens a
   // dedicated full-screen attach picker with search.
   if (store.lorebooks.isEmpty) {
-    widgets.add(const Padding(
+    widgets.add(Padding(
       padding: EdgeInsets.symmetric(vertical: 12),
       child: Text(
         'No lorebooks created. Go to More → Lorebooks to add one.',
@@ -230,7 +230,7 @@ List<Widget> _buildLorebookSections(
         .where((l) => chat.attachedLorebookIds.contains(l.id))
         .toList();
     if (attachedPerChat.isEmpty) {
-      widgets.add(const Padding(
+      widgets.add(Padding(
         padding: EdgeInsets.only(top: 4, bottom: 4),
         child: Text(
           'No per-chat lorebooks attached yet.',
@@ -242,15 +242,15 @@ List<Widget> _buildLorebookSections(
         widgets.add(ListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
-          leading: const Icon(Icons.menu_book_outlined,
+          leading: Icon(Icons.menu_book_outlined,
               size: 18, color: EmberColors.primary),
           title: Text(l.name),
           subtitle: Text(
             '${l.entries.length} entries',
-            style: const TextStyle(color: EmberColors.textMid, fontSize: 12),
+            style: TextStyle(color: EmberColors.textMid, fontSize: 12),
           ),
           trailing: IconButton(
-            icon: const Icon(Icons.close,
+            icon: Icon(Icons.close,
                 size: 16, color: EmberColors.textMid),
             tooltip: 'Detach from this chat',
             onPressed: () {
@@ -295,7 +295,7 @@ Widget _subgroupLabel(String text) => Padding(
       padding: const EdgeInsets.fromLTRB(0, 10, 0, 4),
       child: Text(
         text.toUpperCase(),
-        style: const TextStyle(
+        style: TextStyle(
           color: EmberColors.primary,
           fontWeight: FontWeight.w700,
           fontSize: 10,
@@ -347,7 +347,7 @@ Widget _inheritedTile({
 
 List<Widget> _buildMembers(BuildContext context, AppStore store, Chat chat) {
   if (chat.characterIds.isEmpty) {
-    return const [
+    return [
       Padding(
         padding: EdgeInsets.symmetric(vertical: 8),
         child: Text(
@@ -371,11 +371,11 @@ List<Widget> _buildMembers(BuildContext context, AppStore store, Chat chat) {
           ? Text(c.tagline!,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: EmberColors.textMid, fontSize: 12))
+              style: TextStyle(color: EmberColors.textMid, fontSize: 12))
           : null,
       trailing: chat.characterIds.length > 1
           ? IconButton(
-              icon: const Icon(Icons.remove_circle_outline,
+              icon: Icon(Icons.remove_circle_outline,
                   color: EmberColors.danger),
               tooltip: 'Remove from chat',
               onPressed: () => store.removeCharacterFromChat(chat.id, id),

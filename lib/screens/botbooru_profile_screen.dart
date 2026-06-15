@@ -429,7 +429,7 @@ class _ProfileHeader extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             title,
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.textMid,
               fontSize: 13,
               fontStyle: FontStyle.italic,
@@ -451,7 +451,7 @@ class _ProfileHeader extends StatelessWidget {
             ),
             child: Text(
               pronouns,
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textMid,
                 fontSize: 11,
               ),
@@ -522,7 +522,7 @@ class _MiniAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = danger ? const Color(0xFFE57373) : EmberColors.primary;
+    final color = danger ? Color(0xFFE57373) : EmberColors.primary;
     return TextButton.icon(
       icon: Icon(icon, size: 14, color: color),
       label: Text(label, style: TextStyle(color: color, fontSize: 12)),
@@ -590,7 +590,7 @@ class _IdentityEditCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'IDENTITY',
             style: TextStyle(
               color: EmberColors.primary,
@@ -600,7 +600,7 @@ class _IdentityEditCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
-          const Text(
+          Text(
             'Username',
             style: TextStyle(
               color: EmberColors.textMid,
@@ -613,20 +613,20 @@ class _IdentityEditCard extends StatelessWidget {
             controller: usernameCtl,
             onChanged: onUsernameChanged,
             decoration: _dec('your_botbooru_handle'),
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.textHigh,
               fontSize: 14,
             ),
           ),
           const SizedBox(height: 4),
-          const Text(
+          Text(
             'Used as your `creator` tag on cards built in the '
             'Character Creator. Case-sensitive on botbooru.com.',
             style: TextStyle(
                 color: EmberColors.textDim, fontSize: 11, height: 1.4),
           ),
           const SizedBox(height: 14),
-          const Text(
+          Text(
             'Title',
             style: TextStyle(
               color: EmberColors.textMid,
@@ -642,19 +642,19 @@ class _IdentityEditCard extends StatelessWidget {
             decoration: _dec(
                     'e.g. "Slow-burn enthusiast", "Just here for the chaos"')
                 .copyWith(counterText: ''),
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.textHigh,
               fontSize: 14,
             ),
           ),
           const SizedBox(height: 4),
-          const Text(
+          Text(
             'Short subtitle that sits under your name. Empty hides it.',
             style: TextStyle(
                 color: EmberColors.textDim, fontSize: 11, height: 1.4),
           ),
           const SizedBox(height: 14),
-          const Text(
+          Text(
             'Pronouns (optional)',
             style: TextStyle(
               color: EmberColors.textMid,
@@ -670,7 +670,7 @@ class _IdentityEditCard extends StatelessWidget {
             decoration: _dec('e.g. she/her, they/them, he/him').copyWith(
               counterText: '',
             ),
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.textHigh,
               fontSize: 14,
             ),
@@ -730,7 +730,7 @@ class _AboutMeSection extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'ABOUT ME',
               style: TextStyle(
                 color: EmberColors.primary,
@@ -740,7 +740,7 @@ class _AboutMeSection extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               'A short bio for your profile. Whatever you want — '
               'tropes you love, favorite genres, what you\'re into.',
               style: TextStyle(
@@ -780,7 +780,7 @@ class _AboutMeSection extends StatelessWidget {
                   ),
                 ),
               ),
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textHigh,
                 fontSize: 14,
                 height: 1.4,
@@ -803,7 +803,7 @@ class _AboutMeSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             'ABOUT',
             style: TextStyle(
               color: EmberColors.primary,
@@ -815,7 +815,7 @@ class _AboutMeSection extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.textHigh,
               fontSize: 13,
               height: 1.55,
@@ -878,7 +878,7 @@ class _Stat extends StatelessWidget {
       children: [
         Text(
           '$value',
-          style: const TextStyle(
+          style: TextStyle(
             color: EmberColors.textHigh,
             fontSize: 20,
             fontWeight: FontWeight.w700,
@@ -887,7 +887,7 @@ class _Stat extends StatelessWidget {
         const SizedBox(height: 2),
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             color: EmberColors.textDim,
             fontSize: 10.5,
             letterSpacing: 0.3,
@@ -953,7 +953,7 @@ class _UsageStatsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(left: 2, bottom: 6),
             child: Text(
               'Usage',
@@ -1007,14 +1007,14 @@ class _TokenStat extends StatelessWidget {
       children: [
         Text(
           display,
-          style: const TextStyle(
+          style: TextStyle(
             color: EmberColors.textHigh,
             fontSize: 20,
             fontWeight: FontWeight.w700,
           ),
         ),
         const SizedBox(height: 2),
-        const Text(
+        Text(
           '~tokens',
           style: TextStyle(
             color: EmberColors.textDim,
@@ -1057,7 +1057,7 @@ class _FeaturedCharacterCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Text(
                   'FEATURED CHARACTER',
                   style: TextStyle(
@@ -1090,7 +1090,7 @@ class _FeaturedCharacterCard extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.star_border,
+                Icon(Icons.star_border,
                     color: EmberColors.textDim, size: 32),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1102,7 +1102,7 @@ class _FeaturedCharacterCard extends StatelessWidget {
                             'to show off what you\'re proud of.'
                         : 'No character pinned yet. Tap Edit to '
                             'pick one to spotlight here.',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textDim,
                       fontSize: 12,
                       height: 1.45,
@@ -1159,7 +1159,7 @@ class _FeaturedTile extends StatelessWidget {
                     character.name.isNotEmpty
                         ? character.name.characters.first.toUpperCase()
                         : '?',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textMid,
                       fontSize: 24,
                       fontWeight: FontWeight.w600,
@@ -1175,7 +1175,7 @@ class _FeaturedTile extends StatelessWidget {
             children: [
               Text(
                 character.name,
-                style: const TextStyle(
+                style: TextStyle(
                   color: EmberColors.textHigh,
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -1185,7 +1185,7 @@ class _FeaturedTile extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   tagline,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textMid,
                     fontSize: 12,
                     fontStyle: FontStyle.italic,
@@ -1226,7 +1226,7 @@ class _FeaturedPickerSheet extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Pick a featured character',
                       style: TextStyle(
@@ -1244,7 +1244,7 @@ class _FeaturedPickerSheet extends StatelessWidget {
               ),
             ),
             if (characters.isEmpty)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(20, 16, 20, 24),
                 child: Text(
                   'No characters in your library yet. Build or import '
@@ -1265,7 +1265,7 @@ class _FeaturedPickerSheet extends StatelessWidget {
                     if (i == 0) {
                       // First row: clear the pin.
                       return ListTile(
-                        leading: const Icon(Icons.star_outline,
+                        leading: Icon(Icons.star_outline,
                             color: EmberColors.textMid),
                         title: const Text('Remove featured'),
                         subtitle: const Text(
@@ -1292,7 +1292,7 @@ class _FeaturedPickerSheet extends StatelessWidget {
                             )
                           : null,
                       trailing: selected
-                          ? const Icon(Icons.check_circle,
+                          ? Icon(Icons.check_circle,
                               color: EmberColors.primary, size: 18)
                           : null,
                       onTap: () => Navigator.of(context).pop(c.id),
@@ -1332,7 +1332,7 @@ class _SmallAvatar extends StatelessWidget {
               fallback.isNotEmpty
                   ? fallback.characters.first.toUpperCase()
                   : '?',
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textMid,
                 fontSize: 14,
                 fontWeight: FontWeight.w600,

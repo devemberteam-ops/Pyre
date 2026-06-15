@@ -338,7 +338,7 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: EmberColors.bgElevated,
         title: Text('Generate "$name" from chat?'),
-        content: const Text(
+        content: Text(
           'Ask the AI to fill in this NPC\'s current state '
           'based on the conversation so far?',
           style: TextStyle(color: EmberColors.textMid),
@@ -371,7 +371,7 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: EmberColors.bgElevated,
         title: Text('Remove "${entity.name}"?'),
-        content: const Text(
+        content: Text(
           'This entity and all its tracked facts will be removed '
           'from the Live Sheet.',
           style: TextStyle(color: EmberColors.textMid),
@@ -437,7 +437,7 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
                 store.touchChat(chat); // F1: liveSheetEnabled toggle syncs
               },
               title: const Text('Live Sheet'),
-              subtitle: const Text(
+              subtitle: Text(
                 'Track each character\'s current state as the story unfolds.',
                 style: TextStyle(color: EmberColors.textMid, fontSize: 12),
               ),
@@ -454,7 +454,7 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
+                  children: [
                     Icon(Icons.checklist_rtl,
                         size: 18, color: EmberColors.primary),
                     SizedBox(width: 10),
@@ -482,10 +482,10 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
               margin: const EdgeInsets.symmetric(vertical: 6),
               color: EmberColors.bgElevated,
               child: ListTile(
-                leading: const Icon(Icons.info_outline,
+                leading: Icon(Icons.info_outline,
                     color: EmberColors.textMid),
                 title: const Text('No active snapshot'),
-                subtitle: const Text(
+                subtitle: Text(
                   'Toggle the Live Sheet off and on again to create one.',
                   style: TextStyle(color: EmberColors.textMid, fontSize: 12),
                 ),
@@ -617,7 +617,7 @@ class _EntityCard extends StatelessWidget {
                 // Remove entity
                 IconButton(
                   tooltip: 'Remove entity',
-                  icon: const Icon(Icons.remove_circle_outline,
+                  icon: Icon(Icons.remove_circle_outline,
                       size: 18, color: EmberColors.danger),
                   onPressed: onRemoveEntity,
                   visualDensity: VisualDensity.compact,
@@ -730,7 +730,7 @@ class _SectionRowsState extends State<_SectionRows> {
           padding: const EdgeInsets.only(top: 8, bottom: 2),
           child: Text(
             widget.section.label,
-            style: const TextStyle(
+            style: TextStyle(
                 color: EmberColors.textMid,
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
@@ -831,7 +831,7 @@ class _FactRow extends StatelessWidget {
         // Delete
         IconButton(
           tooltip: 'Delete fact',
-          icon: const Icon(Icons.close, size: 16, color: EmberColors.textMid),
+          icon: Icon(Icons.close, size: 16, color: EmberColors.textMid),
           onPressed: onDelete,
           visualDensity: VisualDensity.compact,
         ),

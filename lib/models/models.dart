@@ -2753,6 +2753,16 @@ class UiPrefs {
   /// out-of-range value can never blow up layout.
   double uiScale;
 
+  /// Wave CY.18.1.3 (Theme Foundation): id of the active curated palette.
+  /// Default 'ember' renders byte-identical to the previous hard-coded
+  /// colors — existing users see no change on upgrade.
+  String activeThemeId;
+
+  /// Wave CY.18.1.3: optional user accent color as a 32-bit ARGB int
+  /// (e.g. 0xFFFF0000 for red). When non-null, replaces `primary` +
+  /// `primaryDim` on top of the active curated palette. null = no override.
+  int? accentArgb;
+
   /// Lower bound for [uiScale]. Below this, UI chrome (buttons, chips)
   /// starts to read as broken rather than "small text".
   static const double kUiScaleMin = 0.8;
@@ -2787,6 +2797,8 @@ class UiPrefs {
     this.syncProviderKeys = false,
     this.syncConflictMode = SyncConflictMode.newestWins,
     this.uiScale = 1.0,
+    this.activeThemeId = 'ember',
+    this.accentArgb,
   }) : desktopShortcuts = desktopShortcuts ?? <String, dynamic>{};
 
   factory UiPrefs.fromJson(Map<String, dynamic> j) => UiPrefs(
@@ -2824,6 +2836,16 @@ class UiPrefs {
         uiScale: j['uiScale'] is num
             ? (j['uiScale'] as num).toDouble()
             : 1.0,
+        // Wave CY.18.1.3: missing key → 'ember' (unchanged look for
+        // existing users). A non-string value also falls back to the
+        // default so a corrupted JSON entry can never leave the app in
+        // an unknown state.
+        activeThemeId: j['activeThemeId'] is String
+            ? j['activeThemeId'] as String
+            : 'ember',
+        // Wave CY.18.1.3: null → no accent override (use palette default).
+        // A non-int value also maps to null — fail-safe.
+        accentArgb: j['accentArgb'] is int ? j['accentArgb'] as int : null,
       );
 
   // Wave CY.18.48: defensively decode the bounds list. JSON could
@@ -2883,6 +2905,10 @@ class UiPrefs {
         // Pyre 1.1 (F5): persist only when the user changed it away from
         // 1.0 — keeps backups clean for the common (unchanged) case.
         if (uiScale != 1.0) 'uiScale': uiScale,
+        // Wave CY.18.1.3: persist only non-default values to keep backups
+        // clean for users who never touched the theme (the common case).
+        if (activeThemeId != 'ember') 'activeThemeId': activeThemeId,
+        if (accentArgb != null) 'accentArgb': accentArgb,
       };
 }
 

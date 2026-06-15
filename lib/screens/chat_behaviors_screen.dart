@@ -93,7 +93,7 @@ class _ChatBehaviorsScreenState extends State<ChatBehaviorsScreen> {
                   const Text('Delete behavior',
                       style: TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
-                  const Text(
+                  Text(
                     'When you delete a message in a chat.',
                     style:
                         TextStyle(color: EmberColors.textMid, fontSize: 12),
@@ -141,7 +141,7 @@ class _ChatBehaviorsScreenState extends State<ChatBehaviorsScreen> {
             child: SwitchListTile(
               title: const Text('Ask persona on new chat',
                   style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: const Text(
+              subtitle: Text(
                 'When ON, starting a new chat with a character opens the persona picker first. When OFF, it uses your default persona automatically.',
                 style:
                     TextStyle(color: EmberColors.textMid, fontSize: 12),
@@ -165,7 +165,7 @@ class _ChatBehaviorsScreenState extends State<ChatBehaviorsScreen> {
                 'Streaming',
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
-              subtitle: const Text(
+              subtitle: Text(
                 'Display the response bit by bit as it is generated.',
                 style: TextStyle(color: EmberColors.textMid, fontSize: 12),
               ),

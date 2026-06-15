@@ -79,7 +79,7 @@ class SliderCard extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               'Range: ${_fmtBound(min)} – ${_fmtBound(max)}',
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textDim,
                 fontSize: 11,
               ),
@@ -150,7 +150,7 @@ class SliderCard extends StatelessWidget {
                                     .withValues(alpha: 0.18),
                                 borderRadius: BorderRadius.circular(4),
                               ),
-                              child: const Text(
+                              child: Text(
                                 'PRESET OVERRIDE',
                                 style: TextStyle(
                                   color: EmberColors.primary,
@@ -166,7 +166,7 @@ class SliderCard extends StatelessWidget {
                       const SizedBox(height: 2),
                       Text(
                         subtitle,
-                        style: const TextStyle(
+                        style: TextStyle(
                             color: EmberColors.textMid, fontSize: 12),
                       ),
                     ],
@@ -179,7 +179,7 @@ class SliderCard extends StatelessWidget {
                     children: [
                       Text(
                         overrideValue!,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: EmberColors.primary,
                           fontWeight: FontWeight.w700,
                           fontFeatures: [FontFeature.tabularFigures()],
@@ -198,7 +198,7 @@ class SliderCard extends StatelessWidget {
                             children: [
                               Text(
                                 'was $display',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   color: EmberColors.textDim,
                                   fontSize: 10,
                                   fontFeatures: [
@@ -207,7 +207,7 @@ class SliderCard extends StatelessWidget {
                                 ),
                               ),
                               const SizedBox(width: 3),
-                              const Icon(Icons.edit,
+                              Icon(Icons.edit,
                                   size: 10, color: EmberColors.textDim),
                             ],
                           ),
@@ -231,13 +231,13 @@ class SliderCard extends StatelessWidget {
                         children: [
                           Text(
                             display,
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: EmberColors.textMid,
                               fontFeatures: [FontFeature.tabularFigures()],
                             ),
                           ),
                           const SizedBox(width: 4),
-                          const Icon(Icons.edit,
+                          Icon(Icons.edit,
                               size: 12, color: EmberColors.textDim),
                         ],
                       ),

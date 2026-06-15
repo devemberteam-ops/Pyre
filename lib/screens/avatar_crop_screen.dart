@@ -73,7 +73,7 @@ class _AvatarCropScreenState extends State<AvatarCropScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 16),
-            const Text(
+            Text(
               'Pinch to zoom · drag to position',
               style: TextStyle(color: EmberColors.textMid),
             ),

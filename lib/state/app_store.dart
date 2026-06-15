@@ -7,6 +7,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../models/models.dart';
+import '../theme.dart' show EmberColors;
 import '../services/attachment_migration.dart';
 import '../services/attachment_refs.dart';
 import '../services/attachment_store.dart';
@@ -951,6 +952,14 @@ class AppStore extends ChangeNotifier {
       seedDefaultRegexRulesIfNeeded();
       unawaited(_persist());
     }
+
+    // Wave CY.18.1.3: apply the persisted theme so the first frame is already
+    // recolored (no flash of the default palette). Must run BEFORE the first
+    // notifyListeners() so the MaterialApp.theme: call sees the right active.
+    EmberColors.applyTheme(
+      themeId: uiPrefs.activeThemeId,
+      accentArgb: uiPrefs.accentArgb,
+    );
 
     _loaded = true;
     notifyListeners();
@@ -3372,6 +3381,34 @@ class AppStore extends ChangeNotifier {
         value.clamp(UiPrefs.kUiScaleMin, UiPrefs.kUiScaleMax);
     if (uiPrefs.uiScale == clamped) return;
     uiPrefs.uiScale = clamped;
+    _bump();
+  }
+
+  /// Wave CY.18.1.3: switch the app-wide color palette. [id] must match a
+  /// key in [kCuratedPalettes]; an unknown id silently falls back to 'ember'.
+  /// Calls [EmberColors.applyTheme] so the change takes effect immediately on
+  /// the next rebuild (no restart required).
+  void setActiveTheme(String id) {
+    if (uiPrefs.activeThemeId == id) return;
+    uiPrefs.activeThemeId = id;
+    EmberColors.applyTheme(
+      themeId: uiPrefs.activeThemeId,
+      accentArgb: uiPrefs.accentArgb,
+    );
+    _bump();
+  }
+
+  /// Wave CY.18.1.3: set (or clear) the user accent color as a 32-bit ARGB
+  /// int. Pass null to remove the override and use the curated palette's
+  /// primary color instead. The change is live-applied immediately via
+  /// [EmberColors.applyTheme].
+  void setAccentColor(int? argb) {
+    if (uiPrefs.accentArgb == argb) return;
+    uiPrefs.accentArgb = argb;
+    EmberColors.applyTheme(
+      themeId: uiPrefs.activeThemeId,
+      accentArgb: uiPrefs.accentArgb,
+    );
     _bump();
   }
 

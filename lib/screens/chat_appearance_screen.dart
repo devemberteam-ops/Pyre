@@ -197,14 +197,14 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                 children: [
                   Row(
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('Bubble opacity',
+                            const Text('Bubble opacity',
                                 style: TextStyle(
                                     fontWeight: FontWeight.w600)),
-                            SizedBox(height: 2),
+                            const SizedBox(height: 2),
                             Text(
                               'How visible the message background is over the character art.',
                               style: TextStyle(
@@ -215,7 +215,7 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                       ),
                       Text(
                         '${(_draft.bubbleAlpha * 100).round()}%',
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: EmberColors.textMid,
                           fontFeatures: [FontFeature.tabularFigures()],
                         ),
@@ -257,7 +257,7 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                   const Text('Message bubbles',
                       style: TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
-                  const Text(
+                  Text(
                     'Tune the look of your bubbles. Leave everything as-is for the default style.',
                     style: TextStyle(
                         color: EmberColors.textMid, fontSize: 12),
@@ -376,7 +376,7 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                   const Text('Chat background',
                       style: TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
-                  const Text(
+                  Text(
                     'What image (if any) sits behind the message bubbles.',
                     style: TextStyle(
                         color: EmberColors.textMid, fontSize: 12),
@@ -407,7 +407,7 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                             title: Text(_bgLabel(source)),
                             subtitle: Text(
                               _bgSubtitle(source),
-                              style: const TextStyle(
+                              style: TextStyle(
                                   color: EmberColors.textMid, fontSize: 11),
                             ),
                             onTap: () {
@@ -458,9 +458,9 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                         const SizedBox(width: 8),
                         if (_draft.customBackgroundDataUrl != null)
                           TextButton.icon(
-                            icon: const Icon(Icons.delete_outline,
+                            icon: Icon(Icons.delete_outline,
                                 size: 16, color: EmberColors.danger),
-                            label: const Text('Clear',
+                            label: Text('Clear',
                                 style: TextStyle(
                                     color: EmberColors.danger)),
                             onPressed: () {
@@ -484,7 +484,7 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                         ),
                         Text(
                           '${(_draft.backgroundOpacity * 100).round()}%',
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: EmberColors.textMid,
                             fontFeatures: [
                               FontFeature.tabularFigures()
@@ -515,7 +515,7 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                     const Text('Background fit',
                         style: TextStyle(fontSize: 13)),
                     const SizedBox(height: 2),
-                    const Text(
+                    Text(
                       'Contain shows the whole image — most useful on wide windows with a portrait image.',
                       style: TextStyle(
                           color: EmberColors.textMid, fontSize: 11),
@@ -543,7 +543,7 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                 'Hide model reasoning',
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
-              subtitle: const Text(
+              subtitle: Text(
                 'Hide <think>…</think> blocks from reasoning models (DeepSeek-R1 etc.) without affecting generation.',
                 style: TextStyle(color: EmberColors.textMid, fontSize: 12),
               ),
@@ -667,7 +667,7 @@ class _Swatch extends StatelessWidget {
           ),
         ),
         child: selected
-            ? const Icon(Icons.check, size: 16, color: EmberColors.textHigh)
+            ? Icon(Icons.check, size: 16, color: EmberColors.textHigh)
             : null,
       ),
     );
@@ -708,7 +708,7 @@ class _SliderRow extends StatelessWidget {
             ),
             Text(
               valueLabel,
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textMid,
                 fontFeatures: [FontFeature.tabularFigures()],
               ),

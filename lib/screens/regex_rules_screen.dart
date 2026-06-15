@@ -89,7 +89,7 @@ class RegexRulesScreen extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           if (rules.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 4, vertical: 16),
               child: Text(
                 'No regex rules yet. Tap + to create one.',
@@ -101,7 +101,7 @@ class RegexRulesScreen extends StatelessWidget {
             for (final r in rules) ...[
               Card(
                 child: ListTile(
-                  leading: const Icon(Icons.find_replace,
+                  leading: Icon(Icons.find_replace,
                       color: EmberColors.textMid),
                   title: Text(
                     r.name.isEmpty ? '(unnamed rule)' : r.name,
@@ -111,7 +111,7 @@ class RegexRulesScreen extends StatelessWidget {
                     _subtitleFor(r),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: EmberColors.textMid),
+                    style: TextStyle(color: EmberColors.textMid),
                   ),
                   onTap: () => _openEditor(context, r),
                   trailing: Row(
@@ -125,7 +125,7 @@ class RegexRulesScreen extends StatelessWidget {
                         },
                       ),
                       PopupMenuButton<String>(
-                        icon: const Icon(Icons.more_vert,
+                        icon: Icon(Icons.more_vert,
                             color: EmberColors.textMid),
                         onSelected: (choice) async {
                           if (choice == 'edit') {
@@ -432,7 +432,7 @@ class _RegexRuleEditorScreenState extends State<RegexRuleEditorScreen> {
             maxLines: null,
           ),
           const SizedBox(height: 18),
-          const Text('Applies to',
+          Text('Applies to',
               style: TextStyle(
                   fontWeight: FontWeight.w600, color: EmberColors.textHigh)),
           CheckboxListTile(
@@ -476,11 +476,11 @@ class _RegexRuleEditorScreenState extends State<RegexRuleEditorScreen> {
             onChanged: (v) => setState(() => _enabled = v),
             title: const Text('Enabled'),
           ),
-          const Divider(height: 32, color: EmberColors.stroke),
+          Divider(height: 32, color: EmberColors.stroke),
           // ── Live test box ─────────────────────────────────────────────
           Row(
             children: [
-              const Text('Test',
+              Text('Test',
                   style: TextStyle(
                       fontWeight: FontWeight.w600,
                       color: EmberColors.textHigh)),
@@ -509,7 +509,7 @@ class _RegexRuleEditorScreenState extends State<RegexRuleEditorScreen> {
             maxLines: null,
           ),
           const SizedBox(height: 10),
-          const Text('Result',
+          Text('Result',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12)),
           const SizedBox(height: 4),
           Container(
@@ -522,11 +522,11 @@ class _RegexRuleEditorScreenState extends State<RegexRuleEditorScreen> {
             ),
             child: SelectableText(
               preview.isEmpty ? '(empty)' : preview,
-              style: const TextStyle(color: EmberColors.textHigh),
+              style: TextStyle(color: EmberColors.textHigh),
             ),
           ),
           const SizedBox(height: 6),
-          const Text(
+          Text(
             'The result previews the DISPLAY transform for the selected stream. '
             'It applies regardless of the toggles above so you can see the '
             'pattern work.',

@@ -37,7 +37,7 @@ class ChatTreeScreen extends StatelessWidget {
     if (chat == null) {
       return Scaffold(
         appBar: AppBar(title: const Text('Chat tree')),
-        body: const Center(
+        body: Center(
           child: Padding(
             padding: EdgeInsets.all(32),
             child: Text(
@@ -58,7 +58,7 @@ class ChatTreeScreen extends StatelessWidget {
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: const Text(
+            child: Text(
               'Tap any node to jump to that variant in the chat. Highlighted line = active branch.',
               style: TextStyle(
                 color: EmberColors.textMid,
@@ -70,7 +70,7 @@ class ChatTreeScreen extends StatelessWidget {
         ),
       ),
       body: layout.items.isEmpty
-          ? const Center(
+          ? Center(
               child: Padding(
                 padding: EdgeInsets.all(32),
                 child: Text(
@@ -421,7 +421,7 @@ class _NodeWidget extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     if (isAux)
-                      const Icon(Icons.chat_outlined,
+                      Icon(Icons.chat_outlined,
                           size: 18, color: EmberColors.textMid)
                     else
                       AvatarBubble(
@@ -441,7 +441,7 @@ class _NodeWidget extends StatelessWidget {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 10,
                         color: EmberColors.textHigh,
                         height: 1.2,
@@ -510,7 +510,7 @@ Future<bool> _confirmJumpToNode(
                   const SizedBox(width: 8),
                   Text(
                     kindLabel,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textHigh,
                       fontWeight: FontWeight.w600,
                       fontSize: 13,
@@ -519,7 +519,7 @@ Future<bool> _confirmJumpToNode(
                   const Spacer(),
                   Text(
                     'Depth $depth',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textDim,
                       fontSize: 11,
                     ),
@@ -541,7 +541,7 @@ Future<bool> _confirmJumpToNode(
                     shortPreview.isEmpty
                         ? '(empty message)'
                         : shortPreview,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textHigh,
                       fontSize: 13,
                       height: 1.4,
@@ -550,7 +550,7 @@ Future<bool> _confirmJumpToNode(
                 ),
               ),
               const SizedBox(height: 12),
-              const Text(
+              Text(
                 'Jumping switches the active branch to land on this '
                 'message and scrolls the chat to it. Anything currently '
                 'visible after another branch point gets swapped out '

@@ -117,7 +117,7 @@ class _HubCard extends StatelessWidget {
     for (var i = 0; i < rows.length; i++) {
       children.add(rows[i]);
       if (i < rows.length - 1) {
-        children.add(const Divider(
+        children.add(Divider(
           color: EmberColors.stroke,
           height: 1,
           indent: 16,
@@ -155,9 +155,9 @@ class _HubRow extends StatelessWidget {
           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
       subtitle: Text(
         subtitle,
-        style: const TextStyle(color: EmberColors.textMid, fontSize: 12),
+        style: TextStyle(color: EmberColors.textMid, fontSize: 12),
       ),
-      trailing: const Icon(Icons.chevron_right,
+      trailing: Icon(Icons.chevron_right,
           color: EmberColors.textDim, size: 22),
       onTap: () =>
           Navigator.of(context).push(MaterialPageRoute(builder: builder)),

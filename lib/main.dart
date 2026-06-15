@@ -593,36 +593,49 @@ class _PyreAppState extends State<PyreApp>
   Widget build(BuildContext context) {
     return ChangeNotifierProvider<AppStore>.value(
       value: widget.store,
-      child: MaterialApp(
-        title: 'Pyre',
-        debugShowCheckedModeBanner: false,
-        theme: emberTheme(),
-        navigatorKey: _rootNavKey,
-        // Wave CY.18.94: native desktop apps let users drag-select
-        // text anywhere — character descriptions, error messages,
-        // help text, links, anything. Flutter's default Text widget
-        // is non-selectable; SelectionArea fixes that for an entire
-        // subtree at once. We only enable it on desktop because on
-        // touch platforms the long-press-to-select gesture conflicts
-        // with our existing long-press menus (message actions,
-        // character list quick actions etc). SelectableText nodes
-        // already inside the tree (chat bubbles from Wave Q) are
-        // documented to coexist with SelectionArea — the inner widget
-        // handles selection within its own bounds.
-        builder: (context, child) {
-          if (child == null) return const SizedBox.shrink();
-          // Pyre 1.1 (F5): apply the global UI text-scale ABOVE the
-          // whole navigation/screen tree so every screen inherits it,
-          // and rebuild whenever the user moves the slider. _UiScaleWrap
-          // reads `uiScale` reactively from the AppStore and composes it
-          // with the ambient (OS accessibility) text scale.
-          Widget content = _UiScaleWrap(child: child);
-          if (_isDesktop) {
-            content = SelectionArea(child: content);
-          }
-          return content;
+      // Wave CY.18.1.3: Consumer re-runs this builder on every AppStore
+      // notify, which means `emberTheme()` is re-evaluated after a palette
+      // switch. The Consumer reads the store (internally calls watch) so
+      // when setActiveTheme / setAccentColor fires notifyListeners, this
+      // rebuilds and produces a new ThemeData from the updated
+      // EmberColors.active — repainting the whole app in the new palette.
+      child: Consumer<AppStore>(
+        builder: (context, store, _) {
+          return MaterialApp(
+            title: 'Pyre',
+            debugShowCheckedModeBanner: false,
+            // Wave CY.18.1.3: re-evaluated on every rebuild. EmberColors.*
+            // are getters backed by EmberColors.active, so calling
+            // emberTheme() after applyTheme() yields the updated ThemeData.
+            theme: emberTheme(),
+            navigatorKey: _rootNavKey,
+            // Wave CY.18.94: native desktop apps let users drag-select
+            // text anywhere — character descriptions, error messages,
+            // help text, links, anything. Flutter's default Text widget
+            // is non-selectable; SelectionArea fixes that for an entire
+            // subtree at once. We only enable it on desktop because on
+            // touch platforms the long-press-to-select gesture conflicts
+            // with our existing long-press menus (message actions,
+            // character list quick actions etc). SelectableText nodes
+            // already inside the tree (chat bubbles from Wave Q) are
+            // documented to coexist with SelectionArea — the inner widget
+            // handles selection within its own bounds.
+            builder: (context, child) {
+              if (child == null) return const SizedBox.shrink();
+              // Pyre 1.1 (F5): apply the global UI text-scale ABOVE the
+              // whole navigation/screen tree so every screen inherits it,
+              // and rebuild whenever the user moves the slider. _UiScaleWrap
+              // reads `uiScale` reactively from the AppStore and composes it
+              // with the ambient (OS accessibility) text scale.
+              Widget content = _UiScaleWrap(child: child);
+              if (_isDesktop) {
+                content = SelectionArea(child: content);
+              }
+              return content;
+            },
+            home: const RootShell(),
+          );
         },
-        home: const RootShell(),
       ),
     );
   }

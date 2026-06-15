@@ -185,10 +185,10 @@ class _PresetCard extends StatelessWidget {
               : _previewLine(p),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: EmberColors.textMid),
+          style: TextStyle(color: EmberColors.textMid),
         ),
         trailing: IconButton(
-          icon: const Icon(Icons.more_vert, color: EmberColors.textMid),
+          icon: Icon(Icons.more_vert, color: EmberColors.textMid),
           tooltip: 'Preset actions',
           onPressed: () => _openPresetKebab(context, p),
         ),
@@ -210,7 +210,7 @@ class _SectionLabel extends StatelessWidget {
       padding: const EdgeInsets.only(left: 4),
       child: Text(
         text,
-        style: const TextStyle(
+        style: TextStyle(
           color: EmberColors.primary,
           fontWeight: FontWeight.w700,
           fontSize: 11,
@@ -268,7 +268,7 @@ class _DefaultGenerationCardState extends State<_DefaultGenerationCard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const _SectionLabel('DEFAULT GENERATION'),
-        const Padding(
+        Padding(
           padding: EdgeInsets.fromLTRB(4, 4, 4, 0),
           child: Text(
             'Defaults used when a preset leaves a field blank. '
@@ -294,13 +294,13 @@ class _DefaultGenerationCardState extends State<_DefaultGenerationCard> {
               padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
-                  const Icon(Icons.info_outline,
+                  Icon(Icons.info_outline,
                       size: 18, color: EmberColors.primary),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       'Preset "${preset.name}" overrides some of these values when active. Overridden sliders show the preset value as the effective one.',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: EmberColors.textMid,
                         fontSize: 12,
                       ),
@@ -421,7 +421,7 @@ class _Pill extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           color: EmberColors.primary,
           fontSize: 9,
           fontWeight: FontWeight.w700,
@@ -443,7 +443,7 @@ Future<void> _openPresetKebab(BuildContext context, Preset p) async {
         mainAxisSize: MainAxisSize.min,
         children: [
           ListTile(
-            leading: const Icon(Icons.check_circle_outline,
+            leading: Icon(Icons.check_circle_outline,
                 color: EmberColors.primary),
             title: const Text('Select (activate now)'),
             onTap: () {
@@ -550,9 +550,9 @@ Future<void> _openPresetKebab(BuildContext context, Preset p) async {
             ),
           if (!p.locked)
             ListTile(
-              leading: const Icon(Icons.delete_outline,
+              leading: Icon(Icons.delete_outline,
                   color: EmberColors.danger),
-              title: const Text('Delete',
+              title: Text('Delete',
                   style: TextStyle(color: EmberColors.danger)),
               onTap: () async {
                 Navigator.pop(sheet);
@@ -611,7 +611,7 @@ class _PresetDetailsScreen extends StatelessWidget {
         children: [
           Text(
             title.toUpperCase(),
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.primary,
               fontWeight: FontWeight.w700,
               fontSize: 11,
@@ -668,7 +668,7 @@ class _PresetDetailsScreen extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
+          Text(
             'PROMPT BLOCKS',
             style: TextStyle(
               color: EmberColors.primary,
@@ -721,7 +721,7 @@ class _PresetDetailsScreen extends StatelessWidget {
                     const SizedBox(height: 8),
                     SelectableText(
                       b.content,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: EmberColors.textMid,
                         fontSize: 12,
                         height: 1.45,
@@ -746,7 +746,7 @@ class _PresetDetailsScreen extends StatelessWidget {
         title: const Text('Preset details'),
         actions: [
           if (live.locked)
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 12),
               child: Center(
                 child: Row(
@@ -790,7 +790,7 @@ class _PresetDetailsScreen extends StatelessWidget {
                     color: EmberColors.primary.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: const Text(
+                  child: Text(
                     'DEFAULT',
                     style: TextStyle(
                       color: EmberColors.primary,
@@ -804,7 +804,7 @@ class _PresetDetailsScreen extends StatelessWidget {
           ),
           if (live.locked) ...[
             const SizedBox(height: 6),
-            const Text(
+            Text(
               'The built-in default — sealed against edits and deletion '
               'so it stays as a known-good fallback. Use "Copy '
               '(editable)" from the kebab to fork it into a custom '
@@ -930,7 +930,7 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
         padding: const EdgeInsets.only(top: 18, bottom: 6),
         child: Text(
           text.toUpperCase(),
-          style: const TextStyle(
+          style: TextStyle(
             color: EmberColors.primary,
             fontWeight: FontWeight.w700,
             fontSize: 11,
@@ -943,7 +943,7 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
         padding: const EdgeInsets.only(top: 2, bottom: 4),
         child: Text(
           text,
-          style: const TextStyle(color: EmberColors.textMid, fontSize: 12),
+          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
         ),
       );
 
@@ -1200,7 +1200,7 @@ class _PromptBlocksSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
+        Padding(
           padding: EdgeInsets.only(top: 18, bottom: 6),
           child: Text(
             'PROMPT BLOCKS',
@@ -1212,7 +1212,7 @@ class _PromptBlocksSection extends StatelessWidget {
             ),
           ),
         ),
-        const Padding(
+        Padding(
           padding: EdgeInsets.only(top: 2, bottom: 8),
           child: Text(
             'Toggle which modules are active. Drag to reorder; tap a block to '
@@ -1221,7 +1221,7 @@ class _PromptBlocksSection extends StatelessWidget {
           ),
         ),
         if (blocks.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(vertical: 12),
             child: Text(
               'No blocks yet. Add one below.',
@@ -1315,7 +1315,7 @@ class _BlockRow extends StatelessWidget {
         children: [
           ReorderableDragStartListener(
             index: index,
-            child: const Padding(
+            child: Padding(
               padding: EdgeInsets.fromLTRB(8, 12, 4, 12),
               child: Icon(Icons.drag_indicator,
                   size: 20, color: EmberColors.textDim),
@@ -1405,7 +1405,7 @@ class _MetaChip extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           color: EmberColors.textMid,
           fontSize: 9,
           fontWeight: FontWeight.w600,
@@ -1470,7 +1470,7 @@ Future<void> _showBlockEditor(
                   ),
                 ),
                 const SizedBox(height: 16),
-                const Text(
+                Text(
                   'ROLE',
                   style: TextStyle(
                     color: EmberColors.primary,
@@ -1495,11 +1495,11 @@ Future<void> _showBlockEditor(
                   role == 'system'
                       ? 'Joins the system prompt as plain instructions.'
                       : 'Sent as a real "$role" chat turn (SillyTavern-style).',
-                  style: const TextStyle(
+                  style: TextStyle(
                       color: EmberColors.textDim, fontSize: 11),
                 ),
                 const SizedBox(height: 16),
-                const Text(
+                Text(
                   'PLACEMENT',
                   style: TextStyle(
                     color: EmberColors.primary,
@@ -1525,7 +1525,7 @@ Future<void> _showBlockEditor(
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      const Text('Depth from end:',
+                      Text('Depth from end:',
                           style: TextStyle(
                               color: EmberColors.textMid, fontSize: 12)),
                       const SizedBox(width: 10),
@@ -1544,7 +1544,7 @@ Future<void> _showBlockEditor(
                     ],
                   ),
                   const SizedBox(height: 6),
-                  const Text(
+                  Text(
                     '0 = after the last message · 1 = before the last · higher '
                     '= further back in the chat.',
                     style:

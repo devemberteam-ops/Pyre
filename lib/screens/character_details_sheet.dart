@@ -84,7 +84,7 @@ class _DetailsSheetBody extends StatelessWidget {
           controller: scroll,
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
-            const Center(
+            Center(
               child: SizedBox(
                 width: 40,
                 height: 4,
@@ -122,7 +122,7 @@ class _DetailsSheetBody extends StatelessWidget {
                   child: Text(
                     tagline!,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                         color: EmberColors.textMid, fontSize: 14),
                   ),
                 ),
@@ -196,7 +196,7 @@ class _DetailsSheetBody extends StatelessWidget {
         children: [
           Text(
             label.toUpperCase(),
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.textDim,
               fontSize: 11,
               fontWeight: FontWeight.w600,
@@ -206,7 +206,7 @@ class _DetailsSheetBody extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             content,
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.textHigh,
               height: 1.4,
               fontSize: 14,
@@ -328,7 +328,7 @@ class CharacterDetailsSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 8),
-            const Center(
+            Center(
               child: SizedBox(
                 width: 40,
                 height: 4,
@@ -353,10 +353,10 @@ class CharacterDetailsSheet extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             ListTile(
-              leading: const Icon(Icons.auto_awesome,
+              leading: Icon(Icons.auto_awesome,
                   color: EmberColors.primary),
               title: const Text('Edit with AI'),
-              subtitle: const Text(
+              subtitle: Text(
                 'Open the Character Creator with this sheet pre-loaded — '
                 'chat with the assistant to make big or small changes.',
                 style: TextStyle(color: EmberColors.textMid, fontSize: 12),
@@ -374,7 +374,7 @@ class CharacterDetailsSheet extends StatelessWidget {
             ListTile(
               leading: const Icon(Icons.edit_outlined),
               title: const Text('Edit manually'),
-              subtitle: const Text(
+              subtitle: Text(
                 'Open the classic form to tweak fields directly.',
                 style: TextStyle(color: EmberColors.textMid, fontSize: 12),
               ),
@@ -480,7 +480,7 @@ class PersonaDetailsSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 8),
-            const Center(
+            Center(
               child: SizedBox(
                 width: 40,
                 height: 4,
@@ -505,10 +505,10 @@ class PersonaDetailsSheet extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             ListTile(
-              leading: const Icon(Icons.auto_awesome,
+              leading: Icon(Icons.auto_awesome,
                   color: EmberColors.primary),
               title: const Text('Edit with AI'),
-              subtitle: const Text(
+              subtitle: Text(
                 'Open the Creator with this persona pre-loaded — chat with '
                 'the assistant to make changes.',
                 style: TextStyle(color: EmberColors.textMid, fontSize: 12),
@@ -525,7 +525,7 @@ class PersonaDetailsSheet extends StatelessWidget {
             ListTile(
               leading: const Icon(Icons.edit_outlined),
               title: const Text('Edit manually'),
-              subtitle: const Text(
+              subtitle: Text(
                 'Open the classic form to tweak fields directly.',
                 style: TextStyle(color: EmberColors.textMid, fontSize: 12),
               ),

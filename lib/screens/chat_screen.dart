@@ -555,7 +555,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Center(
+                      Center(
                         child: Padding(
                           padding: EdgeInsets.only(top: 8, bottom: 12),
                           child: SizedBox(
@@ -579,7 +579,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               fontSize: 17, fontWeight: FontWeight.w600),
                         ),
                       ),
-                      const Padding(
+                      Padding(
                         padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                         child: Text(
                           'The system prompt + sampling bundle for this chat. '
@@ -635,7 +635,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                       : _presetPreviewLine(p),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                       color: EmberColors.textMid,
                                       fontSize: 12),
                                 ),
@@ -662,10 +662,10 @@ class _ChatScreenState extends State<ChatScreen> {
                       if (active != null &&
                           !active.locked &&
                           presetSupportsMainPromptQuickEdit(active)) ...[
-                        const Divider(color: EmberColors.stroke, height: 8),
+                        Divider(color: EmberColors.stroke, height: 8),
                         ListTile(
                           dense: true,
-                          leading: const Icon(Icons.edit_note,
+                          leading: Icon(Icons.edit_note,
                               color: EmberColors.textMid),
                           title: Text(
                             'Quick edit system prompt',
@@ -676,7 +676,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           ),
                           subtitle: Text(
                             'Edit "${active.name}" main prompt',
-                            style: const TextStyle(
+                            style: TextStyle(
                                 color: EmberColors.textMid, fontSize: 11),
                           ),
                           trailing: Icon(
@@ -750,8 +750,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         // would be ignored by assembly, so we don't offer it.
                         // Point the user at the Presets screen, where the
                         // block editor actually drives a modular preset.
-                        const Divider(color: EmberColors.stroke, height: 8),
-                        const ListTile(
+                        Divider(color: EmberColors.stroke, height: 8),
+                        ListTile(
                           dense: true,
                           leading: Icon(Icons.view_module_outlined,
                               color: EmberColors.textMid),
@@ -770,7 +770,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           ),
                         ),
                       ],
-                      const Divider(color: EmberColors.stroke, height: 8),
+                      Divider(color: EmberColors.stroke, height: 8),
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
                         child: OutlinedButton.icon(
@@ -1972,7 +1972,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ListTile(
               leading: const Icon(Icons.edit_note),
               title: const Text('Fill-In-Your-Own'),
-              subtitle: const Text(
+              subtitle: Text(
                 'Scenario change or your own opening message.',
                 style:
                     TextStyle(color: EmberColors.textMid, fontSize: 12),
@@ -1989,7 +1989,7 @@ class _ChatScreenState extends State<ChatScreen> {
               data: Theme.of(context)
                   .copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
-                leading: const Icon(Icons.auto_awesome_motion,
+                leading: Icon(Icons.auto_awesome_motion,
                     color: EmberColors.textMid),
                 // Wave CY.18.200: experimental badge on the Memories group.
                 title: Row(
@@ -2003,7 +2003,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         color: EmberColors.primary.withValues(alpha: 0.13),
                         borderRadius: BorderRadius.circular(5),
                       ),
-                      child: const Text(
+                      child: Text(
                         'experimental',
                         style: TextStyle(
                           color: EmberColors.primary,
@@ -2037,7 +2037,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     title: const Text('Checkpoints'),
                     subtitle: Builder(builder: (_) {
                       if (!chat.memoryEnabled) {
-                        return const Text(
+                        return Text(
                           'Off — auto-summariser disabled for this chat.',
                           style: TextStyle(
                               color: EmberColors.textMid, fontSize: 12),
@@ -2050,7 +2050,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               'on this branch.';
                       return Text(
                         label,
-                        style: const TextStyle(
+                        style: TextStyle(
                             color: EmberColors.textMid, fontSize: 12),
                       );
                     }),
@@ -2068,7 +2068,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       chat.liveSheetEnabled
                           ? 'On — tracking entity state.'
                           : 'Off — state tracking disabled for this chat.',
-                      style: const TextStyle(
+                      style: TextStyle(
                           color: EmberColors.textMid, fontSize: 12),
                     ),
                     onTap: () {
@@ -2079,7 +2079,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     },
                   ),
                   ListTile(
-                    leading: const Icon(Icons.map_outlined,
+                    leading: Icon(Icons.map_outlined,
                         color: EmberColors.textMid),
                     title: const Text('Script'),
                     onTap: () {
@@ -2097,7 +2097,7 @@ class _ChatScreenState extends State<ChatScreen> {
               data: Theme.of(context)
                   .copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
-                leading: const Icon(Icons.more_horiz,
+                leading: Icon(Icons.more_horiz,
                     color: EmberColors.textMid),
                 title: const Text('More options'),
                 iconColor: EmberColors.textHigh,
@@ -2112,7 +2112,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ListTile(
                     leading: const Icon(Icons.drive_file_rename_outline),
                     title: const Text('Rename chat'),
-                    subtitle: const Text(
+                    subtitle: Text(
                       'Name this chat to tell it apart from others.',
                       style: TextStyle(
                           color: EmberColors.textMid, fontSize: 12),
@@ -2125,7 +2125,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ListTile(
                     leading: const Icon(Icons.tune),
                     title: const Text('Chat background'),
-                    subtitle: const Text(
+                    subtitle: Text(
                       'Background & scene.',
                       style: TextStyle(
                           color: EmberColors.textMid, fontSize: 12),
@@ -2138,7 +2138,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ListTile(
                     leading: const Icon(Icons.groups_outlined),
                     title: const Text('Group chat & Lorebooks'),
-                    subtitle: const Text(
+                    subtitle: Text(
                       'Members + attached lorebooks.',
                       style: TextStyle(
                           color: EmberColors.textMid, fontSize: 12),
@@ -2155,7 +2155,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       _chatPersona(store, chat)?.name == null
                           ? 'No persona attached'
                           : 'Currently: ${_chatPersona(store, chat)!.name}',
-                      style: const TextStyle(
+                      style: TextStyle(
                           color: EmberColors.textMid, fontSize: 12),
                     ),
                     onTap: () {
@@ -2171,7 +2171,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     title: const Text('Preset'),
                     subtitle: Text(
                       'Preset · ${store.activePreset?.name ?? "None"}',
-                      style: const TextStyle(
+                      style: TextStyle(
                           color: EmberColors.textMid, fontSize: 12),
                     ),
                     onTap: () {
@@ -2195,7 +2195,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ListTile(
                     leading: const Icon(Icons.toll),
                     title: const Text('Token breakdown'),
-                    subtitle: const Text(
+                    subtitle: Text(
                       'See where your context budget is going.',
                       style: TextStyle(
                           color: EmberColors.textMid, fontSize: 12),
@@ -2208,7 +2208,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ListTile(
                     leading: const Icon(Icons.download_outlined),
                     title: const Text('Export chat'),
-                    subtitle: const Text(
+                    subtitle: Text(
                       'Save as SillyTavern JSONL or full-fidelity Pyre JSON.',
                       style: TextStyle(
                           color: EmberColors.textMid, fontSize: 12),
@@ -2218,11 +2218,11 @@ class _ChatScreenState extends State<ChatScreen> {
                       _showExportChatSheet(chat, primary);
                     },
                   ),
-                  const Divider(color: EmberColors.stroke),
+                  Divider(color: EmberColors.stroke),
                   ListTile(
-                    leading: const Icon(Icons.delete_outline,
+                    leading: Icon(Icons.delete_outline,
                         color: EmberColors.danger),
-                    title: const Text('Delete chat',
+                    title: Text('Delete chat',
                         style: TextStyle(color: EmberColors.danger)),
                     onTap: () async {
                       Navigator.pop(sheet);
@@ -2314,10 +2314,10 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             ListTile(
-              leading: const Icon(Icons.swap_horiz,
+              leading: Icon(Icons.swap_horiz,
                   color: EmberColors.primary),
               title: const Text('SillyTavern JSONL'),
-              subtitle: const Text(
+              subtitle: Text(
                 'Portable — opens in SillyTavern, chub.ai, and most '
                 'Tavern-compatible clients. Lossy on variants and '
                 'branches.',
@@ -2330,10 +2330,10 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.lock_outline,
+              leading: Icon(Icons.lock_outline,
                   color: EmberColors.primary),
               title: const Text('Pyre JSON (full fidelity)'),
-              subtitle: const Text(
+              subtitle: Text(
                 'Full backup — keeps every variant, branch, and '
                 "snapshot. Other clients won't recognise it.",
                 style:
@@ -2447,11 +2447,11 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             if (isLast && (isChar || isUser))
               ListTile(
-                leading: const Icon(Icons.play_arrow_rounded,
+                leading: Icon(Icons.play_arrow_rounded,
                     color: EmberColors.primary),
                 title: const Text('Continue (extend this message)'),
                 subtitle: isUser
-                    ? const Text(
+                    ? Text(
                         'Have the model extend your own message in '
                         'your persona\'s voice.',
                         style: TextStyle(
@@ -2465,7 +2465,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             if (isChar && isLast)
               ListTile(
-                leading: const Icon(Icons.refresh,
+                leading: Icon(Icons.refresh,
                     color: EmberColors.primary),
                 title: const Text('Regenerate (new variant)'),
                 onTap: () {
@@ -2479,10 +2479,10 @@ class _ChatScreenState extends State<ChatScreen> {
             // affordance). Last-char-message only, like plain Regenerate.
             if (isChar && isLast && store.guideSettings.enabled)
               ListTile(
-                leading: const Icon(Icons.auto_fix_high_outlined,
+                leading: Icon(Icons.auto_fix_high_outlined,
                     color: EmberColors.primary),
                 title: const Text('Regenerate with a guide'),
-                subtitle: const Text(
+                subtitle: Text(
                   'Re-roll this reply with a one-shot instruction.',
                   style: TextStyle(
                       color: EmberColors.textMid, fontSize: 12),
@@ -2511,7 +2511,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ListTile(
               leading: const Icon(Icons.text_fields_outlined),
               title: const Text('Select text'),
-              subtitle: const Text(
+              subtitle: Text(
                 'Drag-select a snippet directly on the bubble.',
                 style: TextStyle(
                     color: EmberColors.textMid, fontSize: 12),
@@ -2529,21 +2529,21 @@ class _ChatScreenState extends State<ChatScreen> {
                 _editMessageText(chat, m);
               },
             ),
-            if (isUserSide || isChar) const Divider(color: EmberColors.stroke),
+            if (isUserSide || isChar) Divider(color: EmberColors.stroke),
             // Label adapts to the active delete behaviour so the user
             // isn't blindsided when they have cascade-on and tap what
             // looks like a single-message delete.
             Builder(builder: (_) {
               final cascade = store.chatSettings.cascadeDelete;
               return ListTile(
-                leading: const Icon(Icons.delete_outline,
+                leading: Icon(Icons.delete_outline,
                     color: EmberColors.danger),
                 title: Text(
                   cascade ? 'Delete this and after' : 'Delete just this',
-                  style: const TextStyle(color: EmberColors.danger),
+                  style: TextStyle(color: EmberColors.danger),
                 ),
                 subtitle: cascade
-                    ? const Text(
+                    ? Text(
                         'Chat Settings → Delete behavior is on "This and after".',
                         style: TextStyle(
                             color: EmberColors.textMid, fontSize: 11),
@@ -3027,7 +3027,7 @@ class _ChatScreenState extends State<ChatScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Guide my message',
                   style: TextStyle(
                     color: EmberColors.textHigh,
@@ -3036,7 +3036,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
+                Text(
                   'Jot a rough outline and the model expands it into a full '
                   'message in your voice — or leave it blank to have it draft '
                   'one for you. It lands in the input box to review before you '
@@ -3057,7 +3057,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 const SizedBox(height: 14),
-                const Text(
+                Text(
                   'Perspective',
                   style: TextStyle(
                       color: EmberColors.textMid, fontSize: 12),
@@ -3237,7 +3237,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 const SizedBox(height: 12),
                 if (tab == 0) ...[
-                  const Text(
+                  Text(
                     'The model writes a new opening message contextualised to your scenario. It becomes a new variant of the first message — swipe between greetings.',
                     style: TextStyle(
                         color: EmberColors.textMid, fontSize: 12),
@@ -3254,7 +3254,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                 ] else ...[
-                  const Text(
+                  Text(
                     'Your text becomes a new first-message variant. Use the arrows on the opening message to switch.',
                     style: TextStyle(
                         color: EmberColors.textMid, fontSize: 12),
@@ -3275,7 +3275,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   const SizedBox(height: 8),
                   Text(status!,
                       style:
-                          const TextStyle(color: EmberColors.textMid)),
+                          TextStyle(color: EmberColors.textMid)),
                 ],
               ],
             ),
@@ -3897,7 +3897,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     Text(
                       character!.name,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
                         color: EmberColors.textMid,
                         height: 1.2,
@@ -3911,7 +3911,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     Text(
                       'as ${persona.name}',
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
                         color: EmberColors.textMid,
                         height: 1.2,
@@ -3990,7 +3990,7 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Expanded(
             child: chat.messages.isEmpty
-                ? const Center(
+                ? Center(
                     child: Padding(
                       padding: EdgeInsets.all(32),
                       child: Text(
@@ -4167,7 +4167,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         child: Material(
                           color: EmberColors.bgPanel,
                           elevation: 4,
-                          shape: const StadiumBorder(
+                          shape: StadiumBorder(
                             side: BorderSide(color: EmberColors.stroke),
                           ),
                           child: InkWell(
@@ -4176,8 +4176,8 @@ class _ChatScreenState extends State<ChatScreen> {
                               setState(() => _stickToBottom = true);
                               _scrollToBottom(force: true);
                             },
-                            child: const Padding(
-                              padding: EdgeInsets.symmetric(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
                                   horizontal: 12, vertical: 8),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
@@ -4185,7 +4185,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                   Icon(Icons.arrow_downward,
                                       size: 14,
                                       color: EmberColors.primary),
-                                  SizedBox(width: 6),
+                                  const SizedBox(width: 6),
                                   Text('Jump to bottom',
                                       style: TextStyle(
                                           color: EmberColors.primary,
@@ -4418,7 +4418,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                       charName: widget.character?.name,
                       personaName: widget.persona?.name,
                     ),
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textMid,
                       fontStyle: FontStyle.italic,
                       fontSize: 13,
@@ -4523,7 +4523,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                       : (isUserSide
                           ? 'Type your note…'
                           : 'Generating…'),
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textDim,
                     fontStyle: FontStyle.italic,
                     fontSize: 13,
@@ -4549,7 +4549,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                                 charName: widget.character?.name,
                                 personaName: widget.persona?.name,
                               ),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 color: EmberColors.textHigh,
                                 fontSize: 14,
                                 height: 1.4,
@@ -4587,7 +4587,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                                 padding: const EdgeInsets.only(bottom: 4),
                                 child: Text(
                                   isOoc ? 'OOC' : 'Scene',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     color: EmberColors.primary,
                                     fontSize: 10,
                                     fontWeight: FontWeight.w700,
@@ -4728,7 +4728,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
         padding: const EdgeInsets.only(top: 2),
         child: Text(
           '${m.selectedVariant + 1}/$variantCount',
-          style: const TextStyle(
+          style: TextStyle(
               color: EmberColors.textMid, fontSize: 10),
         ),
       );
@@ -4810,7 +4810,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
               padding: const EdgeInsets.only(left: 48, bottom: 4),
               child: Text(
                 widget.character!.name,
-                style: const TextStyle(
+                style: TextStyle(
                   color: EmberColors.primary,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
@@ -4869,7 +4869,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                   if (!isUserSide) ...[
                     Text(
                       formatApproxTokens(m.text) ?? '',
-                      style: const TextStyle(
+                      style: TextStyle(
                           color: EmberColors.textDim, fontSize: 10),
                     ),
                     if (ChatText.containsReasoning(m.text)) ...[
@@ -4900,7 +4900,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                                 hidden
                                     ? 'Show reasoning'
                                     : 'Hide reasoning',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     color: EmberColors.textMid,
                                     fontSize: 10,
                                     fontWeight: FontWeight.w500),
@@ -4911,7 +4911,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                       ),
                     ],
                     const SizedBox(width: 8),
-                    const Text(
+                    Text(
                       '·',
                       style: TextStyle(
                           color: EmberColors.textDim, fontSize: 10),
@@ -4920,7 +4920,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                   ],
                   Text(
                     '#${widget.messageIndex + 1}',
-                    style: const TextStyle(
+                    style: TextStyle(
                         color: EmberColors.textDim,
                         fontSize: 10,
                         fontFeatures: [FontFeature.tabularFigures()]),
@@ -5079,7 +5079,7 @@ class _InlineMessageEditorState extends State<_InlineMessageEditor> {
           minLines: 3,
           autofocus: true,
           textCapitalization: TextCapitalization.sentences,
-          style: const TextStyle(
+          style: TextStyle(
               color: EmberColors.textHigh, fontSize: 14, height: 1.4),
           decoration: const InputDecoration(
             isDense: true,
@@ -5141,7 +5141,7 @@ class _PresetTag extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           color: EmberColors.primary,
           fontSize: 9,
           fontWeight: FontWeight.w700,
@@ -5299,7 +5299,7 @@ class _SlashRow extends StatelessWidget {
         children: [
           Text(
             cmd,
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'monospace',
               color: EmberColors.primary,
               fontSize: 13,
@@ -5309,7 +5309,7 @@ class _SlashRow extends StatelessWidget {
           Expanded(
             child: Text(
               desc,
-              style: const TextStyle(
+              style: TextStyle(
                   color: EmberColors.textMid, fontSize: 13, height: 1.4),
             ),
           ),
@@ -5349,7 +5349,7 @@ class _ResponderChips extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: EmberColors.bgDeep.withValues(alpha: bubbleAlpha),
-        border: const Border(top: BorderSide(color: EmberColors.stroke)),
+        border: Border(top: BorderSide(color: EmberColors.stroke)),
       ),
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
       child: SingleChildScrollView(
@@ -5466,7 +5466,7 @@ class _InputBar extends StatelessWidget {
         // Match the bubble translucency so the input bar feels like part of
         // the same surface as the messages, not a wall below them.
         color: EmberColors.bgPanel.withValues(alpha: bubbleAlpha),
-        border: const Border(top: BorderSide(color: EmberColors.stroke)),
+        border: Border(top: BorderSide(color: EmberColors.stroke)),
       ),
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
       child: SafeArea(
@@ -5475,7 +5475,7 @@ class _InputBar extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert,
+              icon: Icon(Icons.more_vert,
                   color: EmberColors.textMid),
               tooltip: 'Guide / Impersonate / OOC / System',
               enabled: !generating,
@@ -5491,7 +5491,7 @@ class _InputBar extends StatelessWidget {
                 // Guide (Part 2 — Action 1): arm a one-shot guide for the next
                 // Send. Only present when the Guide feature is enabled.
                 if (onGuideReply != null)
-                  const PopupMenuItem<String>(
+                  PopupMenuItem<String>(
                     value: 'guide',
                     child: Row(children: [
                       Icon(Icons.explore_outlined,
@@ -5504,7 +5504,7 @@ class _InputBar extends StatelessWidget {
                 // perspective). Separate item from one-tap Impersonate below;
                 // only present when the Guide feature is enabled.
                 if (onGuideMessage != null)
-                  const PopupMenuItem<String>(
+                  PopupMenuItem<String>(
                     value: 'guidemsg',
                     child: Row(children: [
                       Icon(Icons.edit_note_outlined,
@@ -5513,7 +5513,7 @@ class _InputBar extends StatelessWidget {
                       Text('Guide my message'),
                     ]),
                   ),
-                const PopupMenuItem<String>(
+                PopupMenuItem<String>(
                   value: 'impersonate',
                   child: Row(children: [
                     Icon(Icons.person_outline,
@@ -5522,7 +5522,7 @@ class _InputBar extends StatelessWidget {
                     Text('Impersonate me'),
                   ]),
                 ),
-                const PopupMenuItem<String>(
+                PopupMenuItem<String>(
                   value: 'ooc',
                   child: Row(children: [
                     Icon(Icons.chat_bubble_outline,
@@ -5535,7 +5535,7 @@ class _InputBar extends StatelessWidget {
                 // one-off system-role instruction. HIDDEN unless enabled in
                 // Chat Settings → System note (then onAddSys is non-null).
                 if (onAddSys != null)
-                  const PopupMenuItem<String>(
+                  PopupMenuItem<String>(
                     value: 'sys',
                     child: Row(children: [
                       Icon(Icons.smart_toy_outlined,
@@ -5728,11 +5728,11 @@ class _ChatSizeBannerState extends State<_ChatSizeBanner> {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: (hard ? EmberColors.danger : const Color(0xFFE9A35A))
+        color: (hard ? EmberColors.danger : Color(0xFFE9A35A))
             .withValues(alpha: 0.12),
         border: Border(
           top: BorderSide(
-            color: (hard ? EmberColors.danger : const Color(0xFFE9A35A))
+            color: (hard ? EmberColors.danger : Color(0xFFE9A35A))
                 .withValues(alpha: 0.35),
           ),
         ),
@@ -5742,7 +5742,7 @@ class _ChatSizeBannerState extends State<_ChatSizeBanner> {
         children: [
           Icon(
             hard ? Icons.error_outline : Icons.warning_amber_outlined,
-            color: hard ? EmberColors.danger : const Color(0xFFE9A35A),
+            color: hard ? EmberColors.danger : Color(0xFFE9A35A),
             size: 14,
           ),
           const SizedBox(width: 8),
@@ -5791,7 +5791,7 @@ class _ArmedGuideChip extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
       child: Row(
         children: [
-          const Icon(Icons.explore_outlined,
+          Icon(Icons.explore_outlined,
               color: EmberColors.primary, size: 14),
           const SizedBox(width: 8),
           Expanded(
@@ -5799,7 +5799,7 @@ class _ArmedGuideChip extends StatelessWidget {
               'Guiding next reply: $guide',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textHigh,
                 fontSize: 11,
                 height: 1.3,
@@ -5811,7 +5811,7 @@ class _ArmedGuideChip extends StatelessWidget {
             tooltip: 'Cancel guide',
             visualDensity: VisualDensity.compact,
             iconSize: 16,
-            icon: const Icon(Icons.close, color: EmberColors.textMid),
+            icon: Icon(Icons.close, color: EmberColors.textMid),
           ),
         ],
       ),
@@ -5848,17 +5848,17 @@ class _CheckpointDivider extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           child: Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Divider(
                   color: EmberColors.stroke,
                   thickness: 1,
                   endIndent: 8,
                 ),
               ),
-              const Icon(Icons.psychology_outlined,
+              Icon(Icons.psychology_outlined,
                   size: 14, color: EmberColors.primary),
               const SizedBox(width: 6),
-              const Text(
+              Text(
                 'Checkpoint',
                 style: TextStyle(
                   color: EmberColors.primary,
@@ -5867,7 +5867,7 @@ class _CheckpointDivider extends StatelessWidget {
                   letterSpacing: 0.3,
                 ),
               ),
-              const Expanded(
+              Expanded(
                 child: Divider(
                   color: EmberColors.stroke,
                   thickness: 1,

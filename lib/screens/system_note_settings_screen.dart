@@ -62,7 +62,7 @@ class SystemNoteSettingsScreen extends StatelessWidget {
             child: SwitchListTile(
               title: const Text('Show "Add system note"',
                   style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: const Text(
+              subtitle: Text(
                 'Adds a "system note" action to the chat input\'s ⋮ menu, next '
                 'to Impersonate and Add OOC. The /sys command works regardless.',
                 style: TextStyle(color: EmberColors.textMid, fontSize: 12),

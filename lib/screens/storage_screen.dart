@@ -89,7 +89,7 @@ class _StorageScreenState extends State<StorageScreen> {
                   const SizedBox(height: 8),
                   Text('$used used (main + rotated backups)',
                       style:
-                          const TextStyle(color: EmberColors.textMid)),
+                          TextStyle(color: EmberColors.textMid)),
                 ],
               ),
             ),
@@ -133,14 +133,14 @@ class _StorageScreenState extends State<StorageScreen> {
           // backup slot in the rotation chain so the just-saved
           // state becomes recoverable from bak.0 on next save.
           OutlinedButton.icon(
-            icon: const Icon(Icons.save_outlined,
+            icon: Icon(Icons.save_outlined,
                 color: EmberColors.primary),
-            label: const Text(
+            label: Text(
               'Save snapshot now',
               style: TextStyle(color: EmberColors.primary),
             ),
             style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: EmberColors.primary),
+              side: BorderSide(color: EmberColors.primary),
             ),
             onPressed: () => _saveSnapshot(context),
           ),
@@ -160,7 +160,7 @@ class _StorageScreenState extends State<StorageScreen> {
                   const Text('Diagnostics',
                       style: TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 4),
-                  const Text(
+                  Text(
                     'Crashes and uncaught exceptions are logged to a '
                     'file on this device only. Nothing leaves your '
                     'phone unless you tap one of the buttons below.',
@@ -176,42 +176,42 @@ class _StorageScreenState extends State<StorageScreen> {
                     runSpacing: 8,
                     children: [
                       OutlinedButton.icon(
-                        icon: const Icon(Icons.copy_outlined,
+                        icon: Icon(Icons.copy_outlined,
                             color: EmberColors.primary, size: 18),
-                        label: const Text(
+                        label: Text(
                           'Copy error log',
                           style:
                               TextStyle(color: EmberColors.primary),
                         ),
                         style: OutlinedButton.styleFrom(
-                          side: const BorderSide(
+                          side: BorderSide(
                               color: EmberColors.primary),
                         ),
                         onPressed: () => _copyErrorLog(context),
                       ),
                       OutlinedButton.icon(
-                        icon: const Icon(Icons.ios_share,
+                        icon: Icon(Icons.ios_share,
                             color: EmberColors.primary, size: 18),
-                        label: const Text(
+                        label: Text(
                           'Share error log',
                           style:
                               TextStyle(color: EmberColors.primary),
                         ),
                         style: OutlinedButton.styleFrom(
-                          side: const BorderSide(
+                          side: BorderSide(
                               color: EmberColors.primary),
                         ),
                         onPressed: () => _shareErrorLog(context),
                       ),
                       OutlinedButton.icon(
-                        icon: const Icon(Icons.delete_sweep_outlined,
+                        icon: Icon(Icons.delete_sweep_outlined,
                             color: EmberColors.textMid, size: 18),
-                        label: const Text(
+                        label: Text(
                           'Clear log',
                           style: TextStyle(color: EmberColors.textMid),
                         ),
                         style: OutlinedButton.styleFrom(
-                          side: const BorderSide(
+                          side: BorderSide(
                               color: EmberColors.stroke),
                         ),
                         onPressed: () => _clearErrorLog(context),
@@ -245,7 +245,7 @@ class _StorageScreenState extends State<StorageScreen> {
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 4),
-                  const Text(
+                  Text(
                     'Removes every character, chat, persona, preset, lorebook '
                     'and API connection stored on this device. '
                     'Your settings (temperature, chat behaviour, etc.) are kept. '
@@ -260,14 +260,14 @@ class _StorageScreenState extends State<StorageScreen> {
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton.icon(
-                    icon: const Icon(Icons.delete_outline,
+                    icon: Icon(Icons.delete_outline,
                         color: EmberColors.danger),
-                    label: const Text(
+                    label: Text(
                       'Clear library',
                       style: TextStyle(color: EmberColors.danger),
                     ),
                     style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: EmberColors.danger),
+                      side: BorderSide(color: EmberColors.danger),
                     ),
                     onPressed: () => _confirmWipe(context),
                   ),
@@ -506,7 +506,7 @@ class _LlmDebugLogCardState extends State<_LlmDebugLogCard> {
             const Text('Developer',
                 style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 4),
-            const Text(
+            Text(
               'Stored locally on this device; contains your chat text; '
               'never your API key. For debugging.',
               style: TextStyle(
@@ -535,38 +535,38 @@ class _LlmDebugLogCardState extends State<_LlmDebugLogCard> {
               runSpacing: 8,
               children: [
                 OutlinedButton.icon(
-                  icon: const Icon(Icons.ios_share,
+                  icon: Icon(Icons.ios_share,
                       color: EmberColors.primary, size: 18),
-                  label: const Text(
+                  label: Text(
                     'Export logs',
                     style: TextStyle(color: EmberColors.primary),
                   ),
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: EmberColors.primary),
+                    side: BorderSide(color: EmberColors.primary),
                   ),
                   onPressed: () => _export(context),
                 ),
                 OutlinedButton.icon(
-                  icon: const Icon(Icons.copy_outlined,
+                  icon: Icon(Icons.copy_outlined,
                       color: EmberColors.primary, size: 18),
-                  label: const Text(
+                  label: Text(
                     'Copy logs',
                     style: TextStyle(color: EmberColors.primary),
                   ),
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: EmberColors.primary),
+                    side: BorderSide(color: EmberColors.primary),
                   ),
                   onPressed: () => _copy(context),
                 ),
                 OutlinedButton.icon(
-                  icon: const Icon(Icons.delete_sweep_outlined,
+                  icon: Icon(Icons.delete_sweep_outlined,
                       color: EmberColors.textMid, size: 18),
-                  label: const Text(
+                  label: Text(
                     'Clear logs',
                     style: TextStyle(color: EmberColors.textMid),
                   ),
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: EmberColors.stroke),
+                    side: BorderSide(color: EmberColors.stroke),
                   ),
                   onPressed: () => _clear(context),
                 ),
@@ -633,7 +633,7 @@ class _LoadStatusBanner extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               result.diagnostics,
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textMid,
                 fontSize: 12,
                 height: 1.45,
@@ -642,7 +642,7 @@ class _LoadStatusBanner extends StatelessWidget {
           ],
           if (errors.isNotEmpty) ...[
             const SizedBox(height: 10),
-            const Text(
+            Text(
               'Per-collection issues:',
               style: TextStyle(
                 color: EmberColors.textHigh,
@@ -656,7 +656,7 @@ class _LoadStatusBanner extends StatelessWidget {
                 padding: const EdgeInsets.only(left: 6, top: 2),
                 child: Text(
                   '• $e',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textMid,
                     fontSize: 11.5,
                     height: 1.4,
@@ -723,7 +723,7 @@ class _SecureKeyErrorBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const color = EmberColors.danger;
+    final color = EmberColors.danger;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -736,10 +736,10 @@ class _SecureKeyErrorBanner extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.key_off_outlined,
+              Icon(Icons.key_off_outlined,
                   color: color, size: 18),
               const SizedBox(width: 8),
-              const Expanded(
+              Expanded(
                 child: Text(
                   'API key storage errors',
                   style: TextStyle(
@@ -757,7 +757,7 @@ class _SecureKeyErrorBanner extends StatelessWidget {
                   minimumSize: const Size(0, 0),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                child: const Text(
+                child: Text(
                   'Dismiss',
                   style: TextStyle(
                     color: EmberColors.textMid,
@@ -768,7 +768,7 @@ class _SecureKeyErrorBanner extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-          const Text(
+          Text(
             'One or more API keys failed to read/write from OS-secure '
             'storage. If a provider is missing its key, re-paste it '
             'in API Connections.',
@@ -779,7 +779,7 @@ class _SecureKeyErrorBanner extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
-          const Text(
+          Text(
             'Recent failures:',
             style: TextStyle(
               color: EmberColors.textHigh,
@@ -793,7 +793,7 @@ class _SecureKeyErrorBanner extends StatelessWidget {
               padding: const EdgeInsets.only(left: 6, top: 2),
               child: Text(
                 '• $e',
-                style: const TextStyle(
+                style: TextStyle(
                   color: EmberColors.textMid,
                   fontSize: 11.5,
                   height: 1.4,
@@ -805,7 +805,7 @@ class _SecureKeyErrorBanner extends StatelessWidget {
               padding: const EdgeInsets.only(left: 6, top: 4),
               child: Text(
                 '…and ${errors.length - 8} more',
-                style: const TextStyle(
+                style: TextStyle(
                   color: EmberColors.textMid,
                   fontSize: 11.5,
                   fontStyle: FontStyle.italic,
@@ -836,7 +836,7 @@ class _StatTile extends StatelessWidget {
       title: Text(label),
       trailing: Text(
         value,
-        style: const TextStyle(
+        style: TextStyle(
           color: EmberColors.textMid,
           fontWeight: FontWeight.w600,
           fontFeatures: [FontFeature.tabularFigures()],

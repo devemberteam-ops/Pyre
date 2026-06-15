@@ -66,12 +66,12 @@ class LorebookBindingSection extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Icon(Icons.menu_book_outlined,
+            Icon(Icons.menu_book_outlined,
                 size: 16, color: EmberColors.textMid),
             const SizedBox(width: 6),
             Text(
               label.toUpperCase(),
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textMid,
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
@@ -84,7 +84,7 @@ class LorebookBindingSection extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             sublabel!,
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.textDim,
               fontSize: 11,
               height: 1.4,
@@ -93,7 +93,7 @@ class LorebookBindingSection extends StatelessWidget {
         ],
         const SizedBox(height: 8),
         if (boundBooks.isEmpty && readOnly)
-          const Text(
+          Text(
             'No linked lorebooks.',
             style:
                 TextStyle(color: EmberColors.textDim, fontStyle: FontStyle.italic),
@@ -110,14 +110,14 @@ class LorebookBindingSection extends StatelessWidget {
                   side: BorderSide(
                     color: EmberColors.primary.withValues(alpha: 0.30),
                   ),
-                  avatar: const Icon(
+                  avatar: Icon(
                     Icons.menu_book_outlined,
                     size: 14,
                     color: EmberColors.primary,
                   ),
                   label: Text(
                     '${b.name} · ${b.entries.length}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textHigh,
                       fontSize: 12,
                     ),
@@ -137,9 +137,9 @@ class LorebookBindingSection extends StatelessWidget {
                 ActionChip(
                   backgroundColor: EmberColors.bgDeep,
                   side: BorderSide(color: EmberColors.stroke),
-                  avatar: const Icon(Icons.add,
+                  avatar: Icon(Icons.add,
                       size: 14, color: EmberColors.textMid),
-                  label: const Text(
+                  label: Text(
                     'Add lorebook',
                     style:
                         TextStyle(color: EmberColors.textMid, fontSize: 12),
@@ -181,7 +181,7 @@ class LorebookBindingSection extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                 child: Row(
                   children: [
-                    const Icon(Icons.menu_book_outlined,
+                    Icon(Icons.menu_book_outlined,
                         color: EmberColors.primary),
                     const SizedBox(width: 10),
                     const Text(
@@ -191,7 +191,7 @@ class LorebookBindingSection extends StatelessWidget {
                     ),
                     const Spacer(),
                     IconButton(
-                      icon: const Icon(Icons.close,
+                      icon: Icon(Icons.close,
                           color: EmberColors.textMid),
                       onPressed: () => Navigator.pop(ctx),
                     ),
@@ -232,11 +232,11 @@ class LorebookBindingSection extends StatelessWidget {
                           '${b.description.isNotEmpty ? "  ·  ${b.description}" : ""}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                               color: EmberColors.textDim, fontSize: 11),
                         ),
                         trailing: alreadyBound
-                            ? const Icon(Icons.check,
+                            ? Icon(Icons.check,
                                 color: EmberColors.textDim, size: 18)
                             : null,
                         onTap: alreadyBound
@@ -290,9 +290,9 @@ class LorebookUsedBySection extends StatelessWidget {
       children: [
         Row(
           children: [
-            const Icon(Icons.link, size: 16, color: EmberColors.textMid),
+            Icon(Icons.link, size: 16, color: EmberColors.textMid),
             const SizedBox(width: 6),
-            const Text(
+            Text(
               'USED BY',
               style: TextStyle(
                 color: EmberColors.textMid,
@@ -312,7 +312,7 @@ class LorebookUsedBySection extends StatelessWidget {
                 ),
                 child: Text(
                   '$totalRefs',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.primary,
                     fontSize: 10,
                     fontWeight: FontWeight.w700,
@@ -322,7 +322,7 @@ class LorebookUsedBySection extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 4),
-        const Text(
+        Text(
           'To bind or unbind, edit the character or persona. Per-chat '
           'attachments are managed from the chat\'s Customize panel.',
           style: TextStyle(
@@ -333,14 +333,14 @@ class LorebookUsedBySection extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         if (chars.isEmpty && personas.isEmpty && perChatRefs == 0)
-          const Text(
+          Text(
             'Not bound to any character, persona, or chat.',
             style: TextStyle(
                 color: EmberColors.textDim, fontStyle: FontStyle.italic),
           )
         else ...[
           if (chars.isNotEmpty) ...[
-            const Text(
+            Text(
               'Characters',
               style: TextStyle(
                   color: EmberColors.textDim, fontSize: 11, height: 1.6),
@@ -351,11 +351,11 @@ class LorebookUsedBySection extends StatelessWidget {
               children: [
                 for (final c in chars)
                   Chip(
-                    avatar: const Icon(Icons.person,
+                    avatar: Icon(Icons.person,
                         size: 14, color: EmberColors.primary),
                     label: Text(c.name,
                         style:
-                            const TextStyle(color: EmberColors.textHigh)),
+                            TextStyle(color: EmberColors.textHigh)),
                     backgroundColor:
                         EmberColors.primary.withValues(alpha: 0.10),
                   ),
@@ -364,7 +364,7 @@ class LorebookUsedBySection extends StatelessWidget {
           ],
           if (personas.isNotEmpty) ...[
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Personas',
               style: TextStyle(
                   color: EmberColors.textDim, fontSize: 11, height: 1.6),
@@ -375,11 +375,11 @@ class LorebookUsedBySection extends StatelessWidget {
               children: [
                 for (final p in personas)
                   Chip(
-                    avatar: const Icon(Icons.face,
+                    avatar: Icon(Icons.face,
                         size: 14, color: EmberColors.primary),
                     label: Text(p.name,
                         style:
-                            const TextStyle(color: EmberColors.textHigh)),
+                            TextStyle(color: EmberColors.textHigh)),
                     backgroundColor:
                         EmberColors.primary.withValues(alpha: 0.10),
                   ),
@@ -391,7 +391,7 @@ class LorebookUsedBySection extends StatelessWidget {
             Text(
               'Plus $perChatRefs per-chat attachment'
               '${perChatRefs == 1 ? "" : "s"}.',
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textDim,
                 fontSize: 11,
                 fontStyle: FontStyle.italic,

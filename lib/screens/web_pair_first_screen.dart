@@ -159,7 +159,7 @@ class _WebPairFirstScreenState extends State<_WebPairFirstScreen> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
+                Text(
                   'Connect this browser to your PC',
                   style: TextStyle(
                     color: EmberColors.textMid,
@@ -206,7 +206,7 @@ class _WebPairFirstScreenState extends State<_WebPairFirstScreen> {
                   padding: const EdgeInsets.only(left: 2, bottom: 6),
                   child: Text(
                     'Connecting to: $_host:$_port',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textDim,
                       fontSize: 11,
                       fontFamily: 'monospace',
@@ -255,7 +255,7 @@ class _WebPairFirstScreenState extends State<_WebPairFirstScreen> {
                       : const Text('Connect'),
                 ),
                 const SizedBox(height: 20),
-                const Text(
+                Text(
                   'Pyre runs on your own LAN. Your data never goes to a '
                   'cloud — your PC and this browser tab talk directly.',
                   textAlign: TextAlign.center,

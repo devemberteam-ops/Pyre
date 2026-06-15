@@ -202,9 +202,9 @@ Future<void> _showPersonaAddSheet(BuildContext context) async {
         children: [
           ListTile(
             leading:
-                const Icon(Icons.auto_awesome, color: EmberColors.primary),
+                Icon(Icons.auto_awesome, color: EmberColors.primary),
             title: const Text('Build with AI assistant'),
-            subtitle: const Text(
+            subtitle: Text(
               'Chat with an AI that helps you flesh out your persona — who '
               'you are in chats — then writes it for you.',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
@@ -218,9 +218,9 @@ Future<void> _showPersonaAddSheet(BuildContext context) async {
             },
           ),
           ListTile(
-            leading: const Icon(Icons.edit_note, color: EmberColors.primary),
+            leading: Icon(Icons.edit_note, color: EmberColors.primary),
             title: const Text('Create manually'),
-            subtitle: const Text(
+            subtitle: Text(
               'Fill in the persona fields yourself in the in-app editor.',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
             ),
@@ -229,14 +229,14 @@ Future<void> _showPersonaAddSheet(BuildContext context) async {
               showPersonaEditor(context);
             },
           ),
-          const Divider(color: EmberColors.stroke, height: 1),
+          Divider(color: EmberColors.stroke, height: 1),
           // Wave CY.18.250: import a persona from a file — either a
           // chara_card PNG/JSON (converted via buildPersonaFromCharacter)
           // or a native Pyre persona JSON.
           ListTile(
             leading: const Icon(Icons.file_upload_outlined),
             title: const Text('Import from file'),
-            subtitle: const Text(
+            subtitle: Text(
               'Pick a character card PNG/JSON or a Pyre persona JSON from your device.',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
             ),
@@ -391,9 +391,9 @@ Future<void> _showImportSourceSheet(BuildContext context) async {
         mainAxisSize: MainAxisSize.min,
         children: [
           ListTile(
-            leading: const Icon(Icons.auto_awesome, color: EmberColors.primary),
+            leading: Icon(Icons.auto_awesome, color: EmberColors.primary),
             title: const Text('Build with AI assistant'),
-            subtitle: const Text(
+            subtitle: Text(
               'Chat with an AI that helps you flesh out a character, then writes the card for you.',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
             ),
@@ -411,9 +411,9 @@ Future<void> _showImportSourceSheet(BuildContext context) async {
           // from scratch → if drafts exist, show chooser (Resume X /
           // Start fresh); if none, go straight to new editor.
           ListTile(
-            leading: const Icon(Icons.edit_note, color: EmberColors.primary),
+            leading: Icon(Icons.edit_note, color: EmberColors.primary),
             title: const Text('Create from scratch'),
-            subtitle: const Text(
+            subtitle: Text(
               'Build a new chara_card_v2 card from blank in the in-app editor.',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
             ),
@@ -422,11 +422,11 @@ Future<void> _showImportSourceSheet(BuildContext context) async {
               await _createBlankCharacter(context);
             },
           ),
-          const Divider(color: EmberColors.stroke, height: 1),
+          Divider(color: EmberColors.stroke, height: 1),
           ListTile(
             leading: const Icon(Icons.link),
             title: const Text('From URL'),
-            subtitle: const Text(
+            subtitle: Text(
               'Paste a direct PNG link from botbooru or chub.',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
             ),
@@ -438,7 +438,7 @@ Future<void> _showImportSourceSheet(BuildContext context) async {
           ListTile(
             leading: const Icon(Icons.file_upload_outlined),
             title: const Text('From file'),
-            subtitle: const Text(
+            subtitle: Text(
               'Pick a Tavern Card PNG (or .json) from your device.',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
             ),
@@ -499,7 +499,7 @@ Future<void> _showResumeOrStartFreshSheet(BuildContext context) async {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
               child: Align(
                 alignment: Alignment.centerLeft,
@@ -513,7 +513,7 @@ Future<void> _showResumeOrStartFreshSheet(BuildContext context) async {
                 ),
               ),
             ),
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
               child: Align(
                 alignment: Alignment.centerLeft,
@@ -534,24 +534,24 @@ Future<void> _showResumeOrStartFreshSheet(BuildContext context) async {
                 padding: EdgeInsets.zero,
                 itemCount: drafts.length,
                 separatorBuilder: (_, _) =>
-                    const Divider(height: 1, color: EmberColors.stroke),
+                    Divider(height: 1, color: EmberColors.stroke),
                 itemBuilder: (_, i) {
                   final d = drafts[i];
                   final title = d.name.trim().isEmpty
                       ? '(unnamed draft)'
                       : d.name;
                   return ListTile(
-                    leading: const Icon(Icons.drafts_outlined,
+                    leading: Icon(Icons.drafts_outlined,
                         color: EmberColors.textMid),
                     title: Text(title,
                         style:
-                            const TextStyle(color: EmberColors.textHigh)),
+                            TextStyle(color: EmberColors.textHigh)),
                     subtitle: d.tagline != null && d.tagline!.isNotEmpty
                         ? Text(
                             d.tagline!,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                                 color: EmberColors.textMid, fontSize: 11),
                           )
                         : null,
@@ -594,15 +594,15 @@ Future<void> _showResumeOrStartFreshSheet(BuildContext context) async {
                 },
               ),
             ),
-            const Divider(color: EmberColors.stroke, height: 1),
+            Divider(color: EmberColors.stroke, height: 1),
             ListTile(
-              leading: const Icon(Icons.add,
+              leading: Icon(Icons.add,
                   color: EmberColors.primary),
-              title: const Text('Start fresh',
+              title: Text('Start fresh',
                   style: TextStyle(
                       color: EmberColors.textHigh,
                       fontWeight: FontWeight.w600)),
-              subtitle: const Text(
+              subtitle: Text(
                 'Create a brand-new card alongside your existing drafts.',
                 style: TextStyle(
                     color: EmberColors.textMid, fontSize: 12),
@@ -1285,7 +1285,7 @@ class _OrgChip extends StatelessWidget {
           Text(
             label,
             style:
-                const TextStyle(color: EmberColors.textHigh, fontSize: 12),
+                TextStyle(color: EmberColors.textHigh, fontSize: 12),
           ),
           if (trailingIcon != null) ...[
             const SizedBox(width: 2),
@@ -1374,11 +1374,11 @@ class _FavoritesHeader extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
         child: Row(
           children: [
-            const Icon(Icons.star, size: 14, color: EmberColors.primary),
+            Icon(Icons.star, size: 14, color: EmberColors.primary),
             const SizedBox(width: 6),
             Text(
               'FAVORITES ($count)',
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.primary,
                 fontWeight: FontWeight.w700,
                 fontSize: 11,
@@ -1440,7 +1440,7 @@ class _CharacterCard extends StatelessWidget {
               visualDensity: VisualDensity.compact,
             ),
             IconButton(
-              icon: const Icon(Icons.more_vert,
+              icon: Icon(Icons.more_vert,
                   color: EmberColors.textMid),
               tooltip: 'Character actions',
               onPressed: () =>
@@ -1484,7 +1484,7 @@ class _CharacterSubtitle extends StatelessWidget {
             padding: const EdgeInsets.only(top: 1),
             child: Text(
               tokenLabel,
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textDim,
                 fontSize: 10,
                 fontFeatures: [FontFeature.tabularFigures()],
@@ -1502,20 +1502,20 @@ class _CharacterSubtitle extends StatelessWidget {
         character.tagline!,
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(color: EmberColors.textMid),
+        style: TextStyle(color: EmberColors.textMid),
       );
     }
     if (character.tags.isNotEmpty) {
       return Row(
         children: [
-          const Icon(Icons.tag, size: 12, color: EmberColors.textDim),
+          Icon(Icons.tag, size: 12, color: EmberColors.textDim),
           const SizedBox(width: 4),
           Expanded(
             child: Text(
               character.tags.join(', '),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: EmberColors.textMid, fontSize: 13),
+              style: TextStyle(color: EmberColors.textMid, fontSize: 13),
             ),
           ),
         ],
@@ -1526,7 +1526,7 @@ class _CharacterSubtitle extends StatelessWidget {
       firstLine.isEmpty ? '(no description)' : firstLine,
       maxLines: 2,
       overflow: TextOverflow.ellipsis,
-      style: const TextStyle(color: EmberColors.textMid),
+      style: TextStyle(color: EmberColors.textMid),
     );
   }
 }
@@ -1749,7 +1749,7 @@ class _PersonaCard extends StatelessWidget {
                   border: Border.all(
                       color: EmberColors.primary.withValues(alpha: 0.5)),
                 ),
-                child: const Text(
+                child: Text(
                   'DEFAULT',
                   style: TextStyle(
                     color: EmberColors.primary,
@@ -1774,7 +1774,7 @@ class _PersonaCard extends StatelessWidget {
                           : p.description.split('\n').first.trim(),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: EmberColors.textMid),
+                      style: TextStyle(color: EmberColors.textMid),
                     ),
                   ),
                   if (tokenLabel != null) ...[
@@ -1783,7 +1783,7 @@ class _PersonaCard extends StatelessWidget {
                       padding: const EdgeInsets.only(top: 1),
                       child: Text(
                         tokenLabel,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: EmberColors.textDim,
                           fontSize: 10,
                           fontFeatures: [FontFeature.tabularFigures()],
@@ -1809,7 +1809,7 @@ class _PersonaCard extends StatelessWidget {
               visualDensity: VisualDensity.compact,
             ),
             IconButton(
-              icon: const Icon(Icons.more_vert,
+              icon: Icon(Icons.more_vert,
                   color: EmberColors.textMid),
               tooltip: 'Persona actions',
               onPressed: () => _showPersonaMenu(context, store, p),
@@ -1845,7 +1845,7 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
         mainAxisSize: MainAxisSize.min,
         children: [
           ListTile(
-            leading: const Icon(Icons.add_comment_outlined,
+            leading: Icon(Icons.add_comment_outlined,
                 color: EmberColors.primary),
             title: const Text('Start new chat'),
             onTap: () {
@@ -1855,12 +1855,12 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
           ),
           if (existingChat != null)
             ListTile(
-              leading: const Icon(Icons.play_arrow_rounded,
+              leading: Icon(Icons.play_arrow_rounded,
                   color: EmberColors.primary),
               title: const Text('Continue chat'),
               subtitle: Text(
                 'Resume "${c.name}" — ${existingChat.messages.length} msgs.',
-                style: const TextStyle(
+                style: TextStyle(
                     color: EmberColors.textMid, fontSize: 12),
               ),
               onTap: () {
@@ -1881,7 +1881,7 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
           ListTile(
             leading: const Icon(Icons.face_outlined),
             title: const Text('Add as persona'),
-            subtitle: const Text(
+            subtitle: Text(
               "Creates a persona with this character's name + avatar.",
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
             ),
@@ -1896,7 +1896,7 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
           ListTile(
             leading: const Icon(Icons.download_outlined),
             title: const Text('Export as PNG card'),
-            subtitle: const Text(
+            subtitle: Text(
               'chara_card_v2 PNG, ready to upload to botbooru / chub / share.',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
             ),
@@ -1911,7 +1911,7 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
           ListTile(
             leading: const Icon(Icons.copy_outlined),
             title: const Text('Duplicate'),
-            subtitle: const Text(
+            subtitle: Text(
               'Make an editable copy of this character.',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
             ),
@@ -1935,14 +1935,14 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
                   .map((f) => f.name)
                   .toList();
               if (memberOf.isEmpty) {
-                return const Text(
+                return Text(
                   'Group this card with others.',
                   style: TextStyle(color: EmberColors.textMid, fontSize: 12),
                 );
               }
               return Text(
                 'In: ${memberOf.join(", ")}',
-                style: const TextStyle(
+                style: TextStyle(
                     color: EmberColors.textMid, fontSize: 12),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -1953,11 +1953,11 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
               await _showAddToFolderSheet(context, store, c);
             },
           ),
-          const Divider(color: EmberColors.stroke),
+          Divider(color: EmberColors.stroke),
           ListTile(
-            leading: const Icon(Icons.delete_outline,
+            leading: Icon(Icons.delete_outline,
                 color: EmberColors.danger),
-            title: const Text('Delete character',
+            title: Text('Delete character',
                 style: TextStyle(color: EmberColors.danger)),
             onTap: () async {
               Navigator.pop(sheet);
@@ -2000,7 +2000,7 @@ void _showPersonaMenu(BuildContext context, AppStore store, Persona p) {
           ),
           if (!isActive)
             ListTile(
-              leading: const Icon(Icons.check_circle_outline,
+              leading: Icon(Icons.check_circle_outline,
                   color: EmberColors.primary),
               title: const Text('Set as default'),
               onTap: () {
@@ -2014,7 +2014,7 @@ void _showPersonaMenu(BuildContext context, AppStore store, Persona p) {
           ListTile(
             leading: const Icon(Icons.download_outlined),
             title: const Text('Export as PNG'),
-            subtitle: const Text(
+            subtitle: Text(
               'chara_card_v2 PNG (+ gallery), ready to share or re-import.',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
             ),
@@ -2027,7 +2027,7 @@ void _showPersonaMenu(BuildContext context, AppStore store, Persona p) {
           ListTile(
             leading: const Icon(Icons.copy_outlined),
             title: const Text('Duplicate'),
-            subtitle: const Text(
+            subtitle: Text(
               'Make an editable copy of this persona.',
               style: TextStyle(color: EmberColors.textMid, fontSize: 12),
             ),
@@ -2040,10 +2040,10 @@ void _showPersonaMenu(BuildContext context, AppStore store, Persona p) {
               );
             },
           ),
-          const Divider(color: EmberColors.stroke),
+          Divider(color: EmberColors.stroke),
           ListTile(
-            leading: const Icon(Icons.delete_outline, color: EmberColors.danger),
-            title: const Text('Delete persona',
+            leading: Icon(Icons.delete_outline, color: EmberColors.danger),
+            title: Text('Delete persona',
                 style: TextStyle(color: EmberColors.danger)),
             onTap: () async {
               Navigator.pop(sheet);
@@ -2090,7 +2090,7 @@ Future<void> _showImportCharacterDialog(BuildContext context) async {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Paste a chub.ai / botbooru.com character page, or a direct '
               'link to a Tavern Card v2 file (.png or .json) — e.g. a '
               'catbox or pixeldrain link.',
@@ -2106,7 +2106,7 @@ Future<void> _showImportCharacterDialog(BuildContext context) async {
             ),
             if (err != null) ...[
               const SizedBox(height: 8),
-              Text(err!, style: const TextStyle(color: EmberColors.danger)),
+              Text(err!, style: TextStyle(color: EmberColors.danger)),
             ],
           ],
         ),
@@ -2332,7 +2332,7 @@ Future<void> _showFoldersSheet(BuildContext context, AppStore store) async {
                   padding: const EdgeInsets.fromLTRB(20, 14, 12, 4),
                   child: Row(
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           'Folders',
                           style: TextStyle(
@@ -2350,7 +2350,7 @@ Future<void> _showFoldersSheet(BuildContext context, AppStore store) async {
                   ),
                 ),
                 if (folders.isEmpty)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.fromLTRB(20, 8, 20, 12),
                     child: Text(
                       'No folders yet. Create one to group characters.',
@@ -2367,7 +2367,7 @@ Future<void> _showFoldersSheet(BuildContext context, AppStore store) async {
                       shrinkWrap: true,
                       children: [
                         ListTile(
-                          leading: const Icon(Icons.folder_open,
+                          leading: Icon(Icons.folder_open,
                               color: EmberColors.textMid),
                           title: const Text('All characters'),
                           subtitle: Text(
@@ -2375,7 +2375,7 @@ Future<void> _showFoldersSheet(BuildContext context, AppStore store) async {
                             style: const TextStyle(fontSize: 11),
                           ),
                           trailing: store.charFolderId == null
-                              ? const Icon(Icons.check_circle,
+                              ? Icon(Icons.check_circle,
                                   color: EmberColors.primary, size: 18)
                               : null,
                           onTap: () {
@@ -2383,10 +2383,10 @@ Future<void> _showFoldersSheet(BuildContext context, AppStore store) async {
                             Navigator.of(sheetCtx).pop();
                           },
                         ),
-                        const Divider(height: 1, color: EmberColors.stroke),
+                        Divider(height: 1, color: EmberColors.stroke),
                         for (final f in folders)
                           ListTile(
-                            leading: const Icon(Icons.folder,
+                            leading: Icon(Icons.folder,
                                 color: EmberColors.primary),
                             title: Text(f.name),
                             subtitle: Text(
@@ -2397,7 +2397,7 @@ Future<void> _showFoldersSheet(BuildContext context, AppStore store) async {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 if (store.charFolderId == f.id)
-                                  const Padding(
+                                  Padding(
                                     padding: EdgeInsets.only(right: 6),
                                     child: Icon(Icons.check_circle,
                                         color: EmberColors.primary,
@@ -2449,9 +2449,9 @@ Future<void> _showFoldersSheet(BuildContext context, AppStore store) async {
                       ],
                     ),
                   ),
-                const Divider(height: 1, color: EmberColors.stroke),
+                Divider(height: 1, color: EmberColors.stroke),
                 ListTile(
-                  leading: const Icon(Icons.add,
+                  leading: Icon(Icons.add,
                       color: EmberColors.primary),
                   title: const Text('New folder'),
                   onTap: () async {
@@ -2555,7 +2555,7 @@ Future<void> _showTagPickerSheet(
                   padding: const EdgeInsets.fromLTRB(20, 14, 12, 4),
                   child: Row(
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           'Filter by tags',
                           style: TextStyle(
@@ -2572,7 +2572,7 @@ Future<void> _showTagPickerSheet(
                     ],
                   ),
                 ),
-                const Padding(
+                Padding(
                   padding: EdgeInsets.fromLTRB(20, 0, 20, 6),
                   child: Text(
                     'Tap to select. Multiple selections AND together '
@@ -2616,7 +2616,7 @@ Future<void> _showTagPickerSheet(
                     ),
                   ),
                 ),
-                const Divider(height: 1, color: EmberColors.stroke),
+                Divider(height: 1, color: EmberColors.stroke),
                 Padding(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 16, vertical: 10),
@@ -2684,7 +2684,7 @@ Future<void> _showAddToFolderSheet(
                       Expanded(
                         child: Text(
                           'Add "${c.name}" to folder',
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: EmberColors.textHigh,
                             fontWeight: FontWeight.w600,
                             fontSize: 16,
@@ -2701,7 +2701,7 @@ Future<void> _showAddToFolderSheet(
                   ),
                 ),
                 if (folders.isEmpty)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.fromLTRB(20, 8, 20, 12),
                     child: Text(
                       'No folders yet. Create one below to group cards.',
@@ -2739,9 +2739,9 @@ Future<void> _showAddToFolderSheet(
                       ],
                     ),
                   ),
-                const Divider(height: 1, color: EmberColors.stroke),
+                Divider(height: 1, color: EmberColors.stroke),
                 ListTile(
-                  leading: const Icon(Icons.add,
+                  leading: Icon(Icons.add,
                       color: EmberColors.primary),
                   title: const Text('Create new folder + add'),
                   onTap: () async {

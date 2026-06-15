@@ -57,7 +57,7 @@ class ChatsOfCharacterScreen extends StatelessWidget {
                     children: [
                       Text(
                         'Chats with ${character?.name ?? "this character"}',
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: EmberColors.textMid,
                           fontSize: 12,
                           letterSpacing: 0.4,
@@ -66,7 +66,7 @@ class ChatsOfCharacterScreen extends StatelessWidget {
                       const Spacer(),
                       Text(
                         chats.length.toString(),
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: EmberColors.textMid,
                           fontSize: 12,
                         ),
@@ -74,7 +74,7 @@ class ChatsOfCharacterScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-                const Divider(
+                Divider(
                   color: EmberColors.stroke,
                   height: 1,
                   indent: 16,
@@ -83,7 +83,7 @@ class ChatsOfCharacterScreen extends StatelessWidget {
                 Expanded(
                   child: ListView.separated(
                     itemCount: chats.length,
-                    separatorBuilder: (context, index) => const Divider(
+                    separatorBuilder: (context, index) => Divider(
                       color: EmberColors.stroke,
                       height: 1,
                       indent: 72,
@@ -163,7 +163,7 @@ class _ChatRow extends StatelessWidget {
                       Flexible(
                         child: Text(
                           '${chat.messages.length} ${chat.messages.length == 1 ? "msg" : "msgs"} · ${_relative(chat.updatedAt)}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: EmberColors.primary,
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
@@ -184,7 +184,7 @@ class _ChatRow extends StatelessWidget {
                     lastText,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textMid,
                       fontStyle: FontStyle.italic,
                     ),
@@ -193,7 +193,7 @@ class _ChatRow extends StatelessWidget {
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.more_vert, color: EmberColors.textDim),
+              icon: Icon(Icons.more_vert, color: EmberColors.textDim),
               tooltip: 'Chat actions',
               onPressed: () => _showRowKebab(context, store, chat),
             ),
@@ -228,7 +228,7 @@ class _PersonaBadge extends StatelessWidget {
           const SizedBox(width: 5),
           Text(
             persona.name,
-            style: const TextStyle(
+            style: TextStyle(
               color: EmberColors.primary,
               fontSize: 11,
               fontWeight: FontWeight.w700,
@@ -267,9 +267,9 @@ void _showRowKebab(BuildContext context, AppStore store, Chat chat) {
             },
           ),
           ListTile(
-            leading: const Icon(Icons.delete_outline,
+            leading: Icon(Icons.delete_outline,
                 color: EmberColors.danger),
-            title: const Text('Delete chat',
+            title: Text('Delete chat',
                 style: TextStyle(color: EmberColors.danger)),
             onTap: () async {
               Navigator.pop(sheet);

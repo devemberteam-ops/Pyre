@@ -194,7 +194,7 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
           ] else
             ..._unpairedSection(),
           const SizedBox(height: 20),
-          const Text(
+          Text(
             'How this works:\n'
             'Pyre LAN sync lets your phone + browser tabs read and write the '
             'same characters, chats, personas, and lorebooks as your PC. '
@@ -274,7 +274,7 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
                 ),
                 const SizedBox(height: 10),
                 // Plain-language cadence so the user knows it's automatic + when.
-                const Text(
+                Text(
                   'Pyre syncs automatically every ~30s while open, when you '
                   'reopen the app, and right after pairing. You can also force '
                   'a sync below.',
@@ -315,7 +315,7 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
     }
     return Text(
       text,
-      style: const TextStyle(
+      style: TextStyle(
         color: EmberColors.textDim,
         fontSize: 11,
         height: 1.4,
@@ -342,7 +342,7 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.link, color: EmberColors.primary),
+                  Icon(Icons.link, color: EmberColors.primary),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -356,7 +356,7 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
               const SizedBox(height: 4),
               Text(
                 'Base URL: ${c.baseUrl}',
-                style: const TextStyle(
+                style: TextStyle(
                   color: EmberColors.textMid,
                   fontSize: 12,
                   fontFamily: 'monospace',
@@ -366,7 +366,7 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
                 const SizedBox(height: 2),
                 Text(
                   'Device ID: ${c.deviceId}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textDim,
                     fontSize: 11,
                     fontFamily: 'monospace',
@@ -473,7 +473,7 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
                 );
               },
               title: const Text('Sync providers & API keys'),
-              subtitle: const Text(
+              subtitle: Text(
                 'Pull the AI providers + keys from your paired PC. Encrypted '
                 'over the LAN — the PC must have this turned ON too.',
                 style: TextStyle(color: EmberColors.textMid, fontSize: 12),
@@ -515,7 +515,7 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
             const Text('Sync conflicts',
                 style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(height: 2),
-            const Text(
+            Text(
               'When the same item was changed on both devices since the last '
               'sync, decide which side wins. "Newest wins" keeps today\'s '
               'behavior.',
@@ -903,7 +903,7 @@ class _SyncCheckDialog extends StatelessWidget {
                   : 'These collections are not yet identical on both sides. '
                       'A sync should reconcile them — force a sync, then check '
                       'again.',
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textMid,
                 fontSize: 12,
                 height: 1.4,

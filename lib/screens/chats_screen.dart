@@ -30,7 +30,7 @@ class ChatsScreen extends StatelessWidget {
     if (chats.isEmpty) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text('Pyre',
+          title: Text('Pyre',
               style: TextStyle(
                   color: EmberColors.primary, fontWeight: FontWeight.w700)),
           centerTitle: true,
@@ -57,7 +57,7 @@ class ChatsScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
+        title: Text(
           'Pyre',
           style: TextStyle(
             color: EmberColors.primary,
@@ -72,7 +72,7 @@ class ChatsScreen extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Row(
               children: [
-                const Text(
+                Text(
                   'All Chats',
                   style: TextStyle(
                       color: EmberColors.textMid,
@@ -82,13 +82,13 @@ class ChatsScreen extends StatelessWidget {
                 const Spacer(),
                 Text(
                   '${chats.length} ${chats.length == 1 ? "chat" : "chats"}',
-                  style: const TextStyle(
+                  style: TextStyle(
                       color: EmberColors.textMid, fontSize: 12),
                 ),
               ],
             ),
           ),
-          const Divider(
+          Divider(
             color: EmberColors.stroke,
             height: 1,
             indent: 16,
@@ -97,7 +97,7 @@ class ChatsScreen extends StatelessWidget {
           Expanded(
             child: ListView.separated(
               itemCount: order.length,
-              separatorBuilder: (context, index) => const Divider(
+              separatorBuilder: (context, index) => Divider(
                 color: EmberColors.stroke,
                 height: 1,
                 indent: 72,
@@ -187,7 +187,7 @@ class _CharacterChatsRow extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     '$count ${count == 1 ? "chat" : "chats"} · ${_relative(latest.updatedAt)}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.primary,
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -198,7 +198,7 @@ class _CharacterChatsRow extends StatelessWidget {
                     lastText,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textMid,
                       fontStyle: FontStyle.italic,
                       fontSize: 13,
@@ -208,7 +208,7 @@ class _CharacterChatsRow extends StatelessWidget {
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.more_vert, color: EmberColors.textDim),
+              icon: Icon(Icons.more_vert, color: EmberColors.textDim),
               tooltip: 'Actions',
               onPressed: () => _showGroupKebab(context),
             ),
@@ -239,7 +239,7 @@ class _CharacterChatsRow extends StatelessWidget {
                 },
               ),
             ListTile(
-              leading: const Icon(Icons.add_comment_outlined,
+              leading: Icon(Icons.add_comment_outlined,
                   color: EmberColors.primary),
               title: const Text('New chat'),
               onTap: () {
@@ -249,13 +249,13 @@ class _CharacterChatsRow extends StatelessWidget {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.delete_outline,
+              leading: Icon(Icons.delete_outline,
                   color: EmberColors.danger),
               title: Text(
                 chats.length == 1
                     ? 'Delete chat'
                     : 'Delete all ${chats.length} chats',
-                style: const TextStyle(color: EmberColors.danger),
+                style: TextStyle(color: EmberColors.danger),
               ),
               onTap: () async {
                 Navigator.pop(sheet);

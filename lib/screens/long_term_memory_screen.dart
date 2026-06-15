@@ -236,7 +236,7 @@ class _LongTermMemoryScreenState extends State<LongTermMemoryScreen> {
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 2),
-                  const Text(
+                  Text(
                     'System prompt sent to the model when it builds a '
                     'checkpoint. Supports {{words}}.',
                     style: TextStyle(
@@ -306,7 +306,7 @@ class _SliderCard extends StatelessWidget {
                       const SizedBox(height: 2),
                       Text(
                         subtitle,
-                        style: const TextStyle(
+                        style: TextStyle(
                             color: EmberColors.textMid, fontSize: 12),
                       ),
                     ],
@@ -315,7 +315,7 @@ class _SliderCard extends StatelessWidget {
                 const SizedBox(width: 12),
                 Text(
                   display,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: EmberColors.textMid,
                     fontFeatures: [FontFeature.tabularFigures()],
                   ),

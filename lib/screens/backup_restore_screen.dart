@@ -90,7 +90,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                         fontWeight: FontWeight.w600, fontSize: 15),
                   ),
                   const SizedBox(height: 6),
-                  const Text(
+                  Text(
                     'Save your data to a single JSON file. Pick what to '
                     'include below. Avatars and gallery images are packed '
                     'in, so the file fully restores on a new device (this '
@@ -166,7 +166,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                         fontWeight: FontWeight.w600, fontSize: 15),
                   ),
                   const SizedBox(height: 6),
-                  const Text(
+                  Text(
                     'Load a backup JSON. Only the categories present in the '
                     'file are replaced — anything not in the backup is left '
                     'untouched. (A full backup replaces everything.)',
@@ -199,7 +199,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                         fontWeight: FontWeight.w600, fontSize: 15),
                   ),
                   const SizedBox(height: 6),
-                  const Text(
+                  Text(
                     'Bulk-import World Info, regex, presets, and cards exported '
                     'from SillyTavern, or pick a full SillyTavern backup '
                     '(.zip from ST\'s "Download Backup"). Pyre detects each '
@@ -235,7 +235,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                 children: [
                   // Wave CY.18.191: explicit scope + cross-link to
                   // Storage "Clear library". Copy only — no logic change.
-                  const Align(
+                  Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
                       'Full wipe: returns Pyre to a brand-new install — '
@@ -256,7 +256,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                       style: OutlinedButton.styleFrom(
                         foregroundColor: EmberColors.danger,
                         side:
-                            const BorderSide(color: EmberColors.danger),
+                            BorderSide(color: EmberColors.danger),
                       ),
                       onPressed: () => _factoryReset(context, store),
                     ),
@@ -433,7 +433,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       subtitle: sub.isEmpty
           ? null
           : Text(sub,
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 11.5, color: EmberColors.textMid)),
       onChanged: (v) => setState(() {
         if (v == true) {

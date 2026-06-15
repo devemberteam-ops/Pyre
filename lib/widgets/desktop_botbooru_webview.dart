@@ -486,7 +486,7 @@ class _DesktopBotbooruWebviewState extends State<DesktopBotbooruWebview> {
   Widget _toolbar() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: EmberColors.bgPanel,
         border: Border(
           bottom: BorderSide(color: EmberColors.stroke, width: 1),
@@ -550,7 +550,7 @@ class _DesktopBotbooruWebviewState extends State<DesktopBotbooruWebview> {
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               textStyle: const TextStyle(fontSize: 12),
               foregroundColor: EmberColors.textMid,
-              side: const BorderSide(color: EmberColors.stroke),
+              side: BorderSide(color: EmberColors.stroke),
             ),
           ),
           const SizedBox(width: 8),
@@ -571,7 +571,7 @@ class _DesktopBotbooruWebviewState extends State<DesktopBotbooruWebview> {
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               textStyle: const TextStyle(fontSize: 12),
               foregroundColor: EmberColors.textMid,
-              side: const BorderSide(color: EmberColors.stroke),
+              side: BorderSide(color: EmberColors.stroke),
             ),
           ),
         ],
@@ -581,7 +581,7 @@ class _DesktopBotbooruWebviewState extends State<DesktopBotbooruWebview> {
 
   Widget _body() {
     if (_ready == null) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -614,7 +614,7 @@ class _DesktopBotbooruWebviewState extends State<DesktopBotbooruWebview> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Row(
+                Row(
                   children: [
                     Icon(Icons.error_outline,
                         color: EmberColors.primary, size: 20),
@@ -627,7 +627,7 @@ class _DesktopBotbooruWebviewState extends State<DesktopBotbooruWebview> {
                   ],
                 ),
                 const SizedBox(height: 10),
-                const Text(
+                Text(
                   'Pyre uses Microsoft Edge WebView2 to embed '
                   'botbooru.com inside the app. The runtime isn\'t '
                   'installed on this machine.',
@@ -638,7 +638,7 @@ class _DesktopBotbooruWebviewState extends State<DesktopBotbooruWebview> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                const Text(
+                Text(
                   'Install the free Evergreen runtime from Microsoft, '
                   'then relaunch Pyre:',
                   style: TextStyle(
@@ -650,7 +650,7 @@ class _DesktopBotbooruWebviewState extends State<DesktopBotbooruWebview> {
                 const SizedBox(height: 8),
                 SelectableText(
                   'https://developer.microsoft.com/microsoft-edge/webview2/',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 11,
                     color: EmberColors.primary,
@@ -658,11 +658,11 @@ class _DesktopBotbooruWebviewState extends State<DesktopBotbooruWebview> {
                 ),
                 if (_initError != null) ...[
                   const SizedBox(height: 12),
-                  const Divider(color: EmberColors.stroke, height: 1),
+                  Divider(color: EmberColors.stroke, height: 1),
                   const SizedBox(height: 8),
                   Text(
                     'Error: $_initError',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: EmberColors.textDim,
                       fontSize: 10,
                       fontFamily: 'monospace',
@@ -915,11 +915,13 @@ const String _downloadHookScript = r'''
           node.getAttribute('data-src'))) || node.href || '';
         var hm = String(href).match(/\/download\/png\/(\d+)/);
         if (hm) return hm[1];
+        // BUGFIX 2026-06-14: read ONLY this element's OWN aria-label / title —
+        // NEVER node.textContent. textContent includes ALL descendant text, so
+        // any ancestor container wrapping the "Download PNG" button matched
+        // here → EVERY click on a card page triggered an import.
         var label = ((node.getAttribute &&
           (node.getAttribute('aria-label') ||
-           node.getAttribute('title'))) || '') + ' ' +
-          (node.textContent || '');
-        label = label.toLowerCase();
+           node.getAttribute('title'))) || '').toLowerCase();
         // Confirmed live (2026-06): <button id="download-png-btn"
         // aria-label="Download character card as PNG"> — no href, no data id.
         var isPng = node.id === 'download-png-btn' ||
@@ -930,8 +932,10 @@ const String _downloadHookScript = r'''
           node.getAttribute('data-post-id') ||
           node.getAttribute('data-character-id') ||
           node.getAttribute('data-id'));
-        if (pid && /^\d+$/.test(pid) &&
-            (isPng || label.indexOf('png') >= 0)) {
+        // Only trust a data-id when THIS element IS the download control. The
+        // old `|| label.indexOf('png')` fired on any container whose subtree
+        // text mentioned png (the root of the any-click bug).
+        if (pid && /^\d+$/.test(pid) && isPng) {
           return pid;
         }
       } catch (_) {}

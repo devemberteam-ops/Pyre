@@ -63,7 +63,7 @@ Future<CardImportChoice> confirmCardImport(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'This card\'s text is added to every system prompt sent to the AI. Review it before importing — malicious cards can attempt prompt injection.',
                 style: TextStyle(
                   color: EmberColors.textMid,

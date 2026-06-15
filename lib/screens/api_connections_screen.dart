@@ -34,7 +34,7 @@ class ApiConnectionsScreen extends StatelessWidget {
         ],
       ),
       body: store.providers.isEmpty
-          ? const Center(
+          ? Center(
               child: Padding(
                 padding: EdgeInsets.all(32),
                 child: Text(
@@ -56,7 +56,7 @@ class ApiConnectionsScreen extends StatelessWidget {
                   ),
                 if (store.providers.length >= 2 &&
                     store.uiPrefs.askToSwitchOnFailure)
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.fromLTRB(20, 12, 20, 4),
                     child: Text(
                       'If a provider fails or refuses, Pyre offers to '
@@ -146,13 +146,13 @@ class ApiConnectionsScreen extends StatelessWidget {
                                 p.baseUrl,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
+                                style: TextStyle(
                                     color: EmberColors.textMid,
                                     fontSize: 12),
                               ),
                               Text(
                                 'model: ${p.model.isEmpty ? "(none)" : p.model}',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     color: EmberColors.textMid,
                                     fontSize: 12),
                               ),
@@ -162,7 +162,7 @@ class ApiConnectionsScreen extends StatelessWidget {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               IconButton(
-                                icon: const Icon(Icons.edit_outlined,
+                                icon: Icon(Icons.edit_outlined,
                                     color: EmberColors.textMid),
                                 tooltip: 'Edit',
                                 onPressed: () => _editProvider(context, p),
@@ -173,7 +173,7 @@ class ApiConnectionsScreen extends StatelessWidget {
                               if (store.providers.length >= 2)
                                 ReorderableDragStartListener(
                                   index: idx,
-                                  child: const Padding(
+                                  child: Padding(
                                     padding: EdgeInsets.only(left: 2),
                                     child: Icon(Icons.drag_handle,
                                         color: EmberColors.textDim),
@@ -220,7 +220,7 @@ class _AdvancedFallbackTile extends StatelessWidget {
         childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
         children: [
           ListTile(
-            leading: const Icon(Icons.alt_route, color: EmberColors.textMid),
+            leading: Icon(Icons.alt_route, color: EmberColors.textMid),
             title: const Text('Smart provider fallback',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
             subtitle: Text(
@@ -228,10 +228,10 @@ class _AdvancedFallbackTile extends StatelessWidget {
                   ? 'On — if a provider fails or refuses, Pyre offers the '
                       'next one.'
                   : 'Off — a failed reply just surfaces the error.',
-              style: const TextStyle(
+              style: TextStyle(
                   color: EmberColors.textMid, fontSize: 12, height: 1.4),
             ),
-            trailing: const Icon(Icons.chevron_right,
+            trailing: Icon(Icons.chevron_right,
                 color: EmberColors.textDim, size: 22),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const SmartFallbackScreen()),
@@ -279,7 +279,7 @@ class _CreatorProviderCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 4),
-            const Text(
+            Text(
               'By default every call uses your active chat provider. '
               'Pin a different one here for specific features — e.g. '
               'DeepSeek for chat and creator text, Qwen-VL only for '
@@ -694,7 +694,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                 ),
                 if (format == ApiFormat.anthropic) ...[
                   const SizedBox(height: 6),
-                  const Text(
+                  Text(
                     'Native Claude API — base URL https://api.anthropic.com, '
                     'paste your Anthropic key (sk-ant-…). Heads-up: Claude '
                     'refuses NSFW the same here as through any proxy.',
@@ -713,7 +713,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(color: EmberColors.stroke),
                     ),
-                    child: const Row(
+                    child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Icon(Icons.info_outline,
@@ -864,8 +864,8 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                 ],
               ),
               if (kind == ProviderKind.localhost)
-                const Padding(
-                  padding: EdgeInsets.only(top: 6),
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
                   child: Text(
                     'Browse lists the models on your server. LM Studio / '
                     'Ollama auto-load whichever one you pick — you don\'t '
@@ -880,7 +880,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                 childrenPadding: const EdgeInsets.only(top: 4, bottom: 4),
                 shape: const Border(),
                 collapsedShape: const Border(),
-                title: const Text(
+                title: Text(
                   'Advanced',
                   style: TextStyle(
                     fontSize: 13,
@@ -897,12 +897,12 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                   if (kind == ProviderKind.localhost) ...[
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
-                      title: const Text(
+                      title: Text(
                         'Preload model on launch',
                         style: TextStyle(
                             fontSize: 13, color: EmberColors.textHigh),
                       ),
-                      subtitle: const Text(
+                      subtitle: Text(
                         'Fires a tiny request to load the model on app start '
                         'and right after saving, so the first real message '
                         'doesn\'t wait for a cold load. Local servers only.',
@@ -926,7 +926,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                       hintText: 'auto-detected; e.g. 128000',
                     ),
                   ),
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.only(top: 4, bottom: 14),
                     child: Text(
                       'Leave empty to auto-detect from the provider. Set a '
@@ -938,7 +938,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                           height: 1.4),
                     ),
                   ),
-                  const Align(
+                  Align(
                     alignment: Alignment.centerLeft,
                     child: Padding(
                       padding: EdgeInsets.only(bottom: 6),
@@ -962,7 +962,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                       hintText: '{\n'
                           '  "reasoning": {"effort": "none"}\n'
                           '}',
-                      hintStyle: const TextStyle(
+                      hintStyle: TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 12,
                           color: EmberColors.textDim),
@@ -976,8 +976,8 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                     },
                   ),
                   const SizedBox(height: 8),
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 4),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
                     child: Text(
                       'Spread into every chat request to this provider. '
                       'Use it to pass provider-specific knobs Pyre doesn\'t '
@@ -1005,7 +1005,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                     body: '{"enable_thinking": false}',
                   ),
                   const SizedBox(height: 4),
-                  const Text(
+                  Text(
                     'Pyre-managed fields (model, messages, stream, '
                     'temperature, top_p, max_tokens, penalties) take '
                     'precedence — anything else here is forwarded as-is.',
@@ -1019,7 +1019,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                   // match strict OpenAI-compatible models. Default None =
                   // standard OpenAI format (no change).
                   const SizedBox(height: 16),
-                  const Align(
+                  Align(
                     alignment: Alignment.centerLeft,
                     child: Padding(
                       padding: EdgeInsets.only(bottom: 6),
@@ -1070,7 +1070,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                     },
                   ),
                   const SizedBox(height: 6),
-                  const Text(
+                  Text(
                     'Reshapes the message list to match strict model '
                     'requirements. Try Strict or Single user message if a '
                     'model (DeepSeek, GLM, Mistral…) ignores instructions. '
@@ -1269,7 +1269,7 @@ class _ParamHint extends StatelessWidget {
             width: 130,
             child: Text(
               '$label:',
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.textMid,
                 fontSize: 11,
               ),
@@ -1283,7 +1283,7 @@ class _ParamHint extends StatelessWidget {
             // manual select + copy; the button below is the one-tap path.
             child: SelectableText(
               body,
-              style: const TextStyle(
+              style: TextStyle(
                 color: EmberColors.primary,
                 fontSize: 11,
                 fontFamily: 'monospace',
@@ -1296,7 +1296,7 @@ class _ParamHint extends StatelessWidget {
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             tooltip: 'Copy',
-            icon: const Icon(Icons.copy, color: EmberColors.textMid),
+            icon: Icon(Icons.copy, color: EmberColors.textMid),
             onPressed: () async {
               try {
                 await Clipboard.setData(ClipboardData(text: body));
@@ -1336,7 +1336,7 @@ class _PostProcessingHelp extends StatelessWidget {
       child: ExpansionTile(
         tilePadding: EdgeInsets.zero,
         childrenPadding: const EdgeInsets.only(top: 4, bottom: 4),
-        title: const Row(
+        title: Row(
           children: [
             Icon(Icons.help_outline, size: 15, color: EmberColors.primary),
             SizedBox(width: 6),
@@ -1381,12 +1381,12 @@ class _PostProcModeRow extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 6),
       child: Text.rich(
         TextSpan(
-          style: const TextStyle(
+          style: TextStyle(
               color: EmberColors.textMid, fontSize: 11, height: 1.4),
           children: [
             TextSpan(
                 text: '$name — ',
-                style: const TextStyle(
+                style: TextStyle(
                     color: EmberColors.textHigh,
                     fontWeight: FontWeight.w600)),
             TextSpan(text: body),

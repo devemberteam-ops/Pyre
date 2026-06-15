@@ -75,7 +75,7 @@ class _DesktopLayoutCard extends StatelessWidget {
           'Wide desktop layout',
           style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
         ),
-        subtitle: const Text(
+        subtitle: Text(
           'Off: same mobile layout, centered in a narrow column '
           '(phone-in-a-window).\n'
           'On: side rail + wider content. Recommended for larger '
@@ -137,7 +137,7 @@ class _DisplayCardState extends State<_DisplayCard> {
                 ),
                 Text(
                   '$pct%',
-                  style: const TextStyle(
+                  style: TextStyle(
                       color: EmberColors.textMid,
                       fontSize: 14,
                       fontWeight: FontWeight.w600),
@@ -160,7 +160,7 @@ class _DisplayCardState extends State<_DisplayCard> {
                   const SizedBox(width: 8),
               ],
             ),
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(top: 2, bottom: 2),
               child: Text(
                 'Make all text in the app larger or smaller. '
@@ -174,7 +174,7 @@ class _DisplayCardState extends State<_DisplayCard> {
             ),
             Row(
               children: [
-                const Text('A',
+                Text('A',
                     style: TextStyle(
                         fontSize: 13, color: EmberColors.textDim)),
                 Expanded(
@@ -192,7 +192,7 @@ class _DisplayCardState extends State<_DisplayCard> {
                     },
                   ),
                 ),
-                const Text('A',
+                Text('A',
                     style: TextStyle(
                         fontSize: 22, color: EmberColors.textDim)),
               ],

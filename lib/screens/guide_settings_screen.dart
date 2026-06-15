@@ -120,7 +120,7 @@ class _GuideSettingsScreenState extends State<GuideSettingsScreen> {
             child: SwitchListTile(
               title: const Text('Enable Guide',
                   style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: const Text(
+              subtitle: Text(
                 'Show the in-chat Guide actions (steer the next reply, '
                 'regenerate with a guide, guide my message). Guides are '
                 'never saved to history.',
@@ -145,7 +145,7 @@ class _GuideSettingsScreenState extends State<GuideSettingsScreen> {
                   const Text('Where the guide goes',
                       style: TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
-                  const Text(
+                  Text(
                     'Where the one-shot guidance note is placed in the prompt.',
                     style:
                         TextStyle(color: EmberColors.textMid, fontSize: 12),
@@ -185,7 +185,7 @@ class _GuideSettingsScreenState extends State<GuideSettingsScreen> {
                   const Text('Default perspective',
                       style: TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
-                  const Text(
+                  Text(
                     'The point of view "Guide my message" writes in. '
                     'Overridable per message.',
                     style:

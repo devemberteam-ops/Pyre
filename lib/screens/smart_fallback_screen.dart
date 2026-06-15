@@ -73,7 +73,7 @@ class SmartFallbackScreen extends StatelessWidget {
               onChanged: store.setAskToSwitchOnFailure,
               title: const Text('Ask to switch providers when one fails',
                   style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: const Text(
+              subtitle: Text(
                 'When a provider errors or refuses, Pyre offers to retry '
                 'the reply on another configured provider. Off: never asks.',
                 style: TextStyle(

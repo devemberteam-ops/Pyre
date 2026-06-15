@@ -19,6 +19,7 @@ import 'character_creator_screen.dart';
 import 'chat_settings_screen.dart';
 import 'display_settings_screen.dart';
 import 'lorebooks_screen.dart';
+import 'theme_settings_screen.dart';
 import 'about_pyre_screen.dart';
 import 'desktop_shortcuts_screen.dart';
 import 'storage_screen.dart';
@@ -70,12 +71,23 @@ class MoreScreen extends StatelessWidget {
           // WS-J: "App text size" moved out of an inline card into a dedicated
           // Display settings screen (the future home for related display
           // settings). Cross-platform, so it stays in the main More list.
+          // Wave B (theme-customization): "Theme" row re-added now that
+          // there are three curated palettes + an accent picker to choose
+          // from (it was removed in Wave CY.18.91 when only Ember existed).
           _MoreCard(rows: [
             _MoreRow(
               label: 'Display',
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(
                     builder: (_) => const DisplaySettingsScreen()),
+              ),
+            ),
+            _MoreRow(
+              label: 'Theme',
+              trailing: _themeName(store.uiPrefs.activeThemeId),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                    builder: (_) => const ThemeSettingsScreen()),
               ),
             ),
           ]),
@@ -270,7 +282,7 @@ class _VersionFooterState extends State<_VersionFooter> {
                 // PackageInfo (same source the update-check uses) so this label
                 // and About Pyre's footer always match it and never drift.
                 _version.isEmpty ? 'Pyre' : 'Pyre $_version',
-                style: const TextStyle(
+                style: TextStyle(
                     color: EmberColors.textDim, fontSize: 11),
               ),
             ),
@@ -295,7 +307,7 @@ class _VersionFooterState extends State<_VersionFooter> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.system_update_alt,
+                        Icon(Icons.system_update_alt,
                             size: 20, color: EmberColors.primary),
                         const SizedBox(width: 10),
                         Flexible(
@@ -305,7 +317,7 @@ class _VersionFooterState extends State<_VersionFooter> {
                             children: [
                               Text(
                                 'Update available — Pyre ${update.latestVersion}',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     color: EmberColors.primary,
                                     fontWeight: FontWeight.w600,
                                     fontSize: 13),
@@ -317,13 +329,13 @@ class _VersionFooterState extends State<_VersionFooter> {
                                     update.notes,
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                         color: EmberColors.textMid,
                                         fontSize: 11),
                                   ),
                                 )
                               else
-                                const Padding(
+                                Padding(
                                   padding: EdgeInsets.only(top: 2),
                                   child: Text(
                                     'Tap to download the latest release.',
@@ -336,7 +348,7 @@ class _VersionFooterState extends State<_VersionFooter> {
                           ),
                         ),
                         const SizedBox(width: 10),
-                        const Icon(Icons.download_rounded,
+                        Icon(Icons.download_rounded,
                             size: 20, color: EmberColors.primary),
                         // Dismiss ✕ — remembers this version so the pill stays
                         // hidden until a newer release ships (tapping it does
@@ -373,7 +385,7 @@ class _MoreCard extends StatelessWidget {
     for (var i = 0; i < rows.length; i++) {
       children.add(rows[i]);
       if (i < rows.length - 1) {
-        children.add(const Divider(
+        children.add(Divider(
           color: EmberColors.stroke,
           height: 1,
           indent: 16,
@@ -417,11 +429,11 @@ class _MoreRow extends StatelessWidget {
               Text(
                 trailing!,
                 style:
-                    const TextStyle(color: EmberColors.textMid, fontSize: 13),
+                    TextStyle(color: EmberColors.textMid, fontSize: 13),
               ),
               const SizedBox(width: 6),
             ],
-            const Icon(Icons.chevron_right,
+            Icon(Icons.chevron_right,
                 color: EmberColors.textDim, size: 22),
           ],
         ),
@@ -434,3 +446,7 @@ class _MoreRow extends StatelessWidget {
 // placeholders moved into about_pyre_screen.dart. The full-screen
 // About now hosts the brand summary, the privacy statement, and the
 // hosted legal links in one place.
+
+/// Returns the display name of the palette with the given [id], for use as
+/// the trailing label on the "Theme" More row.
+String _themeName(String id) => paletteById(id).name;
