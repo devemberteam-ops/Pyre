@@ -108,11 +108,52 @@ bool syncWatermarkMustReset(String? currentDeviceId, String? storedDeviceId) {
   return currentDeviceId != storedDeviceId;
 }
 
+/// 2026-06-15 push-clock-domain fix: advance/hold the CLIENT-domain push cursor.
+///
+/// Root cause it fixes: the push side used to filter local records by
+/// `mtime > _lastServerTime`, but `_lastServerTime` is the SERVER's wall clock
+/// (handed back by /pull) while a locally-created record's `mtime` is THIS
+/// device's wall clock. When the server clock runs AHEAD of the client clock, a
+/// freshly-created local record has `mtime < _lastServerTime` from birth, so
+/// `_collectDirty` never picks it up — and every pull pushes the watermark even
+/// higher, so it stays below forever. (Pull is immune: server-domain `since` vs
+/// server-domain remote mtimes — which is why desktop→phone always worked but
+/// phone→desktop silently dropped new records.) The fix keeps a SEPARATE push
+/// cursor in the client's own clock domain so a local mtime is only ever
+/// compared against a same-clock value.
+///
+/// [nextPushCursor] computes the cursor's value at the end of a tick:
+///   - HOLD the [current] cursor when the push did NOT run ([pushRan] false —
+///     generation in-flight / conflict abort), OR a [hardReject] occurred, OR
+///     the conflict dialog was dismissed ([conflictAbort]) — so the un-pushed /
+///     rejected local records stay `mtime > cursor` and re-collect next tick
+///     (no lost update);
+///   - otherwise advance to [pushClock] (the client clock captured BEFORE the
+///     collection snapshot, mirroring the server's stamp-before-select fix),
+///     but NEVER backwards (a briefly-backwards clock must not re-open
+///     already-pushed records for an echo storm).
+int nextPushCursor({
+  required int current,
+  required int pushClock,
+  required bool pushRan,
+  required bool hardReject,
+  required bool conflictAbort,
+}) {
+  if (!pushRan || hardReject || conflictAbort) return current;
+  return pushClock > current ? pushClock : current;
+}
+
 class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
   SyncEngine._();
   static final SyncEngine instance = SyncEngine._();
 
   static const String _prefLastServerTime = 'sync.lastServerTime';
+
+  /// 2026-06-15 push-clock-domain fix: the CLIENT-clock push cursor — distinct
+  /// from `_prefLastServerTime`, which stores the SERVER clock. Push collection
+  /// filters by this so a local mtime is only compared against a same-clock
+  /// value (see [nextPushCursor]).
+  static const String _prefLastPushTime = 'sync.lastPushTime';
 
   /// SYNC W1: the server `deviceId` the watermark above was last built against,
   /// so we can detect a re-pair / factory-reset server and reset the cursor.
@@ -125,6 +166,12 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
   bool _tickInFlight = false;
   int _consecutiveFailures = 0;
   int _lastServerTime = 0;
+
+  /// 2026-06-15 push-clock-domain fix: push cursor in THIS device's own clock
+  /// domain. The push side (`_collectDirty` / providers / tombstones) filters by
+  /// this, NEVER `_lastServerTime` (the server clock), so a local record's mtime
+  /// is only ever compared against a same-clock value. See [nextPushCursor].
+  int _lastPushTime = 0;
   DateTime? _lastSuccessAt;
   String? _lastError;
   SyncStatus _status = SyncStatus.disconnected;
@@ -343,10 +390,23 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
         final currentServerId = client.deviceId;
         if (syncWatermarkMustReset(currentServerId, storedServerId)) {
           _lastServerTime = 0;
+          // 2026-06-15 push-clock-domain fix: the push cursor is ALSO a
+          // per-server cursor — reset it on a re-pair so THIS tick re-pushes
+          // our whole library to the (new) server.
+          _lastPushTime = 0;
           await prefs.setInt(_prefLastServerTime, 0);
+          await prefs.setInt(_prefLastPushTime, 0);
           await prefs.setString(_prefSyncedServerDeviceId, currentServerId!);
-        } else if (_lastServerTime == 0) {
-          _lastServerTime = prefs.getInt(_prefLastServerTime) ?? 0;
+        } else {
+          // Lazy-load both persisted cursors on the first tick of the process.
+          // They are INDEPENDENT — the server watermark is SERVER-clock, the
+          // push cursor is CLIENT-clock — and must never be conflated.
+          if (_lastServerTime == 0) {
+            _lastServerTime = prefs.getInt(_prefLastServerTime) ?? 0;
+          }
+          if (_lastPushTime == 0) {
+            _lastPushTime = prefs.getInt(_prefLastPushTime) ?? 0;
+          }
         }
       } catch (_) {}
 
@@ -1127,8 +1187,19 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
       // the push response's `accepted` count). Stays 0 when there was nothing
       // dirty to send. Surfaced as "Pushed N".
       var pushedCount = 0;
+      // 2026-06-15 push-clock-domain fix: capture THIS device's clock NOW —
+      // BEFORE the collection snapshot — mirroring the server's stamp-before-
+      // select fix (S-BUG2): any record written after this capture has
+      // mtime > pushClock and is caught next tick rather than skipped. `pushRan`
+      // stays false when the push is skipped (generation in-flight / conflict
+      // abort) so the push cursor is HELD and those writes aren't lost.
+      final pushClock = DateTime.now().millisecondsSinceEpoch;
+      var pushRan = false;
       if (!GenerationKeepAlive.isGenerating && !conflictAbort) {
-        final dirty = _collectDirty(store, _lastServerTime);
+        pushRan = true;
+        // Push collection filters by the CLIENT-domain cursor (_lastPushTime),
+        // NOT the SERVER-domain watermark (_lastServerTime) — see nextPushCursor.
+        final dirty = _collectDirty(store, _lastPushTime);
         // Wave CY.18.261: include the PROVIDERS collection in the push ONLY
         // when the user opted in (syncProviderKeys). Each provider is emitted
         // via toJsonEncrypted — config in cleartext, the API key as an
@@ -1142,7 +1213,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
           if (secret != null) {
             final out = <Map<String, dynamic>>[];
             for (final p in store.providers) {
-              if (p.mtime > _lastServerTime) {
+              if (p.mtime > _lastPushTime) {
                 out.add(await p.toJsonEncrypted(secret));
               }
             }
@@ -1153,7 +1224,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
         // server hasn't seen (mtime > since) so the server learns about our
         // local deletes and reaps its still-live copies. Additive: an old
         // server ignores the unknown `tombstones` key.
-        final dirtyTombstones = _collectDirtyTombstones(store, _lastServerTime);
+        final dirtyTombstones = _collectDirtyTombstones(store, _lastPushTime);
         final hasDirty = dirty.values.any((l) => l.isNotEmpty);
         // Push when we have dirty records OR dirty tombstones — a tick whose
         // only change is a deletion still needs to reach the server.
@@ -1233,10 +1304,27 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
       // /pull and the user gets another chance to resolve them.
       if (!pushHadHardReject && !conflictAbort) {
         _lastServerTime = serverTime;
+        // 2026-06-15 push-clock-domain fix: advance the CLIENT-domain push
+        // cursor too. nextPushCursor HOLDS it when the push didn't run
+        // (pushRan == false, e.g. generation in-flight) so writes made while it
+        // was skipped re-collect next tick, and never moves it backwards. The
+        // hard-reject / conflict-abort gates are already enforced by this `if`,
+        // but passing them keeps nextPushCursor self-contained + unit-testable.
+        final newPushCursor = nextPushCursor(
+          current: _lastPushTime,
+          pushClock: pushClock,
+          pushRan: pushRan,
+          hardReject: pushHadHardReject,
+          conflictAbort: conflictAbort,
+        );
         try {
           final prefs = await SharedPreferences.getInstance();
           await prefs.setInt(_prefLastServerTime, serverTime);
+          if (newPushCursor != _lastPushTime) {
+            await prefs.setInt(_prefLastPushTime, newPushCursor);
+          }
         } catch (_) {}
+        _lastPushTime = newPushCursor;
       }
 
       _consecutiveFailures = 0;
