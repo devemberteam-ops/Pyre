@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 
 import '../services/attachment_store.dart';
@@ -63,7 +63,12 @@ ImageProvider? thumbnailProvider(
 /// is bounded so swapping between many characters doesn't pin every
 /// avatar in memory forever; once we exceed the cap we drop everything
 /// and the next paint pays a single decode each.
-final Map<String, MemoryImage> _avatarDecodeCache = <String, MemoryImage>{};
+///
+/// Nullable value: a present key mapping to `null` is a MEMOIZED FAILURE —
+/// the URL was attempted and failed to decode. Checking `containsKey` first
+/// short-circuits both success and failure without re-running base64Decode.
+@visibleForTesting
+final Map<String, MemoryImage?> avatarDecodeCache = <String, MemoryImage?>{};
 const int _avatarCacheMax = 64;
 
 /// Estimated face position for the circular thumbnail crop. Character-card art
@@ -77,27 +82,28 @@ const int _avatarCacheMax = 64;
 const Alignment kAvatarFaceAlignment = Alignment(0.0, -0.5);
 
 MemoryImage? _decodeAvatar(String dataUrl) {
-  final cached = _avatarDecodeCache[dataUrl];
-  if (cached != null) return cached;
-  if (_avatarDecodeCache.containsKey(dataUrl)) {
-    // Cached failure — don't keep retrying a broken URL.
-    return null;
+  // Check containsKey first so a memoized failure (null value) is returned
+  // immediately without re-running indexOf / base64Decode every rebuild.
+  if (avatarDecodeCache.containsKey(dataUrl)) {
+    return avatarDecodeCache[dataUrl]; // null = known-bad, MemoryImage = success
   }
   final comma = dataUrl.indexOf(',');
   if (comma <= 0) {
-    _avatarDecodeCache[dataUrl] = MemoryImage(Uint8List(0));
-    _avatarDecodeCache.remove(dataUrl);
+    // Malformed prefix — cache failure as null so subsequent frames skip this.
+    avatarDecodeCache[dataUrl] = null;
     return null;
   }
   try {
     final bytes = Uint8List.fromList(base64Decode(dataUrl.substring(comma + 1)));
-    if (_avatarDecodeCache.length >= _avatarCacheMax) {
-      _avatarDecodeCache.clear();
+    if (avatarDecodeCache.length >= _avatarCacheMax) {
+      avatarDecodeCache.clear();
     }
     final img = MemoryImage(bytes);
-    _avatarDecodeCache[dataUrl] = img;
+    avatarDecodeCache[dataUrl] = img;
     return img;
   } catch (_) {
+    // Corrupt base64 — cache failure so every streaming rebuild doesn't retry.
+    avatarDecodeCache[dataUrl] = null;
     return null;
   }
 }

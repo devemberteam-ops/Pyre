@@ -1,10 +1,24 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 
 import '../services/attachment_store.dart';
+
+/// Module-level cache for raw-base64 (no `data:` prefix) strings resolved by
+/// [Lightbox.resolveImage]. Without this, every call builds a brand-new
+/// [MemoryImage] whose bytes-object identity differs from the previous frame's,
+/// so Flutter re-decodes and re-uploads the texture on every streaming rebuild
+/// — the visible backdrop/avatar flicker (piscar) reported during streaming.
+///
+/// Keyed by the cleaned (whitespace-stripped) raw-base64 string → stable
+/// [MemoryImage] instance. Bounded at [_rawBase64CacheMax] entries; when the
+/// cap is reached the entire map is cleared (simple but effective — in practice
+/// only 1-2 backgrounds are active at a time, so eviction is rare).
+@visibleForTesting
+final Map<String, MemoryImage> rawBase64Cache = <String, MemoryImage>{};
+const int _rawBase64CacheMax = 16;
 
 /// Tap-to-dismiss fullscreen image viewer with pinch-zoom + pan.
 class Lightbox extends StatelessWidget {
@@ -67,11 +81,24 @@ class Lightbox extends StatelessWidget {
     // fine. The mismatch confused users into thinking their cards had
     // broken avatars when only this one view path was bailing out.
     // Sniff the value as base64 and decode if it parses.
+    //
+    // Cache the decoded MemoryImage so every streaming rebuild returns the
+    // SAME instance (identity-stable). Without this, each call constructs a
+    // fresh MemoryImage from a new Uint8List — Flutter sees a new object
+    // identity, invalidates the image cache key, and re-decodes/re-uploads
+    // the texture every frame → visible backdrop/avatar flicker (piscar).
     try {
       // Strip stray whitespace/newlines that line-wrapped exports leak.
       final cleaned = url.replaceAll(RegExp(r'\s+'), '');
       if (cleaned.length >= 16) {
-        return MemoryImage(Uint8List.fromList(base64Decode(cleaned)));
+        final existing = rawBase64Cache[cleaned];
+        if (existing != null) return existing;
+        final img = MemoryImage(Uint8List.fromList(base64Decode(cleaned)));
+        if (rawBase64Cache.length >= _rawBase64CacheMax) {
+          rawBase64Cache.clear();
+        }
+        rawBase64Cache[cleaned] = img;
+        return img;
       }
     } catch (_) {
       // Not valid base64 either — fall through to null and let the

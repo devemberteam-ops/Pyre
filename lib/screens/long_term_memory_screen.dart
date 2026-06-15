@@ -329,7 +329,13 @@ class _SliderCard extends StatelessWidget {
                     const RoundSliderThumbShape(enabledThumbRadius: 8),
               ),
               child: Slider(
-                value: value,
+                // Bug 4 fix: clamp to [min,max] before handing to Material
+                // Slider — a synced/hand-edited value outside range trips
+                // Slider's assert (debug crash) or mis-renders (release).
+                // We clamp the DISPLAYED value only; the stored setting is
+                // intentionally left unchanged so the user can see it in
+                // the label and decide whether to keep or adjust it.
+                value: value.clamp(min, max),
                 min: min,
                 max: max,
                 divisions: divisions,

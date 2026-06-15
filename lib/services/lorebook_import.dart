@@ -158,9 +158,9 @@ Lorebook lorebookFromCharacterBook(
         _readKeyList(m['keywords']) ??
         <String>[];
     // Content: `content` (standard) or `entry` (ST world-info legacy).
-    final content = (m['content'] as String?) ??
-        (m['entry'] as String?) ??
-        '';
+    // Bug 2 fix: some exporters emit content as a number; coerce to String,
+    // fall back to '' so the entry is skipped (key+content both empty → skip).
+    final content = _lStr(m['content']) ?? _lStr(m['entry']) ?? '';
     if (content.isEmpty && keys.isEmpty) continue; // skip dud
     // Enabled defaults to TRUE if absent. Some exports use a
     // `disable: true` inverted flag — honour both.
@@ -171,9 +171,11 @@ Lorebook lorebookFromCharacterBook(
     // Order — chara_card_v2 stores `insertion_order` (lower = inject
     // first), Risu uses `priority`, ST standalone + Pyre use `order`
     // (higher = more important). Map across them; default 0.
-    final order = (m['insertion_order'] as num?)?.toInt() ??
-        (m['priority'] as num?)?.toInt() ??
-        (m['order'] as num?)?.toInt() ??
+    // Bug 2 fix: some exporters emit order fields as strings ("5") —
+    // _lNum accepts int/double/numeric-string, so those coerce cleanly.
+    final order = _lNum(m['insertion_order'])?.toInt() ??
+        _lNum(m['priority'])?.toInt() ??
+        _lNum(m['order'])?.toInt() ??
         0;
     // Wave 1.1 (F3): map the SillyTavern "selective" keyword options. All
     // tolerant + safe-defaulted so a card missing them imports IDENTICALLY
@@ -185,9 +187,13 @@ Lorebook lorebookFromCharacterBook(
         _readKeyList(m['secondaryKeys']) ??
         <String>[];
     final selectiveLogic = loreSelectiveLogicFromSt(m['selectiveLogic']);
-    final caseSensitive = m['caseSensitive'] as bool?;
-    final matchWholeWords = m['matchWholeWords'] as bool?;
-    final probability = (m['probability'] as num?)?.toInt() ?? 100;
+    // Bug 2 fix: SillyTavern/older exporters emit caseSensitive and
+    // matchWholeWords as 0/1 ints rather than true/false booleans.
+    // _lBoolOpt accepts bool and 0/1 int; returns null for absent/other.
+    final caseSensitive = _lBoolOpt(m['caseSensitive']);
+    final matchWholeWords = _lBoolOpt(m['matchWholeWords']);
+    // Bug 2 fix: probability can arrive as a numeric string.
+    final probability = _lNum(m['probability'])?.toInt() ?? 100;
     final useProbability = m['useProbability'] is bool
         ? m['useProbability'] as bool
         : false;
@@ -476,6 +482,36 @@ Future<void> handleEmbeddedBookForCharacter({
   // responsible for the subsequent store.addCharacter so the linkage
   // lands on disk.
   character.lorebookIds.add(lorebook.id);
+}
+
+// ---------------------------------------------------------------------------
+// Bug 2: tolerant field coercions for lorebook entry scalars.
+// These are local to this file; keep them tiny and auditable.
+
+/// Returns the value as a String only if it IS a String; null otherwise.
+/// (We do NOT coerce numbers to strings for content — that would silently
+/// turn a bad exporter's `"content": 42` into "42" in the lore entry.)
+String? _lStr(dynamic v) => v is String ? v : null;
+
+/// Tolerant num decoder: accepts int, double, or a String that represents a
+/// number (e.g. `"5"` from an exporter that stringified everything).
+/// Returns null for null / non-numeric strings / other types.
+num? _lNum(dynamic v) {
+  if (v == null) return null;
+  if (v is num) return v;
+  if (v is String) return num.tryParse(v);
+  return null;
+}
+
+/// Tolerant optional bool: returns true/false for bool literals AND for the
+/// int values 1/0 (which some ST/older exporters emit for booleans).
+/// Returns null for null, absent, or any other type — so callers can
+/// distinguish "not present" from "false".
+bool? _lBoolOpt(dynamic v) {
+  if (v == null) return null;
+  if (v is bool) return v;
+  if (v is int) return v != 0;
+  return null;
 }
 
 /// Parse a comma-separated string OR a list of strings into a clean

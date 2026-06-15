@@ -370,11 +370,21 @@ dynamic _anthropicContent(ChatTurn t) {
 }
 
 /// Build the native Anthropic `/v1/messages` request body. Pure + testable.
-/// Folds ALL `system` turns into the top-level `system` string; the rest become
-/// user/assistant messages with consecutive same-role turns MERGED and a
-/// leading assistant turn (the usual chat greeting) prefixed by a minimal user
-/// turn — Anthropic requires the first message to be `user`. `max_tokens` is
-/// required by Anthropic; `temperature` is clamped to its 0..1 range.
+///
+/// System-turn placement (Defect 2 fix, Pyre 1.1.3):
+/// Only the LEADING system turn(s) — those before the first user/assistant turn
+/// — belong in the top-level `system` field. Any system-role turn that appears
+/// AFTER the first user/assistant message (post-history jailbreak, mid-chat
+/// scene, roadmap, guide note) is converted to a `user`-role turn IN-ORDER so
+/// it reaches the model at the recency position where it was intended. The
+/// existing consecutive-same-role merge coalesces it with an adjacent user turn
+/// automatically, preserving Anthropic's role-alternation requirement. The
+/// leading system block stays in the top-level `system` field unchanged.
+///
+/// The rest become user/assistant messages with consecutive same-role turns
+/// MERGED and a leading assistant turn (the usual chat greeting) prefixed by a
+/// minimal user turn — Anthropic requires the first message to be `user`.
+/// `max_tokens` is required by Anthropic; `temperature` is clamped to 0..1.
 Map<String, dynamic> buildAnthropicBody({
   required List<ChatTurn> messages,
   required ModelSettings settings,
@@ -384,13 +394,27 @@ Map<String, dynamic> buildAnthropicBody({
   List<String>? stop,
   Map<String, dynamic>? extraParams,
 }) {
-  // 1. Fold system turns into the top-level `system` string.
+  // 1. Split system turns: leading ones → top-level `system`; post-history
+  //    ones → converted to user turns inline (Defect 2 fix).
   final systemParts = <String>[];
   final convo = <ChatTurn>[];
+  var seenNonSystem = false;
   for (final m in messages) {
     if (m.role == 'system') {
-      if (m.content.trim().isNotEmpty) systemParts.add(m.content);
+      if (!seenNonSystem) {
+        // Leading system turn — belongs in the top-level `system` field.
+        if (m.content.trim().isNotEmpty) systemParts.add(m.content);
+      } else {
+        // Post-history system turn — convert to user-role so it stays in
+        // position. The consecutive-same-role merge below will fold it into
+        // an adjacent user turn automatically if needed, preserving
+        // Anthropic's strict user/assistant alternation requirement.
+        if (m.content.trim().isNotEmpty) {
+          convo.add(ChatTurn('user', m.content));
+        }
+      }
     } else {
+      seenNonSystem = true;
       convo.add(m);
     }
   }
@@ -445,6 +469,31 @@ Map<String, dynamic> buildAnthropicBody({
   return body;
 }
 
+/// Rebuild an Anthropic `/v1/messages` body keeping ONLY the managed keys:
+/// model, max_tokens, system, messages, stream, temperature, top_p, top_k,
+/// stop_sequences. Everything else (custom extraParams, reasoning, etc.) is
+/// dropped. This is the Anthropic-side analogue of [minimalRetryBody] and is
+/// used for the retry-without-extras backstop (Defect 1 fix, Pyre 1.1.3).
+///
+/// Pure: never mutates [body]. Terminates — the caller retries exactly once.
+Map<String, dynamic> minimalAnthropicRetryBody(Map<String, dynamic> body) {
+  const managed = {
+    'model',
+    'max_tokens',
+    'system',
+    'messages',
+    'stream',
+    'temperature',
+    'top_p',
+    'top_k',
+    'stop_sequences',
+  };
+  return {
+    for (final e in body.entries)
+      if (managed.contains(e.key)) e.key: e.value,
+  };
+}
+
 /// Extract the visible text delta from one parsed Anthropic SSE event, or null
 /// for non-text events (message_start/stop, content_block_start/stop, ping,
 /// thinking deltas).
@@ -493,6 +542,10 @@ String anthropicTextFromMessage(dynamic obj) {
 /// [buildAnthropicBody] for the request, and the content-block SSE stream parsed
 /// by [anthropicTextDelta]. Only reached for `provider.format ==
 /// ApiFormat.anthropic`; the OpenAI path stays untouched.
+///
+/// Pyre 1.1.3 (Defect 1 fix): on a param-shape 4xx, rebuild with
+/// [minimalAnthropicRetryBody] and retry EXACTLY ONCE, mirroring the OpenAI
+/// streaming path's "retry-without-extras" backstop.
 Stream<String> _streamAnthropic({
   required ApiProvider provider,
   required ModelSettings settings,
@@ -501,7 +554,9 @@ Stream<String> _streamAnthropic({
   List<String>? stop,
 }) async* {
   final url = Uri.parse(buildChatUrl(provider.baseUrl, 'messages'));
-  final body = buildAnthropicBody(
+  // `var` (not `final`) so the retry below can swap in the minimal-safe body,
+  // mirroring the OpenAI streaming path's pattern.
+  var body = buildAnthropicBody(
     messages: messages,
     settings: settings,
     preset: preset,
@@ -512,33 +567,58 @@ Stream<String> _streamAnthropic({
   );
   final client = http.Client();
   try {
-    final req = http.Request('POST', url);
-    req.headers.addAll({
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream',
-      'anthropic-version': '2023-06-01',
-      if (provider.apiKey.isNotEmpty) 'x-api-key': provider.apiKey,
-      ..._sanitiseHeaders(provider.headers),
-    });
-    req.body = jsonEncode(body);
-    http.StreamedResponse resp;
-    try {
-      resp = await client.send(req).timeout(
-            provider.kind == ProviderKind.localhost
-                ? _kLocalConnectTimeout
-                : const Duration(seconds: 25),
-            onTimeout: () => throw ChatApiError.timeout(
-                'Timed out connecting to the Anthropic provider.'),
-          );
-    } catch (e) {
-      throw _classifyNetworkError(e);
+    // Build a fresh POST for the current `body`. Called twice at most: once
+    // normally, and once on a param-error retry with the minimal-safe body.
+    // Mirrors the OpenAI path's inner buildReq() closure.
+    http.Request buildReq() {
+      final r = http.Request('POST', url);
+      r.headers.addAll({
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+        'anthropic-version': '2023-06-01',
+        if (provider.apiKey.isNotEmpty) 'x-api-key': provider.apiKey,
+        ..._sanitiseHeaders(provider.headers),
+      });
+      r.body = jsonEncode(body);
+      return r;
     }
+
+    // Send and classify network-level errors.
+    Future<http.StreamedResponse> send() async {
+      try {
+        return await client.send(buildReq()).timeout(
+          provider.kind == ProviderKind.localhost
+              ? _kLocalConnectTimeout
+              : const Duration(seconds: 25),
+          onTimeout: () => throw ChatApiError.timeout(
+              'Timed out connecting to the Anthropic provider.'),
+        );
+      } catch (e) {
+        throw _classifyNetworkError(e);
+      }
+    }
+
+    var resp = await send();
     if (resp.statusCode >= 400) {
       final errBody = await resp.stream.bytesToString();
-      throw ChatApiError(
-        scrubProviderBody(errBody, apiKey: provider.apiKey),
-        statusCode: resp.statusCode,
-      );
+      final scrubbed = scrubProviderBody(errBody, apiKey: provider.apiKey);
+      // Pyre 1.1.3 (Defect 1 fix): retry-without-extras on a param-shape 4xx,
+      // mirroring the OpenAI streaming path. Terminates — no loop; a second
+      // failure throws. This catches stray extraParams (e.g. frequency_penalty,
+      // response_format) that Anthropic /v1/messages rejects as unknown fields.
+      if (resp.statusCode < 500 && isUnsupportedParamError(scrubbed)) {
+        body = minimalAnthropicRetryBody(body);
+        resp = await send();
+        if (resp.statusCode >= 400) {
+          final retryBody = await resp.stream.bytesToString();
+          throw ChatApiError(
+            scrubProviderBody(retryBody, apiKey: provider.apiKey),
+            statusCode: resp.statusCode,
+          );
+        }
+      } else {
+        throw ChatApiError(scrubbed, statusCode: resp.statusCode);
+      }
     }
     // A provider that ignored `stream:true` returns a single JSON message —
     // parse its content blocks rather than try to read SSE.
@@ -594,6 +674,10 @@ Stream<String> _streamAnthropic({
 /// Pyre 1.1.3: native Anthropic non-streaming completion (mirrors [completeChat]
 /// for `/v1/messages`). Used when a caller wants a one-shot result from an
 /// Anthropic-format provider.
+///
+/// Pyre 1.1.3 (Defect 1 fix): on a param-shape 4xx, rebuild with
+/// [minimalAnthropicRetryBody] and retry EXACTLY ONCE, mirroring the OpenAI
+/// [completeChat] path's "retry-without-extras" backstop.
 Future<String> _completeAnthropic({
   required ApiProvider provider,
   required ModelSettings settings,
@@ -602,7 +686,9 @@ Future<String> _completeAnthropic({
   List<String>? stop,
 }) async {
   final url = Uri.parse(buildChatUrl(provider.baseUrl, 'messages'));
-  final body = buildAnthropicBody(
+  // `var` (not `final`) so the retry below can swap in the minimal-safe body,
+  // mirroring the OpenAI completeChat path's pattern.
+  var body = buildAnthropicBody(
     messages: messages,
     settings: settings,
     preset: preset,
@@ -611,34 +697,56 @@ Future<String> _completeAnthropic({
     stop: stop,
     extraParams: provider.extraParams.isEmpty ? null : provider.extraParams,
   );
+
+  // POST the current `body`. Called twice at most: normally, then once on a
+  // param-error retry with the minimal-safe body. Mirrors the OpenAI path.
+  Future<http.Response> post() => http
+      .post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          if (provider.apiKey.isNotEmpty) 'x-api-key': provider.apiKey,
+          ..._sanitiseHeaders(provider.headers),
+        },
+        body: jsonEncode(body),
+      )
+      .timeout(
+        provider.kind == ProviderKind.localhost
+            ? _kLocalCompleteTimeout
+            : const Duration(seconds: 75),
+        onTimeout: () =>
+            throw ChatApiError.timeout('Anthropic request timed out.'),
+      );
+
   http.Response resp;
   try {
-    resp = await http
-        .post(
-          url,
-          headers: {
-            'Content-Type': 'application/json',
-            'anthropic-version': '2023-06-01',
-            if (provider.apiKey.isNotEmpty) 'x-api-key': provider.apiKey,
-            ..._sanitiseHeaders(provider.headers),
-          },
-          body: jsonEncode(body),
-        )
-        .timeout(
-          provider.kind == ProviderKind.localhost
-              ? _kLocalCompleteTimeout
-              : const Duration(seconds: 75),
-          onTimeout: () =>
-              throw ChatApiError.timeout('Anthropic request timed out.'),
-        );
+    resp = await post();
   } catch (e) {
     throw _classifyNetworkError(e);
   }
   if (resp.statusCode >= 400) {
-    throw ChatApiError(
-      scrubProviderBody(resp.body, apiKey: provider.apiKey),
-      statusCode: resp.statusCode,
-    );
+    final scrubbed = scrubProviderBody(resp.body, apiKey: provider.apiKey);
+    // Pyre 1.1.3 (Defect 1 fix): retry-without-extras on a param-shape 4xx,
+    // mirroring the OpenAI completeChat path. Terminates — no loop; a second
+    // failure throws. This catches stray extraParams (e.g. frequency_penalty,
+    // response_format) that Anthropic /v1/messages rejects as unknown fields.
+    if (resp.statusCode < 500 && isUnsupportedParamError(scrubbed)) {
+      body = minimalAnthropicRetryBody(body);
+      try {
+        resp = await post();
+      } catch (e) {
+        throw _classifyNetworkError(e);
+      }
+      if (resp.statusCode >= 400) {
+        throw ChatApiError(
+          scrubProviderBody(resp.body, apiKey: provider.apiKey),
+          statusCode: resp.statusCode,
+        );
+      }
+    } else {
+      throw ChatApiError(scrubbed, statusCode: resp.statusCode);
+    }
   }
   final obj = jsonDecode(resp.body);
   if (obj is Map) {

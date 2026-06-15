@@ -3,7 +3,8 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -53,6 +54,23 @@ bool get _isDesktop {
 }
 
 // kExplicitNoPersonaId is declared in models.dart (canonical location).
+
+/// True only for [MessageKind.system] — the read-only aux kind whose bubble
+/// is a centred italic note with NO variant arrows, edit, branch, or swipe.
+///
+/// OOC and Scene are deliberately NOT included here: the founder decision is
+/// that they must behave like normal user messages (editable, deletable,
+/// branchable). This pure helper is also tested in
+/// test/ooc_message_behavior_test.dart.
+bool isReadOnlyAuxKind(MessageKind k) => k == MessageKind.system;
+
+/// True on Android and iOS — used to gate haptic feedback calls so they never
+/// fire on desktop or web (where `HapticFeedback` is a no-op or annoying).
+bool get _isMobileForHaptics {
+  if (kIsWeb) return false;
+  return defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
+}
 
 /// chat-core-2-05: build the one-shot system prompt for the Fill-In scenario
 /// opener. Pure (no Flutter / no AppStore) so it can be unit-tested and so the
@@ -407,15 +425,18 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  /// Branch a user message: stash the current downstream under the source
-  /// variant, add an empty variant, focus the input. Non-destructive —
-  /// swiping back to the original variant restores its conversation tail.
+  /// Branch a user / OOC / scene message: stash the current downstream under
+  /// the source variant, add an empty variant, focus the input for user
+  /// messages. Non-destructive — swiping back to the original variant restores
+  /// its conversation tail. Also used for OOC and Scene (same semantics).
   void _branchUserMessage(Chat chat, Message m) {
     // Never branch while a stream is in flight — the in-progress assistant
     // reply would be silently destroyed (we'd remove the message the
     // stream is writing into) and the rest of the response would land in
     // a dead bubble until onDone fires.
     if (_generating) return;
+    // Sub-task B: haptic on add-variant (mobile only).
+    if (_isMobileForHaptics) HapticFeedback.lightImpact();
     _clearPendingFallback(); // audit C1
     final store = context.read<AppStore>();
     final idx = chat.messages.indexWhere((x) => x.id == m.id);
@@ -817,6 +838,8 @@ class _ChatScreenState extends State<ChatScreen> {
     if (chat == null) return;
     final text = _inputCtl.text.trim();
     if (_generating) return;
+    // Sub-task B: haptic on send (mobile only).
+    if (_isMobileForHaptics) HapticFeedback.lightImpact();
     // Audit C1: a new send supersedes any pending fallback card from a
     // previous turn. _send re-inits the chain just before it streams.
     _clearPendingFallback();
@@ -2402,11 +2425,18 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _showMessageMenu(Chat chat, Message m) async {
+    // Sub-task B: haptic on long-press toolbar open (mobile only).
+    if (_isMobileForHaptics) HapticFeedback.selectionClick();
     final store = context.read<AppStore>();
     final messenger = ScaffoldMessenger.of(context);
     final isLast = chat.messages.isNotEmpty && chat.messages.last.id == m.id;
     final isChar = m.kind == MessageKind.char;
     final isUser = m.kind == MessageKind.user;
+    // OOC and Scene behave like user messages — they get the divider before
+    // delete and are treated as user-side in the menu.
+    final isUserSide = isUser ||
+        m.kind == MessageKind.ooc ||
+        m.kind == MessageKind.scene;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -2499,7 +2529,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 _editMessageText(chat, m);
               },
             ),
-            if (isUser || isChar) const Divider(color: EmberColors.stroke),
+            if (isUserSide || isChar) const Divider(color: EmberColors.stroke),
             // Label adapts to the active delete behaviour so the user
             // isn't blindsided when they have cascade-on and tap what
             // looks like a single-message delete.
@@ -3683,6 +3713,8 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_generating) return;
     _clearPendingFallback(); // audit C1
     if (m.kind != MessageKind.char) return;
+    // Sub-task B: haptic on regenerate (mobile only).
+    if (_isMobileForHaptics) HapticFeedback.lightImpact();
     final store = context.read<AppStore>();
     final idx = chat.messages.indexWhere((x) => x.id == m.id);
     if (idx < 0) return;
@@ -4045,10 +4077,14 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ? () => _promptFillIn(chat)
                                 : () => _regenerateMessage(chat, m))
                             : null,
-                        // Every user message can be branched — same rewind
-                        // semantics, but you also get an empty variant to
-                        // type a different line.
-                        onBranchUser: m.kind == MessageKind.user
+                        // User, OOC, and Scene messages can all be branched —
+                        // same rewind semantics: stash the downstream, add an
+                        // empty variant to write a different version of the
+                        // message or note. The empty branch for OOC/Scene is
+                        // filled in via inline edit (long-press → Edit text).
+                        onBranchUser: (m.kind == MessageKind.user ||
+                                m.kind == MessageKind.ooc ||
+                                m.kind == MessageKind.scene)
                             ? () => _branchUserMessage(chat, m)
                             : null,
                         // Continue only on the tip: it extends the current
@@ -4337,9 +4373,18 @@ class _MessageBubbleState extends State<_MessageBubble> {
   Widget build(BuildContext context) {
     final m = widget.message;
     final isUser = m.kind == MessageKind.user;
-    final isAux = m.kind == MessageKind.ooc ||
-        m.kind == MessageKind.scene ||
-        m.kind == MessageKind.system;
+    // Only system is truly read-only / aux (centred italic note, no controls).
+    // OOC and Scene fall through to the full bubble path (Sub-task A).
+    final isAux = isReadOnlyAuxKind(m.kind);
+    // OOC and Scene are user-authored and live on the user side of the
+    // conversation. This flag drives alignment, avatar, and color selection.
+    final isUserSide = isUser ||
+        m.kind == MessageKind.ooc ||
+        m.kind == MessageKind.scene;
+    // Whether this is an OOC or Scene note — used to add a small label chip
+    // so the user can still tell them apart from plain user messages.
+    final isOoc = m.kind == MessageKind.ooc;
+    final isScene = m.kind == MessageKind.scene;
 
     if (isAux) {
       return GestureDetector(
@@ -4358,10 +4403,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: EmberColors.stroke),
             ),
-            // The "Edit text" action flips edit mode for OOC/scene/system
-            // bubbles too — show the inline editor on the RAW text (the name
-            // substitution below is display-only, so edit the stored text just
-            // like the normal user/char branch does).
+            // The "Edit text" action flips edit mode for system bubbles.
             child: widget.isEditing
                 ? _InlineMessageEditor(
                     initialText: m.text,
@@ -4369,11 +4411,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
                     onCancel: widget.onCancelEdit ?? () {},
                   )
                 : Text(
-                    // Wave CY.18.157: OOC/scene/system bubbles also substitute
-                    // {{user}}/{{char}} (the normal ChatText path already
-                    // does) — without this the placeholder rendered literally
-                    // here, which is exactly the bug Gui hit on an OOC
-                    // scene-setup line.
+                    // Wave CY.18.157: system bubbles also substitute
+                    // {{user}}/{{char}} at display time.
                     _fillNamePlaceholders(
                       m.text,
                       charName: widget.character?.name,
@@ -4414,8 +4453,9 @@ class _MessageBubbleState extends State<_MessageBubble> {
     // Every default reproduces the legacy appearance exactly (bgPanel base,
     // radius 12, no extra border, no blur) — see ChatSettings docs.
     // ---------------------------------------------------------------------
+    // OOC and Scene are user-authored, so they use the user bubble colour.
     final int? roleColorArgb =
-        isUser ? chatSettings.userBubbleColor : chatSettings.aiBubbleColor;
+        isUserSide ? chatSettings.userBubbleColor : chatSettings.aiBubbleColor;
     final Color bubbleBase =
         roleColorArgb != null ? Color(roleColorArgb) : EmberColors.bgPanel;
     final Color bubbleColor = isEmptyVariant
@@ -4480,7 +4520,9 @@ class _MessageBubbleState extends State<_MessageBubble> {
               ? Text(
                   isUser
                       ? 'Type your alternative reply…'
-                      : 'Generating…',
+                      : (isUserSide
+                          ? 'Type your note…'
+                          : 'Generating…'),
                   style: const TextStyle(
                     color: EmberColors.textDim,
                     fontStyle: FontStyle.italic,
@@ -4533,42 +4575,64 @@ class _MessageBubbleState extends State<_MessageBubble> {
                             ),
                           ],
                         )
-                      : ChatText(
-                          // Wave CY.15: substitute {{user}} / {{char}}
-                          // at display time. Cards (especially
-                          // first_mes / alternate_greetings) routinely
-                          // contain those placeholders and they need
-                          // to render as real names — same way they're
-                          // already filled in the system prompt via
-                          // _buildTurns.
-                          //
-                          // Pyre 1.1 (F4): non-destructive DISPLAY-stage
-                          // regex on top (after name-fill). Empty rules
-                          // list → identity, so the rendered text is
-                          // byte-identical when no rules exist. Only
-                          // normal user/AI bubbles reach here (aux
-                          // bubbles return early above).
-                          applyRegexRules(
-                            _fillNamePlaceholders(
-                              m.text,
-                              charName: widget.character?.name,
-                              personaName: widget.persona?.name,
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Sub-task A: small label badge so OOC / Scene
+                            // remain distinguishable from plain user messages
+                            // even though they share alignment and controls.
+                            if (isOoc || isScene)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 4),
+                                child: Text(
+                                  isOoc ? 'OOC' : 'Scene',
+                                  style: const TextStyle(
+                                    color: EmberColors.primary,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.6,
+                                  ),
+                                ),
+                              ),
+                            ChatText(
+                              // Wave CY.15: substitute {{user}} / {{char}}
+                              // at display time. Cards (especially
+                              // first_mes / alternate_greetings) routinely
+                              // contain those placeholders and they need
+                              // to render as real names — same way they're
+                              // already filled in the system prompt via
+                              // _buildTurns.
+                              //
+                              // Pyre 1.1 (F4): non-destructive DISPLAY-stage
+                              // regex on top (after name-fill). Empty rules
+                              // list → identity, so the rendered text is
+                              // byte-identical when no rules exist.
+                              applyRegexRules(
+                                _fillNamePlaceholders(
+                                  m.text,
+                                  charName: widget.character?.name,
+                                  personaName: widget.persona?.name,
+                                ),
+                                widget.regexRules,
+                                stream: isUserSide
+                                    ? RegexStream.userInput
+                                    : RegexStream.aiOutput,
+                                stage: RegexStage.display,
+                              ),
+                              hideReasoning: _reasoningOverride ??
+                                  chatSettings.hideReasoning,
                             ),
-                            widget.regexRules,
-                            stream: isUser
-                                ? RegexStream.userInput
-                                : RegexStream.aiOutput,
-                            stage: RegexStage.display,
-                          ),
-                          hideReasoning: _reasoningOverride ??
-                              chatSettings.hideReasoning,
+                          ],
                         ),
         ),
       ),
     );
 
     final persona = widget.persona;
-    final avatar = isUser
+    // OOC and Scene are user-authored — show the persona avatar on the right,
+    // same as a normal user message. Never show the character avatar for them.
+    final avatar = isUserSide
         ? AvatarBubble(
             dataUrl: persona?.avatar,
             fallback: persona?.name ?? 'U',
@@ -4592,11 +4656,12 @@ class _MessageBubbleState extends State<_MessageBubble> {
     // message gets the `+`. We don't gate by widget.isLast here — for the
     // user-branch case the latest user message often ISN'T the chat's
     // last message (the assistant reply sits below it).
-    final canRegen = !isUser && widget.onRegenerate != null;
-    // User messages get a `+` at the rightmost variant to BRANCH — re-roll
-    // your own line. Tapping it freezes the current text as a variant and
-    // gives you a blank one to write a new alternative.
-    final canBranchUser = isUser && widget.onBranchUser != null;
+    // OOC/Scene never regenerate (they're user-authored), so canRegen stays
+    // false for them: the parent wires onRegenerate: null for those kinds.
+    final canRegen = !isUserSide && widget.onRegenerate != null;
+    // User/OOC/Scene all support the "+" branch affordance — add an empty
+    // variant to write a different version of the note or message.
+    final canBranchUser = isUserSide && widget.onBranchUser != null;
     final hasArrows = variantCount > 1;
     // Tap / hover toggles visibility, and `_flashControls()` is also
     // armed by `didUpdateWidget` when streaming on this bubble ends —
@@ -4612,14 +4677,18 @@ class _MessageBubbleState extends State<_MessageBubble> {
       if (!hasArrows || !visible || m.selectedVariant <= 0) return null;
       return _LateralChip(
         icon: Icons.chevron_left,
-        onPressed: () => widget.onSelectVariant!(m.selectedVariant - 1),
+        onPressed: () {
+          // Sub-task B: haptic on variant swipe (mobile only).
+          if (_isMobileForHaptics) HapticFeedback.selectionClick();
+          widget.onSelectVariant!(m.selectedVariant - 1);
+        },
       );
     }
 
     // Right edge — `>` if there are forward variants to walk into, or `+`
     // on the last variant to add a new one (regen for char, branch for
-    // user). Both share the same visibility gate as the left chevron:
-    // tap the bubble to flash them on, they auto-hide after a few seconds.
+    // user/ooc/scene). Both share the same visibility gate as the left
+    // chevron: tap the bubble to flash them on, they auto-hide.
     //
     // The `+` is suppressed on EMPTY variants — there's no point branching
     // a blank slot (the user hasn't even committed the current variant
@@ -4629,8 +4698,11 @@ class _MessageBubbleState extends State<_MessageBubble> {
       if (hasArrows && m.selectedVariant < variantCount - 1) {
         return _LateralChip(
           icon: Icons.chevron_right,
-          onPressed: () =>
-              widget.onSelectVariant!(m.selectedVariant + 1),
+          onPressed: () {
+            // Sub-task B: haptic on variant swipe (mobile only).
+            if (_isMobileForHaptics) HapticFeedback.selectionClick();
+            widget.onSelectVariant!(m.selectedVariant + 1);
+          },
         );
       }
       if (atLast &&
@@ -4729,10 +4801,11 @@ class _MessageBubbleState extends State<_MessageBubble> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
       child: Column(
+        // OOC/Scene align to the end (user side) same as a regular user msg.
         crossAxisAlignment:
-            isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            isUserSide ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
-          if (widget.showSpeakerName && !isUser && widget.character != null)
+          if (widget.showSpeakerName && !isUserSide && widget.character != null)
             Padding(
               padding: const EdgeInsets.only(left: 48, bottom: 4),
               child: Text(
@@ -4747,9 +4820,9 @@ class _MessageBubbleState extends State<_MessageBubble> {
             ),
           Row(
             mainAxisAlignment:
-                isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+                isUserSide ? MainAxisAlignment.end : MainAxisAlignment.start,
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: isUser
+            children: isUserSide
                 ? [
                     Flexible(child: bubbleWithLateralChips()),
                     const SizedBox(width: 8),
@@ -4764,14 +4837,14 @@ class _MessageBubbleState extends State<_MessageBubble> {
           if (variantCounter() != null)
             Padding(
               padding: EdgeInsets.only(
-                left: isUser ? 0 : 48,
-                right: isUser ? 48 : 0,
+                left: isUserSide ? 0 : 48,
+                right: isUserSide ? 48 : 0,
               ),
               child: variantCounter(),
             ),
           // Footer row: assistant messages get token estimate + (optional)
-          // per-message reasoning toggle + #N. User and aux messages get
-          // just #N on their respective side. All hidden mid-stream and
+          // per-message reasoning toggle + #N. User/OOC/Scene messages get
+          // just #N on their (right) side. All hidden mid-stream and
           // on empty variants. Reasoning toggle only appears if the body
           // has a <think> block — R1-style models, no-op for plain text.
           //
@@ -4784,18 +4857,16 @@ class _MessageBubbleState extends State<_MessageBubble> {
             Padding(
               padding: EdgeInsets.only(
                 top: 2,
-                left: isUser ? 0 : (isAux ? 0 : 48),
-                right: isUser ? 8 : 0,
+                left: isUserSide ? 0 : 48,
+                right: isUserSide ? 8 : 0,
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.max,
-                mainAxisAlignment: isUser
+                mainAxisAlignment: isUserSide
                     ? MainAxisAlignment.end
-                    : (isAux
-                        ? MainAxisAlignment.center
-                        : MainAxisAlignment.start),
+                    : MainAxisAlignment.start,
                 children: [
-                  if (!isUser && !isAux) ...[
+                  if (!isUserSide) ...[
                     Text(
                       formatApproxTokens(m.text) ?? '',
                       style: const TextStyle(

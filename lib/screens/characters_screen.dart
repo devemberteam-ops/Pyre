@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -627,6 +628,18 @@ Future<void> _showResumeOrStartFreshSheet(BuildContext context) async {
   );
 }
 
+// Bug 3 fix: transcode any non-PNG raster image (JPEG, WEBP, GIF …) to PNG
+// so encodeCharaCardPng never throws FormatException('Not a PNG …').
+// Returns the original bytes unchanged if they are already a PNG.
+// Returns null when the bytes can't be decoded (truly unreadable — caller
+// surfaces a user-friendly error instead of the raw exception).
+Uint8List? _ensurePngBytes(Uint8List bytes) {
+  if (looksLikePng(bytes)) return bytes; // already PNG — no conversion needed
+  final decoded = img.decodeImage(bytes);
+  if (decoded == null) return null; // unrecognised / corrupt image data
+  return Uint8List.fromList(img.encodePng(decoded));
+}
+
 /// Export the character as a chara_card_v2 PNG, written to the device's
 /// documents directory. The user can then share it / upload to botbooru
 /// or any other Tavern-compatible community.
@@ -650,7 +663,17 @@ Future<void> _exportCharacterAsPng(BuildContext context, Character c) async {
       );
       return;
     }
-    final pngBytes = encodeCharaCardPng(c, avatarBytes);
+    // Bug 3 fix: transcode JPEG/WEBP/GIF avatar to PNG before encoding.
+    final pngAvatarBytes = _ensurePngBytes(avatarBytes);
+    if (pngAvatarBytes == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+            content: Text(
+                "Couldn't read the avatar image to embed in the card. Try setting a different avatar.")),
+      );
+      return;
+    }
+    final pngBytes = encodeCharaCardPng(c, pngAvatarBytes);
 
     // Sanitise the filename — strip anything but ASCII alphanumerics and
     // a few safe punctuation chars, fall back to "card" if empty.
@@ -752,6 +775,16 @@ Future<void> _exportPersonaAsPng(BuildContext context, Persona p) async {
       );
       return;
     }
+    // Bug 3 fix: transcode JPEG/WEBP/GIF avatar to PNG before encoding.
+    final pngAvatarBytes = _ensurePngBytes(avatarBytes);
+    if (pngAvatarBytes == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+            content: Text(
+                "Couldn't read the avatar image to embed in the card. Try setting a different avatar.")),
+      );
+      return;
+    }
     final asCard = Character(
       id: newId('export'),
       name: p.name,
@@ -771,7 +804,7 @@ Future<void> _exportPersonaAsPng(BuildContext context, Persona p) async {
         'pyre': <String, dynamic>{'kind': 'persona'},
       },
     );
-    final pngBytes = encodeCharaCardPng(asCard, avatarBytes);
+    final pngBytes = encodeCharaCardPng(asCard, pngAvatarBytes);
 
     final safeName = p.name
         .replaceAll(RegExp(r'[^A-Za-z0-9 _\-.]'), '')

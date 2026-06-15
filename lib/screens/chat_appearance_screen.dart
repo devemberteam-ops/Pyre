@@ -722,7 +722,10 @@ class _SliderRow extends StatelessWidget {
                 const RoundSliderThumbShape(enabledThumbRadius: 8),
           ),
           child: Slider(
-            value: value,
+            // Bug 4 fix: clamp to [min,max] before handing to Material
+            // Slider — a synced/hand-edited value outside range trips
+            // Slider's assert (debug crash) or mis-renders (release).
+            value: value.clamp(min, max),
             min: min,
             max: max,
             divisions: divisions,

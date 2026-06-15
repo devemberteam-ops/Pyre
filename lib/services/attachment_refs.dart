@@ -114,6 +114,16 @@ Set<String> collectReferencedAttachmentHashes(AppStore s) {
   // ignores non-pyre URLs, so adding these is a no-op while still inline.
   for (final c in s.chats) {
     add(c.customBackgroundDataUrl);
+    // Bug 5 fix: also scan per-chat characterSnapshots. Group chats and
+    // chats with deleted library characters keep a frozen snapshot that
+    // may be the ONLY remaining referrer for an avatar/gallery blob. If
+    // we don't include these hashes, gcOrphans frees those .bin files and
+    // the snapshot avatar renders as a broken placeholder permanently.
+    for (final snap in c.characterSnapshots.values) {
+      add(snap.avatar);
+      add(snap.avatarOriginal);
+      snap.gallery.forEach(add);
+    }
   }
   return out;
 }

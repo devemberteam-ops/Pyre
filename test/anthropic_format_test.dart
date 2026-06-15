@@ -12,7 +12,14 @@ void main() {
   final settings = ModelSettings();
 
   group('buildAnthropicBody — message shape', () {
-    test('folds system turns into top-level system, out of messages', () {
+    // Pyre 1.1.3 Defect-2 fix: only the LEADING system turn(s) belong in the
+    // top-level `system` field. A POST-HISTORY system turn (the char-voice
+    // jailbreak / "stay in character" reminder, deliberately last for recency)
+    // must stay in position — converted to a user-role turn in `messages`, not
+    // hoisted to the top where it would mix with the character card and lose
+    // its recency punch.
+    test('keeps leading system at top-level, preserves post-history system in '
+        'messages', () {
       final body = buildAnthropicBody(
         messages: [
           ChatTurn('system', 'You are X.'),
@@ -24,11 +31,17 @@ void main() {
         model: 'claude-x',
         stream: true,
       );
-      expect(body['system'], 'You are X.\n\nStay in character.');
+      // Leading system only — the post-history reminder is NOT folded here.
+      expect(body['system'], 'You are X.');
       final msgs = (body['messages'] as List).cast<Map>();
+      // Still a valid Anthropic message list (user/assistant only).
       expect(
           msgs.every((m) => m['role'] == 'user' || m['role'] == 'assistant'),
           isTrue);
+      // The post-history system turn survives, in order, at the end as a user
+      // turn (recency preserved).
+      expect(msgs.last['role'], 'user');
+      expect(msgs.last['content'], 'Stay in character.');
       expect(body['model'], 'claude-x');
       expect(body['stream'], true);
       expect(body['max_tokens'], isA<int>());

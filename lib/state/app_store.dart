@@ -478,6 +478,16 @@ class AppStore extends ChangeNotifier {
     }
   }
 
+  // Bug 1 fix: tolerant scalar readers.  A wrong-typed value (e.g. the
+  // integer `1` stored where a String was expected) must degrade to the
+  // default instead of throwing TypeError and crashing load().
+  //
+  // Rule: ONLY guard the TYPE coercion — never swallow real logic errors.
+  // These are intentionally tiny so a reader of the caller site can see
+  // the "no throw" contract at a glance.
+  static String? _jStr(dynamic v) => v is String ? v : null;
+  static bool _jBool(dynamic v, bool d) => v is bool ? v : d;
+
   Future<void> load() async {
     loadErrors = [];
     // BATCH P1-state: load() reassigns the collections wholesale (e.g.
@@ -536,11 +546,11 @@ class AppStore extends ChangeNotifier {
       }
       providers = _parseList<ApiProvider>(
           raw['providers'], 'providers', ApiProvider.fromJson);
-      activeProviderId = raw['activeProviderId'] as String?;
-      creatorProviderId = raw['creatorProviderId'] as String?;
-      visionProviderId = raw['visionProviderId'] as String?;
-      impersonateProviderId = raw['impersonateProviderId'] as String?;
-      guideProviderId = raw['guideProviderId'] as String?;
+      activeProviderId = _jStr(raw['activeProviderId']);
+      creatorProviderId = _jStr(raw['creatorProviderId']);
+      visionProviderId = _jStr(raw['visionProviderId']);
+      impersonateProviderId = _jStr(raw['impersonateProviderId']);
+      guideProviderId = _jStr(raw['guideProviderId']);
       // Wave CY.18.99: per-provider refusal history (self-learning).
       final rawRefusals = raw['providerRefusals'];
       if (rawRefusals is Map) {
@@ -576,27 +586,27 @@ class AppStore extends ChangeNotifier {
           raw['characters'], 'characters', Character.fromJson);
       personas = _parseList<Persona>(
           raw['personas'], 'personas', Persona.fromJson);
-      activePersonaId = raw['activePersonaId'] as String?;
+      activePersonaId = _jStr(raw['activePersonaId']);
       // Wave BG: in-progress drafts from the manual editor.
       characterDrafts = _parseList<Character>(
           raw['characterDrafts'], 'characterDrafts', Character.fromJson);
       // Wave BC: botbooru creator handle. Defaults to '' so existing
       // backups without this field load cleanly.
-      botbooruUsername = (raw['botbooruUsername'] as String?) ?? '';
+      botbooruUsername = _jStr(raw['botbooruUsername']) ?? '';
       // Wave CY.18.30: profile picture + about-me, both optional and
       // backwards-compatible with pre-Wave backups (missing fields →
       // empty / null).
-      botbooruAvatar = raw['botbooruAvatar'] as String?;
+      botbooruAvatar = _jStr(raw['botbooruAvatar']);
       // Non-destructive Recrop: absent/null → null (pre-feature backups).
-      botbooruAvatarOriginal = raw['botbooruAvatarOriginal'] as String?;
-      botbooruAboutMe = (raw['botbooruAboutMe'] as String?) ?? '';
+      botbooruAvatarOriginal = _jStr(raw['botbooruAvatarOriginal']);
+      botbooruAboutMe = _jStr(raw['botbooruAboutMe']) ?? '';
       // Wave CY.18.36: Profile expansion fields, all optional + back-
       // compat. `installedAt` gets set on this load if absent (see
       // below, after the try/catch closes the load branch).
-      botbooruTitle = (raw['botbooruTitle'] as String?) ?? '';
-      botbooruPronouns = (raw['botbooruPronouns'] as String?) ?? '';
+      botbooruTitle = _jStr(raw['botbooruTitle']) ?? '';
+      botbooruPronouns = _jStr(raw['botbooruPronouns']) ?? '';
       botbooruFeaturedCharacterId =
-          raw['botbooruFeaturedCharacterId'] as String?;
+          _jStr(raw['botbooruFeaturedCharacterId']);
       // The BotBooru profile sync watermark. Absent (pre-feature backups) → 0,
       // so the first incoming profile sync (any mtime > 0) wins.
       botbooruProfileMtime =
@@ -605,51 +615,48 @@ class AppStore extends ChangeNotifier {
 
       folders = _parseList<Folder>(
           raw['folders'], 'folders', Folder.fromJson);
-      charSortKey = (raw['charSortKey'] as String?) ?? 'recent';
+      charSortKey = _jStr(raw['charSortKey']) ?? 'recent';
       charSelectedTags =
           (raw['charSelectedTags'] as List?)?.cast<String>() ?? [];
-      charFolderId = raw['charFolderId'] as String?;
-      charFavoritesExpanded =
-          (raw['charFavoritesExpanded'] as bool?) ?? true;
-      personaSortKey = (raw['personaSortKey'] as String?) ?? 'recent';
+      charFolderId = _jStr(raw['charFolderId']);
+      charFavoritesExpanded = _jBool(raw['charFavoritesExpanded'], true);
+      personaSortKey = _jStr(raw['personaSortKey']) ?? 'recent';
       personaFavoritesExpanded =
-          (raw['personaFavoritesExpanded'] as bool?) ?? true;
-      seenOnboarding = (raw['seenOnboarding'] as bool?) ?? false;
-      dismissedUpdateVersion = raw['dismissedUpdateVersion'] as String?;
+          _jBool(raw['personaFavoritesExpanded'], true);
+      seenOnboarding = _jBool(raw['seenOnboarding'], false);
+      dismissedUpdateVersion = _jStr(raw['dismissedUpdateVersion']);
       // Wave CY.18.121: example-seed latch. Missing on pre-Wave backups
       // → false, but the seed gate's `charactersEmpty` + `!seenOnboarding`
       // clauses still protect any non-fresh install from re-seeding.
-      exampleContentSeeded =
-          (raw['exampleContentSeeded'] as bool?) ?? false;
+      exampleContentSeeded = _jBool(raw['exampleContentSeeded'], false);
       // Wave CY.18.188: stale-Vesna-persona sweep latch. Missing on
       // pre-Wave-188 installs → false (sweep runs once on first load).
       vesnaExamplePersonaSwept =
-          (raw['vesnaExamplePersonaSwept'] as bool?) ?? false;
+          _jBool(raw['vesnaExamplePersonaSwept'], false);
       // Wave CY.18.204: persona-defaults migration latch. Missing on
       // pre-Wave-204 installs → false (the one-time adjustment runs once
       // on first load after upgrade).
       personaDefaultsAdjustedV2 =
-          (raw['personaDefaultsAdjustedV2'] as bool?) ?? false;
+          _jBool(raw['personaDefaultsAdjustedV2'], false);
       // Wave CY.18.209: corrected persona-defaults migration latch (the v2
       // pass matched the wrong name and was a no-op). Missing on installs
       // that predate this wave → false, so the corrected pass runs once.
       personaDefaultsAdjustedV3 =
-          (raw['personaDefaultsAdjustedV3'] as bool?) ?? false;
+          _jBool(raw['personaDefaultsAdjustedV3'], false);
       // Pyre 1.1: default-regex-rule seed latch. Missing on installs that
       // predate this build → false, so the one-time seed runs once on the
       // next launch (fresh installs AND upgrades).
-      defaultRegexRulesSeeded =
-          (raw['defaultRegexRulesSeeded'] as bool?) ?? false;
+      defaultRegexRulesSeeded = _jBool(raw['defaultRegexRulesSeeded'], false);
 
       chats = _parseList<Chat>(raw['chats'], 'chats', Chat.fromJson);
       lorebooks = _parseList<Lorebook>(
           raw['lorebooks'], 'lorebooks', Lorebook.fromJson);
       presets = _parseList<Preset>(
           raw['presets'], 'presets', Preset.fromJson);
-      activePresetId = raw['activePresetId'] as String?;
+      activePresetId = _jStr(raw['activePresetId']);
       creatorPresets = _parseList<CreatorPreset>(
           raw['creatorPresets'], 'creatorPresets', CreatorPreset.fromJson);
-      activeCreatorPresetId = raw['activeCreatorPresetId'] as String?;
+      activeCreatorPresetId = _jStr(raw['activeCreatorPresetId']);
       // Pyre 1.1 (F4): regex find/replace rules. Missing key → empty list,
       // which leaves chat byte-identical to pre-1.1 behaviour.
       regexRules = _parseList<RegexRule>(
@@ -690,7 +697,7 @@ class AppStore extends ChangeNotifier {
 
       creatorSessions = _parseList<CreatorSession>(raw['creatorSessions'],
           'creatorSessions', CreatorSession.fromJson);
-      activeCreatorSessionId = raw['activeCreatorSessionId'] as String?;
+      activeCreatorSessionId = _jStr(raw['activeCreatorSessionId']);
 
       // Wave CY.18.256: synced tombstone log. Absent on pre-Wave backups
       // → stays the empty map (deletion propagation simply has no history

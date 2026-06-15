@@ -334,13 +334,20 @@ class _NodeWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isUser = node.message.kind == MessageKind.user;
-    final isAux = node.message.kind == MessageKind.ooc ||
-        node.message.kind == MessageKind.scene ||
-        node.message.kind == MessageKind.system;
+    // Mirror of isReadOnlyAuxKind() in chat_screen.dart:
+    // only system is truly aux/read-only. OOC and Scene are user-authored and
+    // now render as normal user-side nodes (editable, branchable). Keeping
+    // the isAux variable name here so the downstream colour/icon logic
+    // below is untouched (isAux now only affects MessageKind.system nodes).
+    final isAux = node.message.kind == MessageKind.system;
     // Dim nodes that aren't on the active branch so the user's "you
     // are here" trail is unambiguous.
     final dimAlpha = node.inActiveBranch ? 1.0 : 0.55;
-    final color = isUser
+    // OOC and Scene are user-authored — use the primary-tinted user colour.
+    final isUserSide = isUser ||
+        node.message.kind == MessageKind.ooc ||
+        node.message.kind == MessageKind.scene;
+    final color = isUserSide
         ? EmberColors.primary.withValues(alpha: 0.20 * dimAlpha)
         : EmberColors.bgPanel.withValues(alpha: dimAlpha);
     return Positioned(
@@ -418,9 +425,12 @@ class _NodeWidget extends StatelessWidget {
                           size: 18, color: EmberColors.textMid)
                     else
                       AvatarBubble(
-                        dataUrl: isUser ? null : node.character?.avatar,
-                        fallback:
-                            isUser ? 'U' : (node.character?.name ?? '?'),
+                        // OOC/Scene are user-authored — show user (no avatar)
+                        // rather than the character avatar.
+                        dataUrl: isUserSide ? null : node.character?.avatar,
+                        fallback: isUserSide
+                            ? 'U'
+                            : (node.character?.name ?? '?'),
                         radius: 14,
                       ),
                     const SizedBox(height: 4),
@@ -458,7 +468,14 @@ class _NodeWidget extends StatelessWidget {
 Future<bool> _confirmJumpToNode(
     BuildContext context, _TreeNode node) async {
   final m = node.message;
-  final isUser = m.kind == MessageKind.user;
+  final isUserSide = m.kind == MessageKind.user ||
+      m.kind == MessageKind.ooc ||
+      m.kind == MessageKind.scene;
+  final kindLabel = m.kind == MessageKind.ooc
+      ? 'OOC'
+      : m.kind == MessageKind.scene
+          ? 'Scene'
+          : (isUserSide ? 'User message' : 'Character message');
   final preview = m.text.trim();
   final shortPreview = preview.length > 280
       ? '${preview.substring(0, 280)}…'
@@ -482,15 +499,17 @@ Future<bool> _confirmJumpToNode(
               Row(
                 children: [
                   Icon(
-                    isUser ? Icons.person_outline : Icons.smart_toy_outlined,
+                    isUserSide
+                        ? Icons.person_outline
+                        : Icons.smart_toy_outlined,
                     size: 18,
-                    color: isUser
+                    color: isUserSide
                         ? EmberColors.primary
                         : EmberColors.textMid,
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    isUser ? 'User message' : 'Character message',
+                    kindLabel,
                     style: const TextStyle(
                       color: EmberColors.textHigh,
                       fontWeight: FontWeight.w600,
