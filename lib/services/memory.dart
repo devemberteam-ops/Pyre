@@ -42,6 +42,50 @@ import '../models/models.dart';
 import 'chat_api.dart';
 import 'llm_debug_log.dart';
 
+/// Per-chat in-flight lock for the checkpoint-generation pipeline.
+///
+/// Keyed by chat id. A value of `true` means a [generateCheckpoint] or
+/// [regenerateCheckpoint] call is currently in progress for that chat.
+///
+/// This is the **service-level** guard described by audit bug C1.  The
+/// per-screen `_summarising` / `_retrying` latches in memory_screen.dart
+/// and chat_screen.dart each guard their OWN screen's concurrency, but they
+/// can't see each other — so a manual tap from MemoryScreen while auto-
+/// summarise from ChatScreen is in flight used to launch a SECOND concurrent
+/// LLM call, appending two checkpoints with the same anchorMessageIdx.
+///
+/// Both callers honour the sentinel return value: the auto path
+/// ([chat_screen._maybeAutoSummarize]) already treats null as "skip"; the
+/// manual path ([memory_screen._runManualSummarise]) calls
+/// [isCheckpointInFlight] to distinguish "lock held" from "LLM error" and
+/// shows the appropriate toast.
+final Map<String, bool> _checkpointInFlight = {};
+
+/// Returns true while a [generateCheckpoint] or [regenerateCheckpoint] call
+/// is in progress for [chatId].
+///
+/// Use this from callers that receive a null return value to distinguish
+/// "already running" from "LLM error".
+bool isCheckpointInFlight(String chatId) =>
+    _checkpointInFlight[chatId] == true;
+
+/// TEST SEAM — forcibly marks [chatId] as in-flight or clears it.
+/// Only used in unit tests to verify the C1 concurrent-call guard
+/// without spinning up a real LLM call.
+@visibleForTesting
+void setCheckpointInFlightForTest(String chatId, {required bool inFlight}) {
+  if (inFlight) {
+    _checkpointInFlight[chatId] = true;
+  } else {
+    _checkpointInFlight.remove(chatId);
+  }
+}
+
+/// TEST SEAM — clears ALL in-flight state. Call in setUp/tearDown so
+/// lock state from one test never leaks into the next.
+@visibleForTesting
+void clearAllCheckpointInFlightForTest() => _checkpointInFlight.clear();
+
 /// Wave CY.18.42: in-memory error log for memory-system failures.
 /// Pre-Wave the LLM-summariser calls swallowed every error with
 /// `catch (_)` and returned null — which the UI rendered as "no
@@ -572,6 +616,36 @@ Future<MemoryCheckpoint?> generateCheckpoint({
   required ModelSettings settings,
   MemorySettings? memorySettings,
 }) async {
+  // C1: service-level per-chat lock. Both the auto path (chat_screen) and the
+  // manual path (memory_screen) call this function; their separate per-screen
+  // `_summarising` latches can't see each other. Acquiring here prevents a
+  // concurrent call from a DIFFERENT screen from producing a duplicate anchor.
+  if (_checkpointInFlight[chat.id] == true) {
+    // Caller (manual path) calls isCheckpointInFlight() to distinguish this
+    // from an LLM error; auto path already treats null as "skip".
+    return null;
+  }
+  _checkpointInFlight[chat.id] = true;
+  try {
+    return await _generateCheckpointBody(
+      chat: chat,
+      provider: provider,
+      settings: settings,
+      memorySettings: memorySettings,
+    );
+  } finally {
+    _checkpointInFlight.remove(chat.id);
+  }
+}
+
+/// Internal body of [generateCheckpoint] — called only while the per-chat
+/// lock is held. Separated to keep the lock management in one flat scope.
+Future<MemoryCheckpoint?> _generateCheckpointBody({
+  required Chat chat,
+  required ApiProvider provider,
+  required ModelSettings settings,
+  MemorySettings? memorySettings,
+}) async {
   if (provider.baseUrl.isEmpty) {
     // Wave CY.18.270: was a silent `return null` — record it so the failure
     // is visible (the chat-screen SnackBar reads MemoryErrors) instead of the
@@ -587,6 +661,12 @@ Future<MemoryCheckpoint?> generateCheckpoint({
   // chat replay starts past the new anchor and grows back from zero
   // as the user keeps chatting.
   final cutoff = chat.messages.length - 1;
+  // C2: snapshot pathHash NOW — before any await — from the same message
+  // state that cutoff and the prompt body are built from. Recomputing it
+  // AFTER the await (the old code) meant a regen/swap/delete during the
+  // 10-30s LLM call would produce a pathHash that described a different
+  // branch than the body the model actually summarised.
+  final snapshotPathHash = computePathHash(chat.messages, cutoff);
   if (cutoff <= lastAnchor) {
     // SILENT export-only breadcrumb (Wave CY.18.214 channel). This early
     // return otherwise records NOTHING — making a stuck "nothing to cover"
@@ -682,11 +762,13 @@ Future<MemoryCheckpoint?> generateCheckpoint({
     }
 
     final summary = accumulated.trim();
+    // C2: use the pre-await snapshot so the pathHash always matches the branch
+    // that was actually summarised, not whatever the live list looks like now.
     return MemoryCheckpoint(
       id: newId('mc'),
       summary: summary,
       anchorMessageIdx: cutoff,
-      pathHash: computePathHash(chat.messages, cutoff),
+      pathHash: snapshotPathHash,
     );
   } catch (e) {
     MemoryErrors.record('generateCheckpoint', e);
@@ -695,10 +777,38 @@ Future<MemoryCheckpoint?> generateCheckpoint({
 }
 
 /// Re-runs the LLM call for an existing checkpoint, keeping its anchor
-/// and pathHash but replacing its summary. Used by the per-checkpoint
-/// "Retry" button. Returns the new checkpoint object — the caller
-/// swaps it into `chat.memoryCheckpoints` (preserving order).
+/// but replacing its summary and recomputing its pathHash from the
+/// pre-await message state. Used by the per-checkpoint "Retry" button.
+/// Returns the new checkpoint object — the caller swaps it into
+/// `chat.memoryCheckpoints` (preserving order).
 Future<MemoryCheckpoint?> regenerateCheckpoint({
+  required Chat chat,
+  required MemoryCheckpoint target,
+  required ApiProvider provider,
+  required ModelSettings settings,
+  MemorySettings? memorySettings,
+}) async {
+  // C1: service-level per-chat lock (same guard as generateCheckpoint).
+  if (_checkpointInFlight[chat.id] == true) {
+    return null;
+  }
+  _checkpointInFlight[chat.id] = true;
+  try {
+    return await _regenerateCheckpointBody(
+      chat: chat,
+      target: target,
+      provider: provider,
+      settings: settings,
+      memorySettings: memorySettings,
+    );
+  } finally {
+    _checkpointInFlight.remove(chat.id);
+  }
+}
+
+/// Internal body of [regenerateCheckpoint] — called only while the per-chat
+/// lock is held.
+Future<MemoryCheckpoint?> _regenerateCheckpointBody({
   required Chat chat,
   required MemoryCheckpoint target,
   required ApiProvider provider,
@@ -718,6 +828,13 @@ Future<MemoryCheckpoint?> regenerateCheckpoint({
   final prevAnchor = idx == 0 ? -1 : valid[idx - 1].anchorMessageIdx;
   final cutoff = target.anchorMessageIdx;
   if (cutoff <= prevAnchor) return null;
+
+  // C5: snapshot pathHash for the range we are actually re-summarising —
+  // BEFORE the await. The old code blindly copied `target.pathHash` after
+  // the await, but a regen/swap during the LLM call could leave the target's
+  // stored hash pointing at a branch that no longer matches the current
+  // message sequence up to `cutoff`.
+  final snapshotPathHash = computePathHash(chat.messages, cutoff);
 
   final body = _buildSummariserBody(
     chat: chat,
@@ -750,11 +867,14 @@ Future<MemoryCheckpoint?> regenerateCheckpoint({
       );
       return null;
     }
+    // C5: use the pre-await snapshotPathHash rather than target.pathHash so
+    // the retried checkpoint's hash matches the branch it was actually built
+    // from, not a potentially stale branch the target was created on.
     return MemoryCheckpoint(
       id: target.id,
       summary: summary,
       anchorMessageIdx: target.anchorMessageIdx,
-      pathHash: target.pathHash,
+      pathHash: snapshotPathHash,
       createdAt: DateTime.now().millisecondsSinceEpoch,
     );
   } catch (e) {

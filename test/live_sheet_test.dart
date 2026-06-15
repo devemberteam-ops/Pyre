@@ -525,6 +525,127 @@ void main() {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // L1/L2 fix: mergeSeedSections — lock-preserving seed merge (2026-06-15)
+  // -------------------------------------------------------------------------
+
+  group('mergeSeedSections', () {
+    // Helper: build a section map with some locked + unlocked facts.
+    Map<LiveSheetSection, List<LiveSheetFact>> sectionsWith({
+      List<LiveSheetFact>? appearance,
+      List<LiveSheetFact>? clothing,
+      List<LiveSheetFact>? conditions,
+      List<LiveSheetFact>? possessions,
+      List<LiveSheetFact>? facts,
+    }) =>
+        {
+          LiveSheetSection.appearance: appearance ?? [],
+          LiveSheetSection.clothing: clothing ?? [],
+          LiveSheetSection.conditions: conditions ?? [],
+          LiveSheetSection.possessions: possessions ?? [],
+          LiveSheetSection.facts: facts ?? [],
+        };
+
+    test('locked facts survive a seed that would overwrite their section', () {
+      final existing = sectionsWith(
+        conditions: [
+          LiveSheetFact(text: 'cursed', locked: true),
+          LiveSheetFact(text: 'happy'),
+        ],
+      );
+      final seeded = sectionsWith(
+        conditions: [LiveSheetFact(text: 'pregnant')],
+      );
+      final result = mergeSeedSections(existing: existing, seeded: seeded);
+      final conds = result[LiveSheetSection.conditions]!;
+      // locked fact is preserved
+      expect(conds.any((f) => f.text == 'cursed' && f.locked), true);
+      // seeded fact is added
+      expect(conds.any((f) => f.text == 'pregnant'), true);
+      // unlocked old fact is replaced (not kept alongside new)
+      expect(conds.any((f) => f.text == 'happy'), false);
+    });
+
+    test('unlocked section is fully replaced by seeded content', () {
+      final existing = sectionsWith(
+        clothing: [LiveSheetFact(text: 'robe'), LiveSheetFact(text: 'boots')],
+      );
+      final seeded = sectionsWith(
+        clothing: [LiveSheetFact(text: 'hoodie'), LiveSheetFact(text: 'thigh-highs')],
+      );
+      final result = mergeSeedSections(existing: existing, seeded: seeded);
+      final cloth = result[LiveSheetSection.clothing]!.map((f) => f.text).toList();
+      expect(cloth, ['hoodie', 'thigh-highs']);
+    });
+
+    test('locked facts are kept; non-duplicate seeded facts append after them', () {
+      // Semantic (consistent with the dedup test below): a locked fact is canon
+      // and is ALWAYS preserved, but a NEW (non-duplicate) seeded fact is still
+      // appended after it — we never silently drop the seed's new info (no data
+      // loss). A contradicting seed ('human' next to locked 'demon horns') is
+      // appended, not dropped; the user can prune it. (Founder may later choose
+      // a stricter "locked section = hands off" rule — flagged.)
+      final existing = sectionsWith(
+        appearance: [LiveSheetFact(text: 'demon horns', locked: true)],
+        conditions: [LiveSheetFact(text: 'immortal', locked: true)],
+      );
+      final seeded = sectionsWith(
+        appearance: [LiveSheetFact(text: 'human')],
+        conditions: [LiveSheetFact(text: 'mortal')],
+      );
+      final result = mergeSeedSections(existing: existing, seeded: seeded);
+      expect(result[LiveSheetSection.appearance]!.map((f) => f.text),
+          ['demon horns', 'human']);
+      expect(result[LiveSheetSection.conditions]!.map((f) => f.text),
+          ['immortal', 'mortal']);
+      // The locked fact stays locked; the appended seed is unlocked.
+      expect(result[LiveSheetSection.appearance]!.first.locked, true);
+      expect(result[LiveSheetSection.appearance]!.last.locked, false);
+    });
+
+    test('seeded content is deduped against existing locked facts (by norm text)', () {
+      final existing = sectionsWith(
+        facts: [LiveSheetFact(text: 'isekai outsider', locked: true)],
+      );
+      final seeded = sectionsWith(
+        facts: [
+          LiveSheetFact(text: 'Isekai Outsider'), // dup (different case)
+          LiveSheetFact(text: 'level 1 adventurer'),
+        ],
+      );
+      final result = mergeSeedSections(existing: existing, seeded: seeded);
+      final fs = result[LiveSheetSection.facts]!;
+      // deduped: only ONE 'isekai outsider' entry
+      expect(fs.where((f) => f.text.toLowerCase() == 'isekai outsider').length, 1);
+      expect(fs.any((f) => f.text == 'level 1 adventurer'), true);
+    });
+
+    test('empty seed leaves locked facts intact and clears unlocked', () {
+      final existing = sectionsWith(
+        clothing: [
+          LiveSheetFact(text: 'magic ring', locked: true),
+          LiveSheetFact(text: 'tattered cloak'),
+        ],
+      );
+      final seeded = sectionsWith(); // all sections empty
+      final result = mergeSeedSections(existing: existing, seeded: seeded);
+      final cloth = result[LiveSheetSection.clothing]!;
+      expect(cloth.length, 1);
+      expect(cloth.single.text, 'magic ring');
+      expect(cloth.single.locked, true);
+    });
+
+    test('result map covers all sections (no key missing)', () {
+      final result = mergeSeedSections(
+        existing: sectionsWith(),
+        seeded: sectionsWith(),
+      );
+      for (final s in LiveSheetSection.values) {
+        expect(result.containsKey(s), true);
+      }
+    });
+  });
+
   group('parseSeedSheet', () {
     test('parses labelled lines into sections; unknown labels ignored', () {
       final m = parseSeedSheet(

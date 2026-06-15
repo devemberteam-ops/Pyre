@@ -38,6 +38,11 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
   // They are created lazily in _controllerFor and disposed in dispose().
   final Map<String, TextEditingController> _controllers = {};
 
+  // L4 fix: track the active snapshot id so we can detect when the snapshot
+  // changes underneath us (e.g. auto-update appending a new one) and
+  // invalidate stale controllers before the next build.
+  String? _activeSnapshotId;
+
   @override
   void dispose() {
     for (final c in _controllers.values) {
@@ -97,6 +102,18 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
     for (final k in toRemove) {
       _controllers.remove(k)?.dispose();
     }
+  }
+
+  /// L4 fix: disposes and clears ALL cached controllers when the active
+  /// snapshot has changed (e.g. auto-update appended a new snapshot, or the
+  /// user cloned/branched). Must be called OUTSIDE setState so disposal never
+  /// races with an in-progress build frame. After the clear, the next build
+  /// rebuilds every controller from the new snapshot's text via [_controllerFor].
+  void _invalidateAllControllers() {
+    for (final c in _controllers.values) {
+      c.dispose();
+    }
+    _controllers.clear();
   }
 
   // ─── options ──────────────────────────────────────────────────────────────
@@ -273,8 +290,14 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
       if (!mounted) return;
       if (sections != null) {
         _invalidateEntityControllers(entity.id);
+        // L1/L2 fix: use lock-preserving merge instead of wholesale replace
+        // so that locked facts (and hand-edited canon) survive a seed call.
+        final merged = lsheet.mergeSeedSections(
+          existing: entity.sections,
+          seeded: sections,
+        );
         for (final s in LiveSheetSection.values) {
-          entity.sections[s] = sections[s] ?? [];
+          entity.sections[s] = merged[s]!;
         }
         store.touchChat(chat); // F1: seeded entity sections sync
       } else {
@@ -410,6 +433,19 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
     }
 
     final active = lsheet.activeLiveSheetSnapshot(chat);
+
+    // L4 fix: if the active snapshot has changed since the last build
+    // (e.g. auto-update appended a new snapshot — clone() preserves entity
+    // ids so putIfAbsent would silently return stale controllers), invalidate
+    // ALL controllers NOW, before they are looked up by _controllerFor below.
+    // Invalidation is called outside setState (we're already in build, not
+    // inside a setState callback) so disposal never races with a build frame
+    // — same discipline as _invalidateEntityControllers.
+    final newSnapshotId = active?.id;
+    if (newSnapshotId != _activeSnapshotId) {
+      _invalidateAllControllers();
+      _activeSnapshotId = newSnapshotId;
+    }
 
     return Scaffold(
       appBar: AppBar(

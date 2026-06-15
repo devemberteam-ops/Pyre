@@ -72,7 +72,15 @@ class _MemoryScreenState extends State<MemoryScreen> {
     if (!mounted) return;
     setState(() => _summarising = false);
     if (ckpt == null) {
-      _toast('Couldn\'t summarise — provider error or chat too short.');
+      // C1: distinguish "lock held by auto-summarise from chat screen" from a
+      // genuine LLM error.  isCheckpointInFlight is still true when the auto
+      // path is the lock holder and our call returned immediately.
+      if (ltm.isCheckpointInFlight(chat.id)) {
+        _toast('A checkpoint is already being generated — wait for it to '
+            'finish, then try again.');
+      } else {
+        _toast('Couldn\'t summarise — provider error or chat too short.');
+      }
       return;
     }
     // Wave CY.18.24: respect memoryEnabled flipped to false
@@ -127,7 +135,14 @@ class _MemoryScreenState extends State<MemoryScreen> {
     if (!mounted) return false;
     setState(() => _retrying.remove(target.id));
     if (replacement == null) {
-      _toast('Couldn\'t regenerate — provider error.');
+      // C1: distinguish "lock held by auto-summarise from chat screen" from
+      // a genuine LLM error (same pattern as _runManualSummarise).
+      if (ltm.isCheckpointInFlight(chat.id)) {
+        _toast('A checkpoint is already being generated — wait for it to '
+            'finish, then retry.');
+      } else {
+        _toast('Couldn\'t regenerate — provider error.');
+      }
       return false;
     }
     ltm.replaceCheckpoint(chat, replacement);
@@ -141,6 +156,14 @@ class _MemoryScreenState extends State<MemoryScreen> {
   /// comma, a missing detail) without burning a full regeneration.
   /// Preserves id / anchor / pathHash so chain validity is unchanged.
   Future<bool> _editCheckpoint(MemoryCheckpoint target) async {
+    // C3: guard destructive/edit ops against an in-flight summarise or retry.
+    // A retry in flight + an edit on the same checkpoint → replaceCheckpoint
+    // would later overwrite the user's manual edit with the LLM result.
+    if (_anyMemoryWorkInFlight) {
+      _toast('Another memory operation is already running — wait for it '
+          'to finish before editing.');
+      return false;
+    }
     final store = context.read<AppStore>();
     final chat = _liveChat(store);
     if (chat == null) return false;
@@ -250,6 +273,14 @@ class _MemoryScreenState extends State<MemoryScreen> {
   }
 
   Future<bool> _deleteCheckpoint(MemoryCheckpoint target) async {
+    // C3: guard against concurrent summarise/retry — a retry in flight + delete
+    // of its target → the retry's replaceCheckpoint lands after deletion, silently
+    // re-inserting a checkpoint the user just deleted.
+    if (_anyMemoryWorkInFlight) {
+      _toast('Another memory operation is already running — wait for it '
+          'to finish before deleting.');
+      return false;
+    }
     final store = context.read<AppStore>();
     final chat = _liveChat(store);
     if (chat == null) return false;
@@ -287,6 +318,14 @@ class _MemoryScreenState extends State<MemoryScreen> {
   }
 
   Future<void> _wipeAll() async {
+    // C3: guard against concurrent summarise/retry — wiping while a summarise
+    // is in flight means the in-flight checkpoint would be appended to an empty
+    // chain after the wipe, defeating the user's intent.
+    if (_anyMemoryWorkInFlight) {
+      _toast('Another memory operation is already running — wait for it '
+          'to finish before wiping.');
+      return;
+    }
     final store = context.read<AppStore>();
     final chat = _liveChat(store);
     if (chat == null) return;
@@ -478,7 +517,10 @@ class _MemoryScreenState extends State<MemoryScreen> {
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  icon: _summarising
+                  // C4: gate on _anyMemoryWorkInFlight (not just _summarising)
+                  // so the button visibly disables and shows "Summarising…"
+                  // while a per-checkpoint Retry is in progress too.
+                  icon: _anyMemoryWorkInFlight
                       ? const SizedBox(
                           width: 14,
                           height: 14,
@@ -487,13 +529,14 @@ class _MemoryScreenState extends State<MemoryScreen> {
                         )
                       : const Icon(Icons.add, size: 18),
                   label: Text(
-                    _summarising ? 'Summarising…' : 'Summarise now',
+                    _anyMemoryWorkInFlight ? 'Summarising…' : 'Summarise now',
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: EmberColors.primary,
                     foregroundColor: Colors.white,
                   ),
-                  onPressed: _summarising ? null : _runManualSummarise,
+                  onPressed:
+                      _anyMemoryWorkInFlight ? null : _runManualSummarise,
                 ),
               ),
             ),

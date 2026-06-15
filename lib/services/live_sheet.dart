@@ -390,6 +390,53 @@ Map<LiveSheetSection, List<LiveSheetFact>> parseSeedSheet(String raw) {
 }
 
 // ---------------------------------------------------------------------------
+// L1/L2 fix (2026-06-15): mergeSeedSections — lock-preserving seed merge
+// ---------------------------------------------------------------------------
+
+/// Merges [seeded] facts (from an LLM seed call via [parseSeedSheet]) into
+/// [existing] entity sections, PRESERVING every locked fact.
+///
+/// Per-section semantics:
+///   • Locked facts from [existing] are always kept, regardless of [seeded].
+///   • Unlocked facts from [existing] are DISCARDED (the seed is a fresh
+///     state description of the entity, so old unlocked facts are stale).
+///   • Facts from [seeded] are appended AFTER the kept locked facts, but
+///     only if they aren't already present by normalized text (dedup against
+///     both locked survivors and each other).
+///
+/// Returns a fresh section map — neither input is mutated.
+Map<LiveSheetSection, List<LiveSheetFact>> mergeSeedSections({
+  required Map<LiveSheetSection, List<LiveSheetFact>> existing,
+  required Map<LiveSheetSection, List<LiveSheetFact>> seeded,
+}) {
+  final result = <LiveSheetSection, List<LiveSheetFact>>{};
+  for (final s in LiveSheetSection.values) {
+    final existingFacts = existing[s] ?? [];
+    final seededFacts = seeded[s] ?? [];
+
+    // Keep every locked fact from existing (in order).
+    final kept = existingFacts.where((f) => f.locked).map((f) => f.clone()).toList();
+
+    // Build a dedup set from the locked survivors.
+    final seen = {for (final f in kept) _lsNorm(f.text)};
+
+    // Append seeded facts that aren't already represented.
+    for (final f in seededFacts) {
+      final norm = _lsNorm(f.text);
+      if (!seen.contains(norm)) {
+        seen.add(norm);
+        // Seeded facts are unlocked by definition — the user can lock them
+        // afterwards if they want to protect them from future deltas.
+        kept.add(LiveSheetFact(text: f.text, locked: false));
+      }
+    }
+
+    result[s] = kept;
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Wave CY.18.172: error log + settings floor + orchestration helpers
 // ---------------------------------------------------------------------------
 

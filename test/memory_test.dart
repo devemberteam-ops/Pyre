@@ -458,4 +458,207 @@ void main() {
       expect(body, contains('hi'));
     });
   });
+
+  // -------------------------------------------------------------------------
+  // C1 — service-level per-chat in-flight lock
+  // -------------------------------------------------------------------------
+  group('C1: isCheckpointInFlight / per-chat lock', () {
+    setUp(() => clearAllCheckpointInFlightForTest());
+    tearDown(() => clearAllCheckpointInFlightForTest());
+
+    test('initially false for any chat id', () {
+      expect(isCheckpointInFlight('chat-A'), isFalse);
+      expect(isCheckpointInFlight('chat-B'), isFalse);
+    });
+
+    test('returns true once the lock is set, false after it is cleared', () {
+      setCheckpointInFlightForTest('chat-A', inFlight: true);
+      expect(isCheckpointInFlight('chat-A'), isTrue);
+      // A different chat id is unaffected.
+      expect(isCheckpointInFlight('chat-B'), isFalse);
+
+      setCheckpointInFlightForTest('chat-A', inFlight: false);
+      expect(isCheckpointInFlight('chat-A'), isFalse);
+    });
+
+    test('locks are per-chat: setting one does not affect another', () {
+      setCheckpointInFlightForTest('chat-X', inFlight: true);
+      setCheckpointInFlightForTest('chat-Y', inFlight: true);
+      setCheckpointInFlightForTest('chat-X', inFlight: false);
+      expect(isCheckpointInFlight('chat-X'), isFalse);
+      expect(isCheckpointInFlight('chat-Y'), isTrue);
+    });
+
+    test('clearAllCheckpointInFlightForTest clears all ids', () {
+      setCheckpointInFlightForTest('chat-A', inFlight: true);
+      setCheckpointInFlightForTest('chat-B', inFlight: true);
+      clearAllCheckpointInFlightForTest();
+      expect(isCheckpointInFlight('chat-A'), isFalse);
+      expect(isCheckpointInFlight('chat-B'), isFalse);
+    });
+
+    // Verify the guard logic: if the lock is held, a simulated second caller
+    // should detect it and skip (returning null) rather than proceeding.
+    // We verify the DETECTION path (isCheckpointInFlight) rather than the
+    // full LLM call because the lock guard at the top of generateCheckpoint /
+    // regenerateCheckpoint is a simple `_checkpointInFlight[id] == true`
+    // check — the test seam proves the flag state is observable.
+    test('a caller can detect the lock before launching work', () {
+      setCheckpointInFlightForTest('chat-A', inFlight: true);
+      // Simulates the first gate in generateCheckpoint:
+      //   if (_checkpointInFlight[chat.id] == true) return null;
+      final wouldSkip = isCheckpointInFlight('chat-A');
+      expect(wouldSkip, isTrue,
+          reason: 'a concurrent caller should detect the in-flight lock');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // C2 — pathHash must be computed from the PRE-AWAIT message state
+  // -------------------------------------------------------------------------
+  group('C2: pathHash snapshot timing', () {
+    // This group tests the PURE helper and demonstrates why the pre-await
+    // snapshot matters. We cannot run generateCheckpoint without a real
+    // provider, but we can prove that mutating the message list AFTER
+    // computing pathHash gives a different hash — establishing the
+    // correctness requirement that the fix satisfies.
+
+    Message msg(String id, {int variant = 0}) => Message(
+          id: id,
+          kind: MessageKind.char,
+          variants: List.generate(variant + 1, (i) => 'v$i'),
+          selectedVariant: variant,
+        );
+
+    test('computePathHash is deterministic for the same list', () {
+      final msgs = [msg('a'), msg('b'), msg('c')];
+      final h1 = computePathHash(msgs, 2);
+      final h2 = computePathHash(msgs, 2);
+      expect(h1, equals(h2));
+    });
+
+    test('pathHash changes when a message variant is swapped mid-flight', () {
+      final msgs = [
+        msg('a'),
+        msg('b'),
+        msg('c'), // will be regen'd
+      ];
+      // Snapshot BEFORE the (simulated) LLM await — this is what the fix does.
+      final snapshotBefore = computePathHash(msgs, 2);
+
+      // Simulate a regen/swap happening DURING the await: change selectedVariant.
+      msgs[2] = Message(
+        id: 'c',
+        kind: MessageKind.char,
+        variants: const ['v0', 'v1'],
+        selectedVariant: 1, // user re-rolled
+      );
+
+      // What the old code computed AFTER the await:
+      final hashAfter = computePathHash(msgs, 2);
+
+      // The two hashes differ — the old code would store a hash that
+      // no longer matches the branch that was actually summarised.
+      expect(snapshotBefore, isNot(equals(hashAfter)),
+          reason: 'a variant swap during the await changes the branch path; '
+              'the pre-await snapshot and the post-await computation diverge');
+    });
+
+    test(
+        'pathHash changes when a message is appended past the cutoff index '
+        '(does NOT affect the hash at the cutoff — demonstrates stability)', () {
+      final msgs = [msg('a'), msg('b'), msg('c')];
+      final cutoff = 2;
+      final snapshotBefore = computePathHash(msgs, cutoff);
+
+      // Simulate a new message arriving during the await.
+      msgs.add(msg('d'));
+
+      // The hash at the same cutoff index should be the same because
+      // computePathHash only includes messages up to and including cutoff.
+      final hashAfter = computePathHash(msgs, cutoff);
+      expect(snapshotBefore, equals(hashAfter),
+          reason: 'appending beyond the cutoff does not change the path at '
+              'the cutoff — only in-range variant changes matter');
+    });
+
+    test('pathHash changes when an in-range message is REMOVED (list shrinks)',
+        () {
+      final msgs = [msg('a'), msg('b'), msg('c')];
+      final cutoff = 2;
+      final snapshotBefore = computePathHash(msgs, cutoff);
+
+      // Simulate a message deletion inside the range during the await.
+      msgs.removeAt(1);
+
+      // After removal, length is 2 so cutoff=2 clamps to index 1 (msg 'c').
+      // The path now encodes a different sequence.
+      final hashAfter = computePathHash(msgs, cutoff);
+      expect(snapshotBefore, isNot(equals(hashAfter)),
+          reason: 'removing an in-range message changes which messages the '
+              'path encodes at the same cutoff index');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // C5 — regenerateCheckpoint must use a fresh pre-await pathHash
+  // -------------------------------------------------------------------------
+  group('C5: regenerateCheckpoint pathHash must reflect the actual range', () {
+    // The fix: snapshotPathHash = computePathHash(chat.messages, cutoff)
+    // captured BEFORE the await, used in the returned MemoryCheckpoint
+    // instead of target.pathHash.
+    //
+    // We test the semantic requirement: the pre-await hash and target.pathHash
+    // diverge when the branch has changed — proving the old "copy target.pathHash"
+    // was wrong in that scenario.
+
+    Message msg(String id, {int variant = 0}) => Message(
+          id: id,
+          kind: MessageKind.char,
+          variants: List.generate(variant + 1, (i) => 'v$i'),
+          selectedVariant: variant,
+        );
+
+    test(
+        'stale target.pathHash differs from recomputed hash when branch changed',
+        () {
+      final msgs = [msg('a'), msg('b'), msg('c')];
+      final cutoff = 2;
+
+      // target.pathHash was computed on an EARLIER branch state.
+      final stalePathHash = computePathHash(msgs, cutoff);
+
+      // Simulate the user doing a regen that changes selectedVariant[1]
+      // BEFORE the retry LLM call was done (branch diverged mid-await).
+      msgs[1] = Message(
+        id: 'b',
+        kind: MessageKind.char,
+        variants: const ['v0', 'v1'],
+        selectedVariant: 1,
+      );
+
+      // Fresh pre-await snapshot (what the fix computes):
+      final freshHash = computePathHash(msgs, cutoff);
+
+      // The old code used stalePathHash; the fix uses freshHash.
+      // They differ — so the old code would silently store a checkpoint
+      // that findValidCheckpoints would filter out on the new branch.
+      expect(freshHash, isNot(equals(stalePathHash)),
+          reason: 'after a branch change, copying target.pathHash stores a '
+              'stale hash that does not match the branch the retry '
+              'was built on — the pre-await snapshot fixes this');
+    });
+
+    test('when branch is unchanged, fresh hash equals the original target hash',
+        () {
+      final msgs = [msg('a'), msg('b'), msg('c')];
+      final cutoff = 2;
+      final originalHash = computePathHash(msgs, cutoff);
+      // No changes during the simulated await.
+      final freshHash = computePathHash(msgs, cutoff);
+      expect(freshHash, equals(originalHash),
+          reason: 'if no branch change occurred, the pre-await snapshot '
+              'equals what target.pathHash would have been — no regression');
+    });
+  });
 }

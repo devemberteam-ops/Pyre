@@ -1311,7 +1311,15 @@ class _ChatScreenState extends State<ChatScreen> {
         // per session as a transient SnackBar so the user knows it tried
         // and can act (switch provider, check Memory). Suppressed after the
         // first so a down provider doesn't snackbar-spam every message.
-        if (!_autoSummariseFailureShown && mounted) {
+        //
+        // C1 (service-level lock): when generateCheckpoint returned null
+        // because a MANUAL checkpoint (from MemoryScreen) is already in
+        // flight, the lock is still held and MemoryErrors has NO new entry
+        // for this call — so the failure toast would be misleading. Skip it;
+        // the manual path's own UI already covers the user-facing feedback.
+        if (!_autoSummariseFailureShown &&
+            mounted &&
+            !ltm.isCheckpointInFlight(chat.id)) {
           _autoSummariseFailureShown = true;
           final reason = ltm.MemoryErrors.log.isNotEmpty
               // Drop the internal "generateCheckpoint failed: " op prefix so
