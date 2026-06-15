@@ -237,7 +237,24 @@ class PyreServer {
     // middleware below explicitly skips this path.
     r.post('/pair', (Request req) async {
       try {
-        final body = await req.readAsString();
+        // N2 audit 2026-06-15: /pair is UNAUTHENTICATED — the cheapest pre-auth
+        // DoS surface. A pairing request body carries only a token + device name;
+        // 64 KB is a generous ceiling. Same declared-Content-Length + mid-stream
+        // abort pattern as /push and /attachments.
+        const maxPairBodyBytes = 64 * 1024; // 64 KB
+        final declaredPairLen =
+            int.tryParse(req.headers['content-length'] ?? '');
+        if (declaredPairLen != null && declaredPairLen > maxPairBodyBytes) {
+          return Response(413, body: '{"error":"request body too large"}');
+        }
+        final pairBuf = <int>[];
+        await for (final chunk in req.read()) {
+          pairBuf.addAll(chunk);
+          if (pairBuf.length > maxPairBodyBytes) {
+            return Response(413, body: '{"error":"request body too large"}');
+          }
+        }
+        final body = utf8.decode(pairBuf, allowMalformed: true);
         final json = body.isEmpty ? const {} : jsonDecode(body);
         if (json is! Map) {
           return Response(400, body: '{"error":"invalid body"}');
@@ -333,6 +350,16 @@ class PyreServer {
               .map((s) => s.trim())
               .where((s) => s.isNotEmpty)
               .toSet();
+
+      // 2026-06-15 audit S-BUG2: stamp serverTime BEFORE the record selection
+      // snapshot. The old code stamped DateTime.now() AFTER serializing, so a
+      // record written to the AppStore during the await'd serialization could
+      // have mtime in (since, serverTime_old) — it wasn't in the response but
+      // the client's watermark would jump past it → permanent miss. By stamping
+      // first, the watermark only advances as far as the snapshot moment; any
+      // record written after the stamp but NOT in the response has
+      // mtime > serverTime → the next pull (since == serverTime) will catch it.
+      final serverTime = DateTime.now().millisecondsSinceEpoch;
 
       final updates = <String, List<Map<String, dynamic>>>{};
 
@@ -449,7 +476,7 @@ class PyreServer {
       });
 
       final body = {
-        'serverTime': DateTime.now().millisecondsSinceEpoch,
+        'serverTime': serverTime, // captured BEFORE selection — see S-BUG2 comment above
         'serverAppVersion': _serverAppVersion,
         'updates': updates,
         'tombstones': tombstones,
@@ -771,7 +798,26 @@ class PyreServer {
     // already holds. (Auth-protected: '/attachments' prefix covers this.)
     r.post('/attachments/missing', (Request req) async {
       try {
-        final body = jsonDecode(await req.readAsString());
+        // N2 audit 2026-06-15: cap the /attachments/missing body. The request
+        // carries a list of sha256 hex strings (64 chars each); even a library
+        // with thousands of attachments would be well under 1 MB. 1 MB ceiling
+        // is generous while bounding the DoS. Same pattern as /push / /pair.
+        const maxMissingBodyBytes = 1024 * 1024; // 1 MB
+        final declaredMissingLen =
+            int.tryParse(req.headers['content-length'] ?? '');
+        if (declaredMissingLen != null &&
+            declaredMissingLen > maxMissingBodyBytes) {
+          return Response(413, body: '{"error":"request body too large"}');
+        }
+        final missingBuf = <int>[];
+        await for (final chunk in req.read()) {
+          missingBuf.addAll(chunk);
+          if (missingBuf.length > maxMissingBodyBytes) {
+            return Response(413, body: '{"error":"request body too large"}');
+          }
+        }
+        final body =
+            jsonDecode(utf8.decode(missingBuf, allowMalformed: true));
         final hashes = (body is Map ? body['hashes'] : null) as List?;
         final requested =
             hashes?.whereType<String>().toList() ?? const <String>[];
@@ -852,10 +898,29 @@ class PyreServer {
         return _rateLimited();
       }
 
+      // N1 audit 2026-06-15: cap the /llm/stream body. Previously this was an
+      // unbounded readAsString() — a paired device could send a multi-GB body
+      // and OOM the host before the rate-limit or validation fired. An LLM
+      // request body carries messages + sampling params; 4 MB is generous for
+      // any realistic context window while still bounding the DoS surface.
+      // Same declared-Content-Length 413 + mid-stream abort pattern as /push.
+      const maxLlmBodyBytes = 4 * 1024 * 1024; // 4 MB
       Map<String, dynamic> body;
       try {
-        final raw = await req.readAsString();
-        body = jsonDecode(raw) as Map<String, dynamic>;
+        final declaredLlmLen =
+            int.tryParse(req.headers['content-length'] ?? '');
+        if (declaredLlmLen != null && declaredLlmLen > maxLlmBodyBytes) {
+          return Response(413, body: '{"error":"request body too large"}');
+        }
+        final llmBuf = <int>[];
+        await for (final chunk in req.read()) {
+          llmBuf.addAll(chunk);
+          if (llmBuf.length > maxLlmBodyBytes) {
+            return Response(413, body: '{"error":"request body too large"}');
+          }
+        }
+        body = jsonDecode(utf8.decode(llmBuf, allowMalformed: true))
+            as Map<String, dynamic>;
       } catch (e) {
         return Response(400, body: '{"error":"invalid JSON body"}');
       }
@@ -1452,10 +1517,13 @@ class PyreServer {
   }
 
   /// Wave CY.18.256: hard-remove the live record identified by [kind]/[id]
-  /// if its mtime is strictly older than [tombstoneMtime] (it was deleted
-  /// on a peer). The locked default preset is never reaped (it is rebuilt
-  /// from the app binary on every load). Returns true iff something was
-  /// removed.
+  /// if its mtime is older-or-equal to [tombstoneMtime] (it was deleted on a
+  /// peer). Using `<=` matches [AppStore.isTombstonedNewer]'s `>=` boundary —
+  /// S-BUG3 fix: the old `<` (strict) left a record live AND tombstoned at
+  /// equality, causing divergence when the server clamps a record-push and
+  /// its tombstone to the same serverNow. The locked default preset is never
+  /// reaped (rebuilt from the app binary on every load). Returns true iff
+  /// something was removed.
   ///
   /// Wave CY.18.260: async because the `provider` arm also deletes the
   /// reaped provider's key from OS-secure storage.
@@ -1465,43 +1533,43 @@ class PyreServer {
       case 'character':
         final before = store.characters.length;
         store.characters
-            .removeWhere((c) => c.id == id && c.mtime < tombstoneMtime);
+            .removeWhere((c) => c.id == id && c.mtime <= tombstoneMtime);
         return store.characters.length != before;
       case 'persona':
         final before = store.personas.length;
         store.personas
-            .removeWhere((p) => p.id == id && p.mtime < tombstoneMtime);
+            .removeWhere((p) => p.id == id && p.mtime <= tombstoneMtime);
         return store.personas.length != before;
       case 'chat':
         final before = store.chats.length;
-        store.chats.removeWhere((c) => c.id == id && c.mtime < tombstoneMtime);
+        store.chats.removeWhere((c) => c.id == id && c.mtime <= tombstoneMtime);
         return store.chats.length != before;
       case 'preset':
         final before = store.presets.length;
         store.presets.removeWhere(
-            (p) => p.id == id && !p.locked && p.mtime < tombstoneMtime);
+            (p) => p.id == id && !p.locked && p.mtime <= tombstoneMtime);
         return store.presets.length != before;
       case 'lorebook':
         final before = store.lorebooks.length;
         store.lorebooks
-            .removeWhere((l) => l.id == id && l.mtime < tombstoneMtime);
+            .removeWhere((l) => l.id == id && l.mtime <= tombstoneMtime);
         return store.lorebooks.length != before;
       case 'regexRule':
         final before = store.regexRules.length;
         store.regexRules
-            .removeWhere((r) => r.id == id && r.mtime < tombstoneMtime);
+            .removeWhere((r) => r.id == id && r.mtime <= tombstoneMtime);
         return store.regexRules.length != before;
       case 'folder':
         // Mega-audit 2026-06-05 (F2): reap a folder deleted on a peer.
         final before = store.folders.length;
         store.folders
-            .removeWhere((f) => f.id == id && f.mtime < tombstoneMtime);
+            .removeWhere((f) => f.id == id && f.mtime <= tombstoneMtime);
         return store.folders.length != before;
       case 'creatorPreset':
         // Never reap the locked default — it's rebuilt-from-build on load.
         final before = store.creatorPresets.length;
         store.creatorPresets.removeWhere(
-            (p) => p.id == id && !p.locked && p.mtime < tombstoneMtime);
+            (p) => p.id == id && !p.locked && p.mtime <= tombstoneMtime);
         return store.creatorPresets.length != before;
       case 'provider':
         // Wave CY.18.260: a deleted provider also drops its key from OS-secure
@@ -1509,7 +1577,7 @@ class PyreServer {
         // when we actually reaped (the id matched a now-removed record).
         final before = store.providers.length;
         store.providers
-            .removeWhere((p) => p.id == id && p.mtime < tombstoneMtime);
+            .removeWhere((p) => p.id == id && p.mtime <= tombstoneMtime);
         final removed = store.providers.length != before;
         if (removed) {
           await SecureKeys.delete(id);

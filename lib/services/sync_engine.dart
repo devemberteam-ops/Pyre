@@ -527,7 +527,15 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             final idx = store.characters.indexWhere((c) => c.id == id);
             final force = forcedDecision('character', id);
             if (idx >= 0) {
-              if (force == false) continue; // keep local on conflict
+              if (force == false) {
+                // S-BUG1: bump the local mtime so this record is pushed next
+                // tick and out-dates the peer's copy. Without this, the kept
+                // local copy is never re-pushed (mtime < watermark) and the
+                // peer's version LWW-overwrites it on the next pull.
+                store.characters[idx].mtime = _keepLocalMtime(serverTime);
+                appliedAny = true; // mtime changed → persist the bump
+                continue;
+              }
               if (force != true &&
                   store.characters[idx].mtime >= incoming.mtime) {
                 continue;
@@ -562,7 +570,12 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             final idx = store.personas.indexWhere((p) => p.id == id);
             final force = forcedDecision('persona', id);
             if (idx >= 0) {
-              if (force == false) continue; // keep local on conflict
+              if (force == false) {
+                // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
+                store.personas[idx].mtime = _keepLocalMtime(serverTime);
+                appliedAny = true;
+                continue;
+              }
               if (force != true &&
                   store.personas[idx].mtime >= incoming.mtime) {
                 continue;
@@ -601,7 +614,12 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
               // the WHOLE chat (entire message array) — per-message merge is a
               // deeper future enhancement. The win here is the resolution is
               // user-chosen + warned, not silent.
-              if (force == false) continue; // keep local on conflict
+              if (force == false) {
+                // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
+                store.chats[idx].mtime = _keepLocalMtime(serverTime);
+                appliedAny = true;
+                continue;
+              }
               if (force != true &&
                   store.chats[idx].mtime >= incoming.mtime) {
                 continue;
@@ -637,7 +655,12 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             if (idx >= 0) {
               // Never overwrite locked default — refreshed-from-build.
               if (store.presets[idx].locked) continue;
-              if (force == false) continue; // keep local on conflict
+              if (force == false) {
+                // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
+                store.presets[idx].mtime = _keepLocalMtime(serverTime);
+                appliedAny = true;
+                continue;
+              }
               if (force != true &&
                   store.presets[idx].mtime >= incoming.mtime) {
                 continue;
@@ -671,7 +694,12 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             final idx = store.lorebooks.indexWhere((l) => l.id == id);
             final force = forcedDecision('lorebook', id);
             if (idx >= 0) {
-              if (force == false) continue; // keep local on conflict
+              if (force == false) {
+                // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
+                store.lorebooks[idx].mtime = _keepLocalMtime(serverTime);
+                appliedAny = true;
+                continue;
+              }
               if (force != true &&
                   store.lorebooks[idx].mtime >= incoming.mtime) {
                 continue;
@@ -704,7 +732,12 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             final idx = store.regexRules.indexWhere((r) => r.id == id);
             final force = forcedDecision('regexRule', id);
             if (idx >= 0) {
-              if (force == false) continue; // keep local on conflict
+              if (force == false) {
+                // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
+                store.regexRules[idx].mtime = _keepLocalMtime(serverTime);
+                appliedAny = true;
+                continue;
+              }
               if (force != true &&
                   store.regexRules[idx].mtime >= incoming.mtime) {
                 continue;
@@ -738,7 +771,12 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             final idx = store.folders.indexWhere((f) => f.id == id);
             final force = forcedDecision('folder', id);
             if (idx >= 0) {
-              if (force == false) continue; // keep local on conflict
+              if (force == false) {
+                // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
+                store.folders[idx].mtime = _keepLocalMtime(serverTime);
+                appliedAny = true;
+                continue;
+              }
               if (force != true &&
                   store.folders[idx].mtime >= incoming.mtime) {
                 continue;
@@ -775,7 +813,12 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             if (idx >= 0) {
               // Never overwrite the locked default.
               if (store.creatorPresets[idx].locked) continue;
-              if (force == false) continue; // keep local on conflict
+              if (force == false) {
+                // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
+                store.creatorPresets[idx].mtime = _keepLocalMtime(serverTime);
+                appliedAny = true;
+                continue;
+              }
               if (force != true &&
                   store.creatorPresets[idx].mtime >= incoming.mtime) {
                 continue;
@@ -896,7 +939,11 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
           if (incomingMtime > existing) {
             store.tombstones[key] = incomingMtime;
           }
-          // Reap the matching live record if it's older than the tombstone.
+          // Reap the matching live record if it's older-or-same as the tombstone.
+          // S-BUG3: was `mtime < effective` (strict), now `mtime <= effective`
+          // to match isTombstonedNewer's `>=` boundary. At equality the server
+          // clamps both a record-push and its tombstone to the same serverNow;
+          // the old strict-< left the record live AND tombstoned (divergence).
           // Key shape is `<kind>:<id>`; split on the FIRST colon only (ids
           // are UUIDs without colons, but be defensive).
           final sep = key.indexOf(':');
@@ -907,33 +954,33 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
           switch (kind) {
             case 'character':
               final removed = store.characters
-                  .where((c) => c.id == id && c.mtime < effective)
+                  .where((c) => c.id == id && c.mtime <= effective)
                   .isNotEmpty;
               if (removed) {
                 store.characters
-                    .removeWhere((c) => c.id == id && c.mtime < effective);
+                    .removeWhere((c) => c.id == id && c.mtime <= effective);
                 appliedAny = true;
             appliedCount++; // SYNC W5
               }
               break;
             case 'persona':
               final removed = store.personas
-                  .where((p) => p.id == id && p.mtime < effective)
+                  .where((p) => p.id == id && p.mtime <= effective)
                   .isNotEmpty;
               if (removed) {
                 store.personas
-                    .removeWhere((p) => p.id == id && p.mtime < effective);
+                    .removeWhere((p) => p.id == id && p.mtime <= effective);
                 appliedAny = true;
             appliedCount++; // SYNC W5
               }
               break;
             case 'chat':
               final removed = store.chats
-                  .where((c) => c.id == id && c.mtime < effective)
+                  .where((c) => c.id == id && c.mtime <= effective)
                   .isNotEmpty;
               if (removed) {
                 store.chats
-                    .removeWhere((c) => c.id == id && c.mtime < effective);
+                    .removeWhere((c) => c.id == id && c.mtime <= effective);
                 appliedAny = true;
             appliedCount++; // SYNC W5
               }
@@ -942,33 +989,33 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
               // Never reap the locked default — it is rebuilt-from-build on
               // every load and is intentionally never synced/deleted.
               final removed = store.presets
-                  .where((p) => p.id == id && !p.locked && p.mtime < effective)
+                  .where((p) => p.id == id && !p.locked && p.mtime <= effective)
                   .isNotEmpty;
               if (removed) {
                 store.presets.removeWhere(
-                    (p) => p.id == id && !p.locked && p.mtime < effective);
+                    (p) => p.id == id && !p.locked && p.mtime <= effective);
                 appliedAny = true;
             appliedCount++; // SYNC W5
               }
               break;
             case 'lorebook':
               final removed = store.lorebooks
-                  .where((l) => l.id == id && l.mtime < effective)
+                  .where((l) => l.id == id && l.mtime <= effective)
                   .isNotEmpty;
               if (removed) {
                 store.lorebooks
-                    .removeWhere((l) => l.id == id && l.mtime < effective);
+                    .removeWhere((l) => l.id == id && l.mtime <= effective);
                 appliedAny = true;
             appliedCount++; // SYNC W5
               }
               break;
             case 'regexRule':
               final removed = store.regexRules
-                  .where((r) => r.id == id && r.mtime < effective)
+                  .where((r) => r.id == id && r.mtime <= effective)
                   .isNotEmpty;
               if (removed) {
                 store.regexRules
-                    .removeWhere((r) => r.id == id && r.mtime < effective);
+                    .removeWhere((r) => r.id == id && r.mtime <= effective);
                 appliedAny = true;
             appliedCount++; // SYNC W5
               }
@@ -976,11 +1023,11 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             case 'folder':
               // Mega-audit 2026-06-05 (F2): reap a folder deleted on a peer.
               final removed = store.folders
-                  .where((f) => f.id == id && f.mtime < effective)
+                  .where((f) => f.id == id && f.mtime <= effective)
                   .isNotEmpty;
               if (removed) {
                 store.folders
-                    .removeWhere((f) => f.id == id && f.mtime < effective);
+                    .removeWhere((f) => f.id == id && f.mtime <= effective);
                 appliedAny = true;
             appliedCount++; // SYNC W5
               }
@@ -989,11 +1036,11 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
               // Never reap the locked default — rebuilt-from-build on load.
               final removed = store.creatorPresets
                   .where((p) =>
-                      p.id == id && !p.locked && p.mtime < effective)
+                      p.id == id && !p.locked && p.mtime <= effective)
                   .isNotEmpty;
               if (removed) {
                 store.creatorPresets.removeWhere(
-                    (p) => p.id == id && !p.locked && p.mtime < effective);
+                    (p) => p.id == id && !p.locked && p.mtime <= effective);
                 appliedAny = true;
             appliedCount++; // SYNC W5
               }
@@ -1004,11 +1051,11 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
               // server reap arm: remove the live record then SecureKeys.delete
               // (awaited) when we actually reaped.
               final removed = store.providers
-                  .where((p) => p.id == id && p.mtime < effective)
+                  .where((p) => p.id == id && p.mtime <= effective)
                   .isNotEmpty;
               if (removed) {
                 store.providers
-                    .removeWhere((p) => p.id == id && p.mtime < effective);
+                    .removeWhere((p) => p.id == id && p.mtime <= effective);
                 await SecureKeys.delete(id);
                 appliedAny = true;
             appliedCount++; // SYNC W5
@@ -1033,11 +1080,25 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
         applyRegex();
         applyFolders();
         applyCreatorPresets();
-        // Wave CY.18.261: providers carry an encrypted key + need SecureKeys
-        // writes, so this branch is async — await it before the tombstone reap
-        // so a provider delete that arrived in the SAME pull reaps immediately.
-        await applyProviders();
+        // 2026-06-15 audit S-BUG4: tombstones applied BEFORE providers so that
+        // isTombstonedNewer (consulted in applyProviders) already reflects a
+        // same-pull tombstone. Previously providers ran first, writing the
+        // plaintext key to OS-secure storage; if the tick was killed between
+        // the key-write and the reap, the deleted provider's key persisted in
+        // secure storage with no live record. Re-ordering is safe because
+        // applyTombstones hard-removes any live record whose mtime is <=
+        // tombstoneMtime — providers with a newer mtime than the tombstone are
+        // untouched, which is the correct outcome.
+        //
+        // The OLD comment below was "await applyProviders first"; that is now
+        // reversed intentionally.
         await applyTombstones();
+        // Wave CY.18.261: providers carry an encrypted key + need SecureKeys
+        // writes. Runs AFTER tombstones (see S-BUG4 above) so a provider
+        // delete in the same payload is already reflected by isTombstonedNewer
+        // inside applyProviders, causing it to skip the key-write for deleted
+        // providers.
+        await applyProviders();
         // Fetch any newly-referenced attachment blobs BEFORE the final
         // notify so the UI rebuild already sees the bytes on disk and
         // renders avatars/gallery images instead of broken placeholders.
@@ -1340,6 +1401,23 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
         (m) => (m['name'] as String?) ?? '');
 
     return detectSyncConflicts(local, remote, lastSyncAt);
+  }
+
+  /// 2026-06-15 audit S-BUG1: compute the bumped mtime for a keep-local
+  /// conflict resolution. The chosen value must be:
+  ///   (a) strictly greater than [serverTime] so `mtime > since` (where
+  ///       `since` == this tick's serverTime) includes the record in the next
+  ///       _collectDirty push — making "Keep this device" durable.
+  ///   (b) strictly greater than the peer's copy so LWW on the next /pull
+  ///       keeps the local version instead of silently overwriting it.
+  ///
+  /// We satisfy both by taking `max(now, serverTime + 1)`. Using `now` is
+  /// natural (we just edited the record's resolution), but if the wall clock
+  /// is behind the server's stamp (clock-skew scenario), `serverTime + 1`
+  /// is the safe floor.
+  static int _keepLocalMtime(int serverTime) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return now > serverTime + 1 ? now : serverTime + 1;
   }
 
   /// Wave CY.18.256: tombstones recorded since the last watermark. Same
