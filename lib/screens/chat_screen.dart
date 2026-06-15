@@ -14,6 +14,7 @@ import 'package:share_plus/share_plus.dart';
 import '../models/models.dart';
 import '../services/chat_api.dart';
 import '../services/chat_export.dart';
+import '../services/web_download.dart';
 import '../services/chat_prompt_builder.dart';
 import '../services/refusal_detector.dart';
 import '../services/generation_keepalive.dart';
@@ -2385,11 +2386,12 @@ class _ChatScreenState extends State<ChatScreen> {
       final ext = asSillyTavern ? 'jsonl' : 'json';
 
       if (kIsWeb) {
-        await Clipboard.setData(ClipboardData(text: content));
-        messenger.showSnackBar(SnackBar(
-          content: Text(
-              'Web: copied $ext to clipboard. Paste into a text editor and save.'),
-        ));
+        final filename = '$stem.$ext';
+        final mime = asSillyTavern ? 'application/x-ndjson' : 'application/json';
+        downloadBytesToBrowser(
+            Uint8List.fromList(utf8.encode(content)), filename, mime);
+        messenger.showSnackBar(
+            SnackBar(content: Text('Exported — $filename')));
         return;
       }
 
