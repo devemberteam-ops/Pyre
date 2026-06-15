@@ -536,18 +536,26 @@ Future<void> _editEntry(
   await showDialog<void>(
     context: context,
     builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setState) => AlertDialog(
+      builder: (ctx, setState) {
+        final screenSize = MediaQuery.of(ctx).size;
+        final dialogWidth = (screenSize.width * 0.92).clamp(0.0, 560.0);
+        final dialogMaxHeight = screenSize.height * 0.88;
+        return AlertDialog(
         backgroundColor: EmberColors.bgPanel,
         title: Text(isNew ? 'New entry' : 'Edit entry'),
         content: SizedBox(
-          width: 380,
-          child: SingleChildScrollView(
+          width: dialogWidth,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: dialogMaxHeight),
+            child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 TextField(
                   controller: keysCtl,
+                  minLines: 2,
+                  maxLines: 4,
                   decoration: const InputDecoration(
                     labelText: 'Trigger keywords',
                     helperText:
@@ -557,6 +565,8 @@ Future<void> _editEntry(
                 const SizedBox(height: 12),
                 TextField(
                   controller: secondaryCtl,
+                  minLines: 2,
+                  maxLines: 4,
                   decoration: const InputDecoration(
                     labelText: 'Secondary keywords (optional)',
                     helperText:
@@ -604,8 +614,8 @@ Future<void> _editEntry(
                 const SizedBox(height: 12),
                 TextField(
                   controller: contentCtl,
-                  maxLines: 8,
-                  minLines: 3,
+                  minLines: 6,
+                  maxLines: 14,
                   decoration: const InputDecoration(
                     labelText: 'Content to inject',
                   ),
@@ -679,6 +689,7 @@ Future<void> _editEntry(
               ],
             ),
           ),
+          ),
         ),
         actions: [
           TextButton(
@@ -714,7 +725,8 @@ Future<void> _editEntry(
             child: Text(isNew ? 'Add' : 'Save'),
           ),
         ],
-      ),
+      );
+      },
     ),
   );
   // H-3: dispose the entry-editor controllers once the dialog closes.

@@ -938,6 +938,71 @@ Future<void> _pickAndImportCard(BuildContext context) async {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Pure, testable visibility logic for the Characters home screen.
+
+/// Returns the subset of [all] characters that should be visible given the
+/// current view state. Rules:
+///
+/// 1. Always exclude tombstoned (deleted:true) characters.
+/// 2. If [activeFolderId] is set, show only the characters in that folder
+///    (same as the pre-existing folder-scoped view).
+/// 3. If [query] is non-empty, search across ALL characters regardless of
+///    filing — so no card is unreachable by search.
+/// 4. If no folder is active AND no query is typed (the home/default view),
+///    show only characters that belong to ZERO live (non-deleted) folders.
+///    Characters inside at least one live folder are hidden from the home
+///    view; they live inside their folder tile.
+///
+/// The sort, tag filter, and favorites float remain the caller's
+/// responsibility — this function is purely about which characters are in
+/// scope.
+List<Character> topLevelVisibleCharacters(
+  List<Character> all,
+  List<Folder> folders, {
+  String? activeFolderId,
+  String query = '',
+}) {
+  // Exclude tombstoned characters always.
+  final live = all.where((c) => !c.deleted).toList();
+
+  // --- Folder-scoped view ---
+  if (activeFolderId != null) {
+    Folder? folder;
+    for (final f in folders) {
+      if (f.id == activeFolderId) {
+        folder = f;
+        break;
+      }
+    }
+    if (folder == null) {
+      // Folder vanished (deleted elsewhere); return empty so caller can
+      // fall back gracefully.
+      return [];
+    }
+    final ids = folder.characterIds.toSet();
+    return live.where((c) => ids.contains(c.id)).toList();
+  }
+
+  // --- Search-all when a query is active ---
+  // Filed characters are not hidden from search — nothing is lost.
+  if (query.isNotEmpty) {
+    return live;
+  }
+
+  // --- Home view: hide filed characters ---
+  // Compute the union of characterIds across all LIVE (non-deleted) folders.
+  final filedIds = <String>{};
+  for (final f in folders) {
+    if (!f.deleted) {
+      filedIds.addAll(f.characterIds);
+    }
+  }
+  return live.where((c) => !filedIds.contains(c.id)).toList();
+}
+
+// ---------------------------------------------------------------------------
+
 /// Wave CY.18.38: Characters list with sort + tag filter + folder
 /// view + favorites section. Pre-Wave this was a flat list with only
 /// search as filter — fine at 10-20 chars, terrible at 100+. The new
@@ -986,27 +1051,15 @@ class _CharacterList extends StatelessWidget {
   int _lastUsedAt(Character c) => store.lastUsedAtByCharacter[c.id] ?? 0;
 
   List<Character> _applyFiltersAndSort() {
-    // Filter out tombstoned (deleted:true) records so a stray synced-in
-    // tombstone can't render as a phantom card (mirrors regex_rules_screen).
-    Iterable<Character> stream = store.characters.where((c) => !c.deleted);
-
-    // 1. Folder
-    if (store.charFolderId != null) {
-      Folder? folder;
-      for (final f in store.folders) {
-        if (f.id == store.charFolderId) {
-          folder = f;
-          break;
-        }
-      }
-      if (folder == null) {
-        // Folder vanished (deleted elsewhere); fall back to "All" so
-        // the user doesn't see an empty mystery list.
-        return [];
-      }
-      final ids = folder.characterIds.toSet();
-      stream = stream.where((c) => ids.contains(c.id));
-    }
+    // 1. Folder / home visibility: delegate to the pure helper which handles
+    //    (a) folder-scoped view, (b) search-all override, (c) hide-filed-on-home.
+    //    Tombstone exclusion is also done inside the helper.
+    Iterable<Character> stream = topLevelVisibleCharacters(
+      store.characters,
+      store.folders,
+      activeFolderId: store.charFolderId,
+      query: query,
+    );
 
     // 2. Tag filter (AND-logic across selected chips)
     if (store.charSelectedTags.isNotEmpty) {
@@ -1072,7 +1125,23 @@ class _CharacterList extends StatelessWidget {
     // rows + rest rows into a single typed item list and feed it to a
     // `ListView.builder` so only on-screen rows inflate. Scroll position is
     // preserved by the builder the same way the Chats tab already is.
+    //
+    // NOTE: `items` may be non-empty even when `list` is empty because
+    // `_buildItems` prepends a Folders section on the home view. We gate the
+    // empty state on `items.isEmpty` so the Folders section always renders.
     final items = _buildItems(favs, rest);
+
+    // Decide what empty-state copy to show. On the home view with all
+    // characters filed, a softer hint is shown inline (appended to items)
+    // rather than replacing the entire body — the Folders section must stay
+    // visible so the user can open their folders.
+    final onHome = store.charFolderId == null && query.isEmpty;
+    final liveFolders = store.folders.where((f) => !f.deleted).toList();
+    if (list.isEmpty && onHome && liveFolders.isNotEmpty) {
+      // All characters are in folders — append a gentle hint below the
+      // Folders section so the screen doesn't look broken/blank.
+      items.add(const _AllFiledHintItem());
+    }
 
     return Column(
       children: [
@@ -1080,7 +1149,7 @@ class _CharacterList extends StatelessWidget {
         if (store.charSelectedTags.isNotEmpty)
           _ActiveTagChipsRow(store: store),
         Expanded(
-          child: list.isEmpty
+          child: items.isEmpty
               ? EmptyState(
                   icon: Icons.search_off,
                   title: 'No matches',
@@ -1104,8 +1173,28 @@ class _CharacterList extends StatelessWidget {
   /// favorites header is its own item (so it scrolls with the list and the
   /// collapse toggle still works); when collapsed, the fav rows are simply
   /// not appended.
+  ///
+  /// On the home view (no active folder, no query) a Folders section is
+  /// prepended above the unfiled characters so filed items are reachable
+  /// without opening the management sheet.
   List<_CharItem> _buildItems(List<Character> favs, List<Character> rest) {
     final items = <_CharItem>[];
+
+    // --- Inline Folders section (home view only) ---
+    final liveFolders =
+        store.folders.where((f) => !f.deleted).toList();
+    final onHome = store.charFolderId == null && query.isEmpty;
+    if (onHome && liveFolders.isNotEmpty) {
+      items.add(const _FolderSectionHeaderItem());
+      for (final f in liveFolders) {
+        items.add(_FolderTileItem(f));
+      }
+      // Gap between folders and the unfiled characters below (even if
+      // the unfiled list is empty, the gap keeps the folders tidy).
+      items.add(const _FolderSectionGapItem());
+    }
+
+    // --- Character rows ---
     if (favs.isNotEmpty) {
       items.add(_FavHeaderItem(favs.length));
       if (store.charFavoritesExpanded) {
@@ -1162,6 +1251,106 @@ class _GapItem extends _CharItem {
 
   @override
   Widget build(AppStore store) => const SizedBox(height: 4);
+}
+
+/// Section header label for the inline Folders section on the home view.
+class _FolderSectionHeaderItem extends _CharItem {
+  const _FolderSectionHeaderItem();
+
+  @override
+  Widget build(AppStore store) => Padding(
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 2),
+        child: Text(
+          'FOLDERS',
+          style: TextStyle(
+            color: EmberColors.textMid,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.8,
+          ),
+        ),
+      );
+}
+
+/// A folder row in the inline Folders section.
+/// Tapping sets the active folder (same as tapping it in the folders sheet).
+class _FolderTileItem extends _CharItem {
+  final Folder folder;
+  const _FolderTileItem(this.folder);
+
+  @override
+  Widget build(AppStore store) {
+    final count = folder.characterIds.length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => store.setCharFolderId(folder.id),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: EmberColors.bgElevated,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: EmberColors.stroke),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.folder, color: EmberColors.primary, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  folder.name,
+                  style: TextStyle(
+                    color: EmberColors.textHigh,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Text(
+                '$count card${count == 1 ? "" : "s"}',
+                style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+              ),
+              const SizedBox(width: 6),
+              Icon(Icons.chevron_right, color: EmberColors.textDim, size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Spacer between the Folders section and the unfiled characters below.
+class _FolderSectionGapItem extends _CharItem {
+  const _FolderSectionGapItem();
+
+  @override
+  Widget build(AppStore store) => const SizedBox(height: 8);
+}
+
+/// Shown on the home view when every character is filed in a folder.
+/// Replaces the abrupt "No matches" full-screen empty state with a subtle
+/// inline hint so the Folders section above stays visible and reachable.
+class _AllFiledHintItem extends _CharItem {
+  const _AllFiledHintItem();
+
+  @override
+  Widget build(AppStore store) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 8),
+        child: Text(
+          'All your characters are in folders.\n'
+          'Open a folder above to chat.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: EmberColors.textDim,
+            fontSize: 13,
+            height: 1.5,
+          ),
+        ),
+      );
 }
 
 /// Wave CY.18.38: control row above the list. Sort dropdown +
