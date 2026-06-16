@@ -397,13 +397,24 @@ String _shapeHint(CardField? field, [CreatorMode? mode]) {
           'optional mood tag; include at least one charged/intimate beat.'
           '$personaVoice';
     case CardFieldKind.greetingsList:
-      // chara_card_v2 alternate_greetings: a flat array of FULL standalone
-      // opening messages — each the same shape/voice/formatting as first_mes,
-      // not a one-liner and not a rewrite of first_mes. 0-3; empty array if none.
-      return 'a JSON array of 0-3 strings ["…", "…"], each a COMPLETE '
-          'standalone opening message in the same voice, tense and formatting '
-          'as first_mes (full message, action-interlaced), offering a DIFFERENT '
-          'entry into the scene. Use an empty array [] if no good alternate fits.';
+      // chara_card_v2 alternate_greetings — OFF BY DEFAULT (2026-06-15 fix).
+      // The Creator must NOT invent these. They are produced ONLY when the user
+      // EXPLICITLY asked for alternate greetings (alternative openings) in the
+      // conversation above; otherwise the value is an empty array. When asked,
+      // each must be a full standalone opening set in a genuinely DIFFERENT
+      // SITUATION — not a restyle of first_mes.
+      return 'a JSON array of alternate opening messages. Do NOT invent these. '
+          'ONLY produce alternate greetings if the user EXPLICITLY ASKED for '
+          'them (alternative openings) somewhere in the conversation above. If '
+          'they did NOT ask, return an empty array [] on a new card, or leave '
+          'any greetings the card already has UNCHANGED when editing — never '
+          'fabricate new ones on your own. When they DID ask: emit the number '
+          'they requested (2-3 if '
+          'they did not say a number), each a COMPLETE standalone opening '
+          'message in the same voice, tense and formatting as first_mes (full '
+          'message, action-interlaced), but each set in a genuinely DIFFERENT '
+          'SITUATION (a different place, time, mood or circumstance) — NEVER a '
+          'restyle or paraphrase of first_mes or of one another.';
     case CardFieldKind.tags:
       // FIX E — tags must be real, searchable discovery tags, not invented
       // snake_case prose phrases.

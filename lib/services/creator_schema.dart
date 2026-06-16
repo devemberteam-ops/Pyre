@@ -469,11 +469,12 @@ const CardField _alternateGreetings = CardField(
     label: 'Alternate Greetings',
     kind: CardFieldKind.greetingsList,
     guidance:
-        '0-3 ALTERNATE opening messages. Each is a COMPLETE, standalone '
-        'greeting written in the SAME voice, tense, and formatting as '
-        'first_mes (in-character, action-interlaced), but offering a DIFFERENT '
-        'entry into the scene (a different mood, time, or hook) — not a '
-        'rewrite of first_mes. Empty list if none fit.');
+        'OFF BY DEFAULT — generated ONLY when the user EXPLICITLY asked for '
+        'alternate greetings; otherwise none (do NOT invent them). When asked, '
+        'each is a COMPLETE, standalone greeting written in the SAME voice, '
+        'tense, and formatting as first_mes (in-character, action-interlaced), '
+        'but set in a genuinely DIFFERENT SITUATION (a different place, time, '
+        'mood or circumstance) — never a rewrite of first_mes.');
 
 const CardField _tags = CardField(
     key: 'tags',
