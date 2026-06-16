@@ -22,6 +22,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io'
     show Directory, File, HttpServer, InternetAddress, Platform, SocketException;
+import 'dart:math' show Random;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
@@ -38,6 +39,7 @@ import 'attachment_store.dart';
 import 'chat_api.dart';
 import 'device_registry.dart';
 import 'key_crypto.dart';
+import 'pairing_requests.dart';
 import 'rate_limit.dart';
 import 'regex_rules.dart';
 import 'secure_keys.dart';
@@ -91,6 +93,71 @@ class PyreServer {
   // single-threaded in Dart so plain maps need no locking.
   final Map<String, RateBucket> _llmBuckets = {};
   final Map<String, int> _llmInFlight = {};
+
+  // ── Desktop-confirmation web pairing (release/1.1.3) ──────────────────
+  // In-memory store for pending pair requests. The bearer mint function
+  // delegates to a Random.secure() + base64url path identical to
+  // DeviceRegistry._generateBearerToken. Lives on the singleton so it
+  // survives across HTTP requests; the PairingRequests store is not cleared
+  // on stop() — pending requests expire via TTL regardless.
+  //
+  // approvePairRequest / denyPairRequest are called by the desktop dialog
+  // (showPairRequestDialog) after the user taps Allow / Deny.
+  //
+  // onPairRequest is registered by main.dart (mirrors conflictPrompt) and
+  // fires fire-and-forget from the /pair/request handler so it never blocks
+  // the HTTP response.
+  late final PairingRequests _pairingRequests = PairingRequests(
+    mintBearer: _mintPairBearer,
+  );
+
+  /// Desktop dialog callback. Registered in main.dart, invoked fire-and-
+  /// forget when a new /pair/request arrives. The callback receives the
+  /// [PendingPairRequest] and should call [approvePairRequest] /
+  /// [denyPairRequest] after the user responds.
+  Future<void> Function(PendingPairRequest req)? onPairRequest;
+
+  /// Called by the desktop dialog's Allow button. Mints the bearer, registers
+  /// the PairedDevice in DeviceRegistry, and sets status→approved so the next
+  /// /pair/poll delivers the bearer to the web client. Returns true on success.
+  Future<bool> approvePairRequest(String requestId) async {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    // Need deviceName + native before approve() drops the pending state.
+    final req = _pairingRequests.findById(requestId);
+    if (req == null) return false;
+    final deviceName = req.deviceName;
+    final isNative = req.native;
+
+    final result = _pairingRequests.approve(requestId, nowMs: nowMs);
+    if (result == null) return false;
+
+    // Register the PairedDevice so subsequent /pull /push /llm/stream
+    // calls can authenticate with the bearer that was just minted.
+    await DeviceRegistry.instance.registerApprovedPair(
+      deviceId: result.deviceId,
+      rawBearer: result.bearer,
+      deviceName: deviceName,
+      isNative: isNative,
+    );
+    return true;
+  }
+
+  /// Called by the desktop dialog's Deny button.
+  bool denyPairRequest(String requestId) =>
+      _pairingRequests.deny(requestId);
+
+  /// Bearer generator for confirm-pair requests. Same entropy as
+  /// DeviceRegistry._generateBearerToken (32 bytes Random.secure(),
+  /// base64url no padding = 43 chars). Instance method so it can be passed
+  /// as a tear-off to PairingRequests constructor.
+  static String _mintPairBearer() {
+    final rng = Random.secure();
+    final bytes = Uint8List(32);
+    for (var i = 0; i < 32; i++) {
+      bytes[i] = rng.nextInt(256);
+    }
+    return base64UrlEncode(bytes).replaceAll('=', '');
+  }
 
   bool get running => _http != null;
   int? get port => _port;
@@ -290,6 +357,154 @@ class PyreServer {
         debugPrint('[PyreServer] /pair failed: $e');
         return Response.internalServerError(
             body: '{"error":"server error"}');
+      }
+    });
+
+    // ── Desktop-confirmation web pairing (release/1.1.3) ─────────────────
+    //
+    // POST /pair/request — web client registers a pending pair request.
+    // Auth-skipped (same as /pair): a web client can't auth before pairing.
+    // Body: {deviceName?, native?}
+    // Returns: {requestId, ttlMs}  or 429 if at capacity.
+    // Fires onPairRequest fire-and-forget (never blocks the response).
+    //
+    // Security: requestId is 256-bit random — the ONLY secret that lets the
+    // client claim its bearer. Origin/remote addr are display-only.
+    r.post('/pair/request', (Request req) async {
+      try {
+        const maxBodyBytes = 64 * 1024; // 64 KB (same as /pair)
+        final declaredLen =
+            int.tryParse(req.headers['content-length'] ?? '');
+        if (declaredLen != null && declaredLen > maxBodyBytes) {
+          return Response(413, body: '{"error":"request body too large"}');
+        }
+        final buf = <int>[];
+        await for (final chunk in req.read()) {
+          buf.addAll(chunk);
+          if (buf.length > maxBodyBytes) {
+            return Response(413, body: '{"error":"request body too large"}');
+          }
+        }
+        Map<String, dynamic> body;
+        try {
+          final raw = utf8.decode(buf, allowMalformed: true);
+          body = raw.isEmpty
+              ? const {}
+              : (jsonDecode(raw) as Map<String, dynamic>? ?? const {});
+        } catch (_) {
+          body = const {};
+        }
+
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+
+        // Prune expired entries and enforce cap BEFORE creating new entry.
+        if (_pairingRequests.atCapacity(nowMs: nowMs)) {
+          return Response(
+            429,
+            body: '{"error":"too_many_pending","detail":'
+                '"Too many pending pair requests — try again shortly."}',
+            headers: {
+              'content-type': 'application/json',
+              'retry-after': '5',
+            },
+          );
+        }
+
+        // requesterLabel = Origin header if present, else peer address.
+        // DISPLAY-ONLY — never used for auth decisions (DNS-rebinding-safe).
+        final origin = req.headers['origin'] ?? '';
+        final remote = req.context['shelf.io.connection_info'] != null
+            ? (req.context['shelf.io.connection_info']
+                    as dynamic) // HttpConnectionInfo
+                .remoteAddress
+                .toString()
+            : '';
+        final requesterLabel =
+            origin.isNotEmpty ? origin : (remote.isNotEmpty ? remote : 'unknown');
+
+        final deviceName =
+            (body['deviceName'] as String?)?.trim() ?? 'Web tab';
+        final native = (body['native'] as bool?) ?? false;
+
+        final pendingReq = _pairingRequests.create(
+          deviceName: deviceName,
+          native: native,
+          requesterLabel: requesterLabel,
+          nowMs: nowMs,
+        );
+
+        // Fire UI callback fire-and-forget — do NOT await in the handler so
+        // the 200 response returns immediately.
+        final cb = onPairRequest;
+        if (cb != null) {
+          unawaited(cb(pendingReq).catchError(
+            (e) => debugPrint('[PyreServer] onPairRequest callback error: $e'),
+          ));
+        }
+
+        return Response.ok(
+          jsonEncode({
+            'requestId': pendingReq.requestId,
+            'ttlMs': _pairingRequests.ttlMs,
+          }),
+          headers: {'content-type': 'application/json'},
+        );
+      } catch (e) {
+        debugPrint('[PyreServer] POST /pair/request failed: $e');
+        return Response.internalServerError(body: '{"error":"server error"}');
+      }
+    });
+
+    // GET /pair/poll?requestId=<id>
+    // Web client polls for the result of its pending request.
+    //
+    // Auth-skipped: the requestId IS the secret; only the holder can claim
+    // their bearer. Unknown id → expired (no oracle so attacker learns nothing).
+    // Approved: delivers bearer ONCE then drops the entry (bearer never re-served).
+    // Denied: delivers status once then drops.
+    r.get('/pair/poll', (Request req) async {
+      try {
+        final requestId =
+            (req.url.queryParameters['requestId'] ?? '').trim();
+        if (requestId.isEmpty) {
+          return Response(400,
+              body: '{"error":"missing requestId query parameter"}',
+              headers: {'content-type': 'application/json'});
+        }
+
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        final result = _pairingRequests.poll(requestId, nowMs: nowMs);
+
+        switch (result.status) {
+          case PairStatus.pending:
+            return Response.ok(
+              jsonEncode({'status': 'pending'}),
+              headers: {'content-type': 'application/json'},
+            );
+          case PairStatus.approved:
+            // Deliver bearer exactly once — entry is now dropped.
+            return Response.ok(
+              jsonEncode({
+                'status': 'approved',
+                'deviceId': result.deviceId,
+                'bearerToken': result.bearer,
+              }),
+              headers: {'content-type': 'application/json'},
+            );
+          case PairStatus.denied:
+            return Response.ok(
+              jsonEncode({'status': 'denied'}),
+              headers: {'content-type': 'application/json'},
+            );
+          case PairStatus.expired:
+            return Response.ok(
+              jsonEncode({'status': 'expired'}),
+              headers: {'content-type': 'application/json'},
+            );
+        }
+      } catch (e) {
+        debugPrint('[PyreServer] GET /pair/poll failed: $e');
+        return Response.internalServerError(body: '{"error":"server error"}');
       }
     });
 

@@ -27,6 +27,31 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'secure_keys.dart';
 
+/// Result of [LanClient.requestPairingFromOrigin].
+enum PairRequestStatus {
+  /// The desktop approved and the bearer has been stored — ready to sync.
+  approved,
+
+  /// The desktop user explicitly denied the pairing request.
+  denied,
+
+  /// The TTL expired before the desktop responded (or the desktop was
+  /// unreachable).
+  expired,
+
+  /// Something went wrong before a result could be determined (network error,
+  /// bad JSON, etc.). The error message is in [PairOriginResult.error].
+  error,
+}
+
+/// Return value of [LanClient.requestPairingFromOrigin]. Carries the status
+/// plus an optional human-readable error for the `error` case.
+class PairOriginResult {
+  final PairRequestStatus status;
+  final String? error;
+  const PairOriginResult(this.status, {this.error});
+}
+
 /// Wave CY.18.80: bearer persistence. On native we use the OS keystore
 /// via SecureKeys (Android Keystore / iOS Keychain / Windows Credential
 /// Manager / Linux libsecret) which gives real isolation from the
@@ -176,12 +201,25 @@ class LanClient extends ChangeNotifier {
       return 'Server reply missing bearer token.';
     }
 
+    await _applyPairing(
+        host: host.trim(), port: port, bearer: bearer, deviceId: devId);
+    return null;
+  }
+
+  /// Persist a successful pairing (host/port/bearer/deviceId) + notify.
+  /// Shared by [pair] (token flow) and [requestPairingFromOrigin] (web
+  /// desktop-confirmation flow) so both store state identically.
+  Future<void> _applyPairing({
+    required String host,
+    required int port,
+    required String bearer,
+    String? deviceId,
+  }) async {
     _host = host.trim();
     _port = port;
     _bearer = bearer;
-    _deviceId = devId;
+    _deviceId = deviceId;
     _serverName = 'Pyre on $_host';
-
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefHost, _host!);
@@ -197,7 +235,105 @@ class LanClient extends ChangeNotifier {
       debugPrint('[LanClient] pair persist failed: $e');
     }
     notifyListeners();
-    return null;
+  }
+
+  /// WEB-ONLY desktop-confirmation pairing (release/1.1.3). No host/port/token
+  /// typing: derive the server origin from the page URL ([Uri.base]), POST
+  /// /pair/request, then poll /pair/poll until the desktop user taps Allow /
+  /// Deny (or the TTL lapses). On approval, persist host/port/bearer (via
+  /// [_applyPairing]) so the SyncEngine pulls. The desktop owner's Allow click
+  /// is the security gate — a malicious cross-origin/rebound page can only make
+  /// a dialog appear that the user denies.
+  Future<PairOriginResult> requestPairingFromOrigin() async {
+    if (!kIsWeb) {
+      return const PairOriginResult(PairRequestStatus.error,
+          error: 'Same-origin pairing is web-only.');
+    }
+    final base = Uri.base;
+    final host = base.host;
+    final port =
+        base.hasPort ? base.port : (base.scheme == 'https' ? 443 : 80);
+    if (host.isEmpty) {
+      return const PairOriginResult(PairRequestStatus.error,
+          error: 'Could not read the server address from the page URL.');
+    }
+    // The web data paths use http:// today (lan_client baseUrl is http://).
+    final origin = 'http://$host:$port';
+
+    final String requestId;
+    final int ttlMs;
+    try {
+      final resp = await http
+          .post(Uri.parse('$origin/pair/request'),
+              headers: {'content-type': 'application/json'},
+              body: jsonEncode(
+                  {'deviceName': _defaultDeviceName(), 'native': false}))
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode == 429) {
+        return const PairOriginResult(PairRequestStatus.error,
+            error: 'Too many pending requests on the PC — try again shortly.');
+      }
+      if (resp.statusCode != 200) {
+        return PairOriginResult(PairRequestStatus.error,
+            error: 'Server returned ${resp.statusCode}.');
+      }
+      final j = jsonDecode(resp.body) as Map<String, dynamic>;
+      final id = (j['requestId'] as String?) ?? '';
+      if (id.isEmpty) {
+        return const PairOriginResult(PairRequestStatus.error,
+            error: 'Server reply missing requestId.');
+      }
+      requestId = id;
+      ttlMs = (j['ttlMs'] as num?)?.toInt() ?? 120000;
+    } on TimeoutException {
+      return const PairOriginResult(PairRequestStatus.error,
+          error: 'The PC did not respond.');
+    } catch (e) {
+      return PairOriginResult(PairRequestStatus.error, error: '$e');
+    }
+
+    // Poll until approved/denied/expired or the TTL (+grace) lapses.
+    final deadline =
+        DateTime.now().add(Duration(milliseconds: ttlMs + 5000));
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      http.Response resp;
+      try {
+        resp = await http
+            .get(Uri.parse('$origin/pair/poll?requestId=$requestId'))
+            .timeout(const Duration(seconds: 8));
+      } catch (_) {
+        continue; // transient — keep polling until the deadline
+      }
+      if (resp.statusCode != 200) continue;
+      final Map<String, dynamic> j;
+      try {
+        j = jsonDecode(resp.body) as Map<String, dynamic>;
+      } catch (_) {
+        continue;
+      }
+      switch ((j['status'] as String?) ?? '') {
+        case 'approved':
+          final bearer = (j['bearerToken'] as String?) ?? '';
+          if (bearer.isEmpty) {
+            return const PairOriginResult(PairRequestStatus.error,
+                error: 'Approved but no bearer returned.');
+          }
+          await _applyPairing(
+              host: host,
+              port: port,
+              bearer: bearer,
+              deviceId: j['deviceId'] as String?);
+          return const PairOriginResult(PairRequestStatus.approved);
+        case 'denied':
+          return const PairOriginResult(PairRequestStatus.denied);
+        case 'expired':
+          return const PairOriginResult(PairRequestStatus.expired);
+        default:
+          continue; // pending
+      }
+    }
+    return const PairOriginResult(PairRequestStatus.expired);
   }
 
   /// Forget the paired server locally. The server still has us in its

@@ -343,6 +343,36 @@ class DeviceRegistry {
     }
   }
 
+  /// Register a device whose bearer was already minted by the new
+  /// desktop-confirmation flow (release/1.1.3). Called by
+  /// [PyreServer.approvePairRequest] after the user taps Allow in the dialog.
+  ///
+  /// Unlike [redeemPairing] (which mints the bearer itself), here the caller
+  /// supplies the [rawBearer] that was already minted inside [PairingRequests].
+  /// We hash it, build the [PairedDevice], persist, and return the device.
+  Future<PairedDevice> registerApprovedPair({
+    required String deviceId,
+    required String rawBearer,
+    required String deviceName,
+    bool isNative = false,
+  }) async {
+    await load();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final device = PairedDevice(
+      id: deviceId,
+      name: deviceName.trim().isEmpty ? 'Unnamed device' : deviceName.trim(),
+      bearerHash: _hashBearer(rawBearer),
+      rawBearer: rawBearer,
+      pairedAt: now,
+      lastSeen: now,
+      isNative: isNative,
+    );
+    _byHash[device.bearerHash] = device;
+    await _save();
+    _changes.add(null);
+    return device;
+  }
+
   String _generateBearerToken() {
     // 32 bytes of entropy, base64url-encoded (no padding) → 43 chars,
     // URL-safe + Authorization-header safe.

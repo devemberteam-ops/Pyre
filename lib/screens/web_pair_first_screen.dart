@@ -62,6 +62,8 @@ class _WebPairFirstScreenState extends State<_WebPairFirstScreen> {
   final _token = TextEditingController();
   String? _error;
   bool _busy = false;
+  // release/1.1.3: true while waiting for the PC to Allow the confirm-pair.
+  bool _waiting = false;
 
   @override
   void initState() {
@@ -138,6 +140,55 @@ class _WebPairFirstScreenState extends State<_WebPairFirstScreen> {
     }
   }
 
+  /// release/1.1.3: desktop-confirmation pairing — no token. Asks the PC; the
+  /// PC shows "Allow this device to pair?". On Allow, the bearer is stored and
+  /// the real app boots (same onPaired path as the token flow).
+  Future<void> _requestConfirm() async {
+    setState(() {
+      _error = null;
+      _busy = true;
+      _waiting = true;
+    });
+    final result = await LanClient.instance.requestPairingFromOrigin();
+    if (!mounted) return;
+    switch (result.status) {
+      case PairRequestStatus.approved:
+        try {
+          await widget.onPaired();
+        } catch (e) {
+          if (!mounted) return;
+          setState(() {
+            _error = 'Paired, but app boot failed: $e. Refresh the page.';
+            _busy = false;
+            _waiting = false;
+          });
+        }
+        return;
+      case PairRequestStatus.denied:
+        setState(() {
+          _error = 'The PC denied the request.';
+          _busy = false;
+          _waiting = false;
+        });
+        return;
+      case PairRequestStatus.expired:
+        setState(() {
+          _error = 'No response from the PC. Make sure Pyre is open on the '
+              'PC, then try again.';
+          _busy = false;
+          _waiting = false;
+        });
+        return;
+      case PairRequestStatus.error:
+        setState(() {
+          _error = result.error ?? 'Could not reach the PC.';
+          _busy = false;
+          _waiting = false;
+        });
+        return;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -167,6 +218,60 @@ class _WebPairFirstScreenState extends State<_WebPairFirstScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
+                // Primary path (release/1.1.3): desktop-confirmation pairing —
+                // no token. The PC shows "Allow this device?"; you tap Allow.
+                if (_waiting)
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: EmberColors.bgPanel,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: EmberColors.stroke),
+                    ),
+                    child: Row(
+                      children: [
+                        const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Waiting for approval — open Pyre on your PC and '
+                            'tap "Allow".',
+                            style: TextStyle(
+                                color: EmberColors.textMid, fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  ElevatedButton.icon(
+                    onPressed: _busy ? null : _requestConfirm,
+                    icon: const Icon(Icons.computer),
+                    label: const Text('Pair with this PC'),
+                  ),
+                const SizedBox(height: 6),
+                Text(
+                  'Open Pyre on your PC first. When you tap the button, the PC '
+                  'will ask you to allow it.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: EmberColors.textDim, fontSize: 11),
+                ),
+                const SizedBox(height: 18),
+                Row(children: [
+                  Expanded(child: Divider(color: EmberColors.stroke)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Text('or use a token',
+                        style: TextStyle(
+                            color: EmberColors.textDim, fontSize: 11)),
+                  ),
+                  Expanded(child: Divider(color: EmberColors.stroke)),
+                ]),
+                const SizedBox(height: 16),
                 Container(
                   padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
                   decoration: BoxDecoration(

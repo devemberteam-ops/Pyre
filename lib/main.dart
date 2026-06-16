@@ -39,6 +39,7 @@ import 'screens/onboarding_screen.dart';
 import 'screens/web_pair_first_screen.dart';
 import 'widgets/card_import_confirm.dart';
 import 'widgets/command_palette.dart';
+import 'widgets/pair_request_dialog.dart';
 import 'widgets/sync_conflict_dialog.dart';
 
 /// Global Navigator key — lets the bookmarklet hand-off path show a
@@ -565,6 +566,15 @@ class _PyreAppState extends State<PyreApp>
       final ctx = _rootNavKey.currentContext;
       if (ctx == null) return false;
       return showSyncConflictDialog(ctx, conflicts);
+    };
+    // Desktop-confirmation web pairing (release/1.1.3): when a browser/device
+    // hits POST /pair/request, the HOST shows "Allow this device to pair?".
+    // The Allow click is the security gate; fires only on the host (the web/
+    // phone never serves, so this never triggers there).
+    PyreServer.instance.onPairRequest = (req) async {
+      final ctx = _rootNavKey.currentContext;
+      if (ctx == null) return;
+      await showPairRequestDialog(ctx, req);
     };
   }
 
