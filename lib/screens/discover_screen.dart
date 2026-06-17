@@ -1301,6 +1301,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       _busy = true;
       _status = 'Resolving…';
     });
+    // The bbx iframe sits ABOVE the Flutter canvas for hit-testing, so the
+    // confirm-import dialog (shown inside _doImportCharacterBytes) renders on
+    // top but its buttons never receive clicks — the iframe eats them. Disable
+    // the iframe's pointer events for the whole import flow, restore in finally.
+    setBotbooruFrameInteractive(false);
     try {
       // 1. Resolve the page URL to a download URL
       //    (e.g. /character/123 → /download/png/123).
@@ -1335,6 +1340,10 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         SnackBar(content: Text('Import failed: $e')),
       );
     } finally {
+      // Restore the iframe's pointer events regardless of mounted state — the
+      // iframe is a global DOM element that outlives this widget; leaving it
+      // non-interactive would dead-lock the embed after the first import.
+      setBotbooruFrameInteractive(true);
       if (mounted) {
         setState(() {
           _busy = false;

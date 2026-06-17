@@ -29,3 +29,8 @@ class BotbooruWebFrame extends StatelessWidget {
     return const SizedBox.shrink();
   }
 }
+
+/// Native no-op. On web this toggles the iframe's pointer-events so a Flutter
+/// dialog shown over the embed can receive clicks; on native there is no
+/// iframe, so this does nothing.
+void setBotbooruFrameInteractive(bool interactive) {}

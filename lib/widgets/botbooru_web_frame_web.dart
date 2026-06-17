@@ -74,6 +74,18 @@ void _ensureRegistered(String bbxOrigin) {
   );
 }
 
+/// Toggle whether the bbx iframe captures pointer events. Flutter web renders
+/// the iframe as a real DOM element that sits ABOVE the Flutter canvas for hit
+/// testing, so a Flutter dialog/overlay shown over the iframe LOOKS on top but
+/// its buttons never receive clicks (the iframe eats them). Call
+/// `setBotbooruFrameInteractive(false)` while a dialog is open so the clicks
+/// reach the Flutter overlay, then `(true)` to restore botbooru interaction.
+void setBotbooruFrameInteractive(bool interactive) {
+  try {
+    _iframe?.style.pointerEvents = interactive ? 'auto' : 'none';
+  } catch (_) {}
+}
+
 /// Fetch /bbx-info from the same-origin main server.
 /// Returns the bbxPort as an int, or null on any error.
 Future<int?> _fetchBbxPort() async {
