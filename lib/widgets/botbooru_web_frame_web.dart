@@ -63,7 +63,6 @@ void _ensureRegistered(String bbxOrigin) {
     ..style.border = 'none'
     ..style.width = '100%'
     ..style.height = '100%'
-    ..allow = 'same-origin'
     // allow-same-origin: the iframe is on bbxPort (its OWN origin), so
     // it can use botbooru's cookies/storage but still can't reach the
     // parent's window or localStorage (different port = different origin).

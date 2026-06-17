@@ -273,7 +273,14 @@ class PyreServer {
       _bbxHttp = null;
     }
     _bbxPort = _bbxHttp?.port;
-    if (_bbxPort != null) {
+    if (_bbxHttp != null) {
+      // CRITICAL for the embed: Dart's HttpServer.defaultResponseHeaders adds
+      // `X-Frame-Options: SAMEORIGIN` to EVERY response by default — which makes
+      // the browser refuse to render the bbx origin in the Pyre web app's
+      // iframe (the proxy already drops botbooru's own XFO; this is Dart's). Clear
+      // it so the cross-origin iframe can load. (The main server keeps its XFO —
+      // we never want the Pyre app itself framed.)
+      _bbxHttp!.defaultResponseHeaders.removeAll('x-frame-options');
       debugPrint('[PyreServer] bbx server on $address:$_bbxPort');
     }
 
@@ -2021,11 +2028,10 @@ class PyreServer {
     '/push',
     '/llm/',
     '/attachments',
-    // SYNC W6 (verification): the read-only manifest is auth-gated like /pull —
-    // it sits under no other prefix, so it's listed explicitly here. It exposes
-    // only per-collection id+mtime fingerprints (no content, no keys), but
-    // gating it keeps the whole sync surface uniformly behind the bearer.
-    '/manifest',
+    // NOTE: the sync `/manifest` endpoint (SYNC W6 — per-collection id+mtime
+    // fingerprints, no content/keys) is ALSO auth-gated, but as an EXACT path
+    // match in `needsAuth` below — NOT a prefix here, because a `/manifest`
+    // prefix wrongly 401'd the Flutter PWA's static `/manifest.json`.
   };
 
   static Middleware get _authMiddleware {
@@ -2035,7 +2041,11 @@ class PyreServer {
           return inner(req);
         }
         final path = '/${req.url.path}';
-        final needsAuth = _protectedPrefixes.any(path.startsWith);
+        // `/manifest` (sync fingerprint endpoint) is gated as an EXACT match so
+        // the PWA's static `/manifest.json` stays public (a prefix match 401'd
+        // it). Everything else is prefix-matched.
+        final needsAuth =
+            path == '/manifest' || _protectedPrefixes.any(path.startsWith);
         if (!needsAuth) {
           return inner(req);
         }
