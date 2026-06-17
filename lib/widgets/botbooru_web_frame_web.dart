@@ -116,7 +116,12 @@ class BotbooruWebFrame extends StatefulWidget {
   /// current page is not a recognisable card URL.
   final void Function(String botbooruUrl, String bbxOrigin)? onImport;
 
-  const BotbooruWebFrame({super.key, this.onImport});
+  /// Called when botbooru's own "Download PNG" button is clicked inside the
+  /// embed. Receives the base64 PNG bytes the shim fetched inside the iframe
+  /// (with the live session). The caller decodes + imports them.
+  final void Function(String b64)? onImportBytes;
+
+  const BotbooruWebFrame({super.key, this.onImport, this.onImportBytes});
 
   @override
   State<BotbooruWebFrame> createState() => _BotbooruWebFrameState();
@@ -174,10 +179,24 @@ class _BotbooruWebFrameState extends State<BotbooruWebFrame> {
       final jsonStr = raw is String ? raw : raw.toString();
       final data = jsonDecode(jsonStr) as Map<String, dynamic>?;
       if (data == null) return;
-      if (data['type'] != 'pyre-bbx-loc') return;
-      final href = data['href'];
-      if (href is String && href.isNotEmpty) {
-        _latestBbxHref = href;
+      final type = data['type'];
+      if (type == 'pyre-bbx-loc') {
+        final href = data['href'];
+        if (href is String && href.isNotEmpty) {
+          _latestBbxHref = href;
+        }
+        return;
+      }
+      if (type == 'pyre-bbx-card') {
+        final b64 = data['b64'];
+        if (b64 is String && b64.isNotEmpty) {
+          widget.onImportBytes?.call(b64);
+        }
+        return;
+      }
+      if (type == 'pyre-bbx-card-error') {
+        _showHint('BotBooru "Download PNG" failed — try again or use "Open externally".');
+        return;
       }
     } catch (_) {
       // Ignore malformed messages.

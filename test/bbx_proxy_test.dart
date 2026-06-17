@@ -8,6 +8,9 @@
 //   - bbxCorsOriginFor:               v2 — CORS origin gate (port==mainPort only)
 //   - rewriteBotbooruHtmlDedicated:   v2 — dedicated-origin rewrite + shim
 //   - bbxOriginUrlToBotbooru:         v2 — bbxOrigin URL → botbooru URL
+//   - decodeBbxCardB64:               v3 — base64 card payload decoder (Download-PNG hook)
+
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/services/bbx_utils.dart';
@@ -520,5 +523,85 @@ void main() {
   // -------------------------------------------------------------------------
   test('kBbxMaxResponseBytes is 25 MB', () {
     expect(kBbxMaxResponseBytes, equals(25 * 1024 * 1024));
+  });
+
+  // -------------------------------------------------------------------------
+  // decodeBbxCardB64
+  // -------------------------------------------------------------------------
+  group('decodeBbxCardB64 — valid inputs', () {
+    test('valid base64 of known bytes returns those exact bytes', () {
+      final input = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+      final encoded = base64Encode(input);
+      final result = decodeBbxCardB64(encoded);
+      expect(result, isNotNull);
+      expect(result!.toList(), equals(input));
+    });
+
+    test('data:image/png;base64, prefix is stripped and bytes match', () {
+      final input = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+      final encoded = 'data:image/png;base64,${base64Encode(input)}';
+      final result = decodeBbxCardB64(encoded);
+      expect(result, isNotNull);
+      expect(result!.toList(), equals(input));
+    });
+
+    test('data: prefix with arbitrary mime type is stripped', () {
+      final input = [1, 2, 3, 4, 5];
+      final encoded = 'data:application/octet-stream;base64,${base64Encode(input)}';
+      final result = decodeBbxCardB64(encoded);
+      expect(result, isNotNull);
+      expect(result!.toList(), equals(input));
+    });
+  });
+
+  group('decodeBbxCardB64 — null inputs', () {
+    test('empty string returns null', () {
+      expect(decodeBbxCardB64(''), isNull);
+    });
+
+    test('whitespace-only returns null', () {
+      expect(decodeBbxCardB64('   \t\n  '), isNull);
+    });
+
+    test('invalid base64 returns null', () {
+      expect(decodeBbxCardB64('!!!!'), isNull);
+    });
+
+    test('oversize string returns null (larger than 25MB cap)', () {
+      // kBbxMaxResponseBytes = 25*1024*1024. The length bound in decodeBbxCardB64
+      // is (cap ~/ 3) * 4 + 16. Build a string just beyond that.
+      final cap = kBbxMaxResponseBytes;
+      final limit = (cap ~/ 3) * 4 + 16;
+      // Build a valid-charset string that is clearly over the limit.
+      final oversized = 'A' * (limit + 1);
+      expect(decodeBbxCardB64(oversized), isNull);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // rewriteBotbooruHtmlDedicated — Download-PNG hook regression
+  // -------------------------------------------------------------------------
+  group('rewriteBotbooruHtmlDedicated — Download-PNG hook', () {
+    const html = '<html><head></head><body></body></html>';
+
+    test('existing pyre-bbx-loc shim is still present (regression)', () {
+      final out = rewriteBotbooruHtmlDedicated(html);
+      expect(out, contains('pyre-bbx-loc'));
+    });
+
+    test('new pyre-bbx-card message type is present in the shim', () {
+      final out = rewriteBotbooruHtmlDedicated(html);
+      expect(out, contains('pyre-bbx-card'));
+    });
+
+    test('download-png-btn id is referenced in findCardId', () {
+      final out = rewriteBotbooruHtmlDedicated(html);
+      expect(out, contains('download-png-btn'));
+    });
+
+    test('fetch with credentials:include is present (in-iframe fetch)', () {
+      final out = rewriteBotbooruHtmlDedicated(html);
+      expect(out, contains('credentials'));
+    });
   });
 }

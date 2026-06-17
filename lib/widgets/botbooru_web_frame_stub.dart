@@ -21,7 +21,10 @@ class BotbooruWebFrame extends StatelessWidget {
   /// (`http://host:bbxPort`) for the cross-origin fetch.
   final void Function(String botbooruUrl, String bbxOrigin)? onImport;
 
-  const BotbooruWebFrame({super.key, this.onImport});
+  /// Native no-op mirror of the web callback (no iframe on exe/apk).
+  final void Function(String b64)? onImportBytes;
+
+  const BotbooruWebFrame({super.key, this.onImport, this.onImportBytes});
 
   @override
   Widget build(BuildContext context) {

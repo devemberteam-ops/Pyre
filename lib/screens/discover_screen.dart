@@ -12,6 +12,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../models/models.dart';
+import '../services/bbx_utils.dart';
 import '../services/capped_fetch.dart';
 import '../services/card_import.dart';
 import '../services/gallery_import.dart';
@@ -1260,7 +1261,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   /// onImport receives (botbooruUrl, bbxOrigin) so the handler can fetch
   /// bytes cross-origin from the bbx CORS endpoint.
   Widget _buildBbxWebEmbed() {
-    return BotbooruWebFrame(onImport: _handleBbxImport);
+    return BotbooruWebFrame(onImport: _handleBbxImport, onImportBytes: _handleBbxImportBytes);
   }
 
   /// "Import this card" handler for the web iframe (v2 SECURE).
@@ -1343,6 +1344,51 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       // Restore the iframe's pointer events regardless of mounted state — the
       // iframe is a global DOM element that outlives this widget; leaving it
       // non-interactive would dead-lock the embed after the first import.
+      setBotbooruFrameInteractive(true);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _status = null;
+        });
+      }
+    }
+  }
+
+  /// Native parity for botbooru's "Download PNG" button in the web embed.
+  /// The shim fetched the PNG inside the iframe (with the live session) and
+  /// postMessaged the bytes as base64; decode + import them through the same
+  /// parse→confirm→save core as every other import.
+  Future<void> _handleBbxImportBytes(String b64) async {
+    if (!canStartDiscoverImport(_busy)) return;
+    final store = context.read<AppStore>();
+    final messenger = ScaffoldMessenger.of(context);
+    final bytes = decodeBbxCardB64(b64);
+    if (bytes == null) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not read the downloaded card.')),
+      );
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = 'Importing…';
+    });
+    // Same iframe pointer-event trap as _handleBbxImport: the confirm dialog
+    // needs clicks the iframe would otherwise eat. Disable for the flow.
+    setBotbooruFrameInteractive(false);
+    try {
+      await _doImportCharacterBytes(
+        bytes,
+        store: store,
+        messenger: messenger,
+        galleryDomSrcs: const [],
+        allowGallery: false,
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Import failed: $e')),
+      );
+    } finally {
       setBotbooruFrameInteractive(true);
       if (mounted) {
         setState(() {

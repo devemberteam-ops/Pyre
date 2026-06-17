@@ -8,12 +8,16 @@
 //                        kBbxMaxResponseBytes, rewriteBotbooruHtmlDedicated,
 //                        bbxCorsOriginFor; GET /bbx-info exposes _bbxPort)
 //   - botbooru_web_frame_web.dart  (bbxOriginUrlToBotbooru for the Import button)
+//   - discover_screen.dart  (decodeBbxCardB64 for the Download-PNG hook)
 //
 // v2 (SECURE): the bbx embed runs on a SEPARATE origin (bbxPort ≠ mainPort).
 // The old /bbx/ same-origin route is GONE from the main server. The old
 // same-origin helpers (bbxIframeUrlToBotbooru, botbooruUrlToBbxPath) are
 // RETAINED for the test suite but are no longer called in production — the
 // new cross-origin helpers (bbxOriginUrlToBotbooru) replace them.
+
+import 'dart:convert';
+import 'dart:typed_data';
 
 /// Hard cap on a single proxied response: 25 MB. Mirrors the card-download cap
 /// elsewhere in the app; a huge / hostile upstream response can't OOM the desktop.
@@ -167,6 +171,43 @@ String rewriteBotbooruHtmlDedicated(String html) {
       if(d&&d.type==='pyre-bbx-back'){history.back();}
     }catch(ex){}
   });
+  // Download-PNG hook (native parity). botbooru bot-gates /download/png, so we
+  // must fetch it HERE inside the iframe (credentials:'include' carries the
+  // session through the proxy), read bytes as base64, and post them to the
+  // parent. The parent validates event.origin before trusting the bytes.
+  function findCardId(start){
+    var node=start,depth=0,sawPng=false;
+    while(node&&node.nodeType===1&&depth<6){
+      try{
+        var href=(node.getAttribute&&(node.getAttribute('href')||node.getAttribute('data-url')||node.getAttribute('data-src')))||node.href||'';
+        var hm=String(href).match(/\/download\/png\/(\d+)/);
+        if(hm)return hm[1];
+        var label=((node.getAttribute&&(node.getAttribute('aria-label')||node.getAttribute('title')))||'').toLowerCase();
+        var isPng=node.id==='download-png-btn'||label.indexOf('download png')>=0||label.indexOf('download character card')>=0;
+        if(isPng)sawPng=true;
+        var pid=node.getAttribute&&(node.getAttribute('data-post-id')||node.getAttribute('data-character-id')||node.getAttribute('data-id'));
+        if(pid&&/^\d+$/.test(pid)&&isPng)return pid;
+      }catch(_){}
+      node=node.parentElement;depth++;
+    }
+    if(sawPng){var pm=String(location.pathname).match(/\/(?:character|post)\/(\d+)/);if(pm)return pm[1];}
+    return '';
+  }
+  document.addEventListener('click',function(e){
+    try{
+      var a=e.target&&e.target.closest&&e.target.closest('a,button');
+      if(!a)return;
+      var id=findCardId(a);
+      if(!id)return;
+      e.preventDefault();e.stopPropagation();
+      var dl=location.origin+'/download/png/'+id;
+      fetch(dl,{credentials:'include'})
+        .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.blob();})
+        .then(function(blob){return new Promise(function(res,rej){var fr=new FileReader();fr.onloadend=function(){var s=String(fr.result||'');var c=s.indexOf(',');res(c>=0?s.slice(c+1):s);};fr.onerror=function(){rej(new Error('read failed'));};fr.readAsDataURL(blob);});})
+        .then(function(b64){try{window.parent.postMessage(JSON.stringify({type:'pyre-bbx-card',b64:b64}),'*');}catch(_){}})
+        .catch(function(err){try{window.parent.postMessage(JSON.stringify({type:'pyre-bbx-card-error',error:(err&&err.message)||'download failed'}),'*');}catch(_){}});
+    }catch(_){}
+  },true);
 })();
 </script>
 ''';
@@ -262,4 +303,29 @@ String? botbooruUrlToBbxPath(String botbooruUrl, String origin) {
   final path = botbooruUrl.substring(prefix.length);
   final base = origin.endsWith('/') ? origin.substring(0, origin.length - 1) : origin;
   return '$base/bbx/$path';
+}
+
+// ---------------------------------------------------------------------------
+// v3: Download-PNG hook — base64 payload decoder
+// ---------------------------------------------------------------------------
+
+/// Decode a base64 card payload posted by the bbx shim's Download-PNG hook.
+/// Accepts an optional `data:...;base64,` prefix. Returns null when the input
+/// is empty, not valid base64, or larger than the 25MB proxy cap (defensive —
+/// the shim fetch is already capped server-side, but the parent must not trust
+/// the cross-origin iframe's payload blindly).
+Uint8List? decodeBbxCardB64(String raw) {
+  var s = raw.trim();
+  if (s.isEmpty) return null;
+  final comma = s.indexOf(',');
+  if (s.startsWith('data:') && comma >= 0) s = s.substring(comma + 1);
+  // base64 inflates ~4/3; bound the work to the 25MB response cap.
+  if (s.length > (kBbxMaxResponseBytes ~/ 3) * 4 + 16) return null;
+  try {
+    final bytes = base64Decode(s);
+    if (bytes.isEmpty) return null;
+    return Uint8List.fromList(bytes);
+  } catch (_) {
+    return null;
+  }
 }
