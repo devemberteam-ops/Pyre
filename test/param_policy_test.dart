@@ -75,6 +75,18 @@ void main() {
       );
     });
 
+    test('matches LM Studio response_format rejection', () {
+      // LM Studio's OpenAI server only accepts response_format.type of
+      // 'json_schema' or 'text' — it 400s on the legacy 'json_object' the
+      // Creator build sends. The backstop must recognise this so it retries
+      // without the field instead of dying.
+      expect(
+        isUnsupportedParamError(
+            '{"error":"\'response_format.type\' must be \'json_schema\' or \'text\'"}'),
+        isTrue,
+      );
+    });
+
     test('does NOT match a generic auth error', () {
       expect(
         isUnsupportedParamError(

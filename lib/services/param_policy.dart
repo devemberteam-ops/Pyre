@@ -101,6 +101,12 @@ const List<String> _paramErrorSignatures = [
   // Token-cap rename complaints (OpenAI reasoning models).
   'max_completion_tokens',
   'max_tokens',
+  // `response_format` rejections. LM Studio's OpenAI server only accepts
+  // response_format.type of 'json_schema' or 'text' and 400s on the legacy
+  // 'json_object' the Creator build sends ("'response_format.type' must be
+  // 'json_schema' or 'text'"); other strict servers reject the field too. Any
+  // 4xx naming this field is a param-shape rejection — drop it and retry.
+  'response_format',
 ];
 
 /// Returns true when [scrubbedBody] looks like a provider rejecting the SHAPE
