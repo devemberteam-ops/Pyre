@@ -1,6 +1,0 @@
-﻿repo: C:\Users\Gui\Desktop\BotBooru chat app\flutter_app
-timestamp: 2026-06-14T16:57:19.6108988-03:00
-
-BLOCKED: 'flutter' is not available on PATH.
-Live desktop, Android, web thin-client, and Flutter test fallback cannot be executed until Flutter SDK is installed or -FlutterCommand points at flutter.bat.
-

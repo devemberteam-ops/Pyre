@@ -1,8 +1,0 @@
-﻿repo: C:\Users\Gui\Desktop\BotBooru chat app\flutter_app
-timestamp: 2026-06-14T16:57:19.6380418-03:00
-
-ANDROID_HOME=C:\Users\Gui\AppData\Local\Android\Sdk
-ANDROID_SDK_ROOT=C:\Users\Gui\AppData\Local\Android\Sdk
-List of devices attached
-
-

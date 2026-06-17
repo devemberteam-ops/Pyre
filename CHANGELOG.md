@@ -5,6 +5,80 @@ All notable changes to Pyre are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Pyre follows a leading-digit `MAJOR.MINOR.PATCH` version.
 
+## [1.1.3] - 2026-06-17
+
+The biggest update since 1.1: an AI Lorebook Creator, app-wide color themes,
+BotBooru built into the web client, per-function model routing, native Anthropic
+support, plus a large stability and data-integrity pass.
+
+### Added
+
+- **AI Lorebook Creator.** Build lorebook entries by chatting with the model —
+  describe the world or character and it drafts entries (keywords + content) that
+  you edit and save to a new or existing book. Reachable on its own ("New lorebook
+  with AI", "Add entries with AI" per book) and directly from a card's lorebook
+  binding ("Create with AI").
+- **Color themes + accent.** Three curated palettes — Ember (default), Moonlit
+  (cool periwinkle/midnight) and Hearth (warm sepia/amber) — plus a custom
+  accent-color picker. (More → Display → Theme.)
+- **BotBooru in the web client.** The browser/LAN web build can now browse BotBooru
+  embedded — previously desktop/phone only — with "Import this card" and BotBooru's
+  own "Download PNG" importing straight into Pyre. (It runs on a separate, sandboxed
+  origin for security.)
+- **One-click web pairing.** A web client served by your desktop can pair by
+  clicking "Pair with this PC" — the desktop asks "Allow this device?" instead of
+  making you type host, port and token. (The token flow still works.)
+- **Per-function model routing.** Impersonate and Guide-my-message can use their
+  own provider/model, alongside the existing Creator and Vision overrides.
+- **Native Anthropic (Claude) support.** Connect directly to Anthropic's API, not
+  only OpenAI-compatible endpoints.
+- **Duplicate an API connection.** Copy an existing provider's configuration.
+- **Folders file cards away.** The home view shows your unfiled characters plus a
+  Folders section to drill into; search still spans everything.
+- **OOC and Scene messages are first-class** — editable, deletable, branchable,
+  with variants (regenerate stays character-only).
+- **Real downloads + streaming on the web build.** Exports (chat, card, persona,
+  backup, gallery) now save a real file instead of going to the clipboard, and chat
+  over the LAN proxy now streams token-by-token on the web.
+- **Mobile haptics** on send, add-variant, regenerate, long-press and variant-swipe.
+
+### Changed
+
+- New chats can default Checkpoints / Live Sheet to on or off (global setting), and
+  the auto-frequency "0" now clearly reads "automatic off — you can still make them
+  by hand."
+- Roomier lorebook entry editor (multi-line keyword fields, bigger content box,
+  wider/taller dialog).
+- Exporting a card or persona now embeds its bound lorebooks into the PNG so they
+  travel with the card; binding asks shared vs embedded.
+
+### Fixed
+
+- **Creator works on LM Studio and other strict local servers.** A rejected
+  `response_format` now degrades gracefully instead of killing the build.
+- **Creator: Edit-with-AI no longer overwrites your hand-written fields** (first
+  message, examples, tags, notes, greetings) — it keeps your values instead of
+  inventing new ones.
+- **Creator: alternate greetings are off by default** and generated only when you
+  ask, as genuinely different situations — no more unsolicited alternates.
+- **Creator: Stop actually stops** (and unlocks the UI); the build survives Android
+  backgrounding; cross-batch merges no longer overwrite a filled field with an empty
+  one; editing a message that has an image re-runs vision.
+- **Sync: phone → desktop records are no longer silently dropped** (a cross-clock
+  watermark bug); "keep this device" conflict resolution is now durable; a record
+  written during a sync is no longer skipped.
+- **Checkpoints & Live Sheet:** manual and automatic updates can no longer collide
+  and duplicate entries; a checkpoint binds to the right branch even if you swap or
+  regenerate mid-summary; Live Sheet "Generate from chat" preserves your locked
+  facts and manual edits instead of wiping them.
+- **Web/LAN:** BotBooru embed rendering, the import dialog's unresponsive buttons,
+  and a PWA manifest 401; plus LAN server request-size caps (abuse guard).
+- **Impersonate / Guide refusals** caused by a contradictory character-voice
+  instruction.
+- **Streaming performance:** no more avatar/image flicker from per-frame re-decode.
+- **Robustness:** no startup crash on a malformed backup, more tolerant lorebook
+  import, non-PNG avatars transcoded on export, and out-of-range sliders clamped.
+
 ## [1.1.2] - 2026-06-07
 
 A hotfix for web (LAN) chat.
