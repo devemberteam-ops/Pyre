@@ -25,6 +25,7 @@ import '../services/resolvers.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
+import '../widgets/botbooru_web_frame.dart';
 import '../widgets/card_import_confirm.dart';
 import '../widgets/desktop_botbooru_webview.dart';
 
@@ -1224,7 +1225,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     );
   }
 
-  /// Wave CY.18.96: route the body. Order matters — Windows desktop
+  /// Wave CY.18.96 / 1.1.3: route the body. Order matters — Windows desktop
   /// check comes before the web fallback because both fall outside
   /// `_supportsWebview` (which is Android+iOS only).
   Widget _buildBody() {
@@ -1234,9 +1235,125 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     if (_supportsWebview) {
       return _showWebview ? _buildNativeWebView() : _buildLanding();
     }
-    // Linux/macOS desktop + web all land here. Same external-launch
-    // pattern: button opens the OS browser, URL bar for paste-import.
+    // Pyre 1.1.3: on the web build served by the Pyre desktop the /bbx/
+    // reverse-proxy makes it possible to embed botbooru.com in a same-origin
+    // iframe. We ALWAYS attempt the iframe on web (the /bbx/ route exists iff
+    // this page was served by the Pyre desktop server). On public web the
+    // iframe will fail to load its content, but the toolbar's "Open externally"
+    // button provides the fallback. The existing _buildWebFallback() card is
+    // kept as a secondary option below the frame in _buildBbxWebEmbed().
+    if (kIsWeb) {
+      return Stack(
+        children: [
+          _buildBbxWebEmbed(),
+          if (_busy) _busyOverlay(),
+        ],
+      );
+    }
+    // Linux/macOS desktop (non-Windows) + any future unsupported platform:
+    // external-launch fallback.
     return _buildWebFallback();
+  }
+
+  /// Build the web-only botbooru iframe embed.
+  /// v2: the widget fetches /bbx-info internally and computes bbxOrigin;
+  /// onImport receives (botbooruUrl, bbxOrigin) so the handler can fetch
+  /// bytes cross-origin from the bbx CORS endpoint.
+  Widget _buildBbxWebEmbed() {
+    return BotbooruWebFrame(onImport: _handleBbxImport);
+  }
+
+  /// "Import this card" handler for the web iframe (v2 SECURE).
+  ///
+  /// [botbooruUrl] is the canonical `https://botbooru.com/...` URL produced by
+  /// [bbxOriginUrlToBotbooru] from the postMessage'd href. [bbxOrigin] is the
+  /// cross-origin endpoint where we fetch the download bytes — the bbx server
+  /// returns CORS headers that allow the Pyre main origin to read them.
+  ///
+  /// Security:
+  ///   - botbooruUrl came from the bbxOrigin iframe's postMessage, accepted
+  ///     ONLY from event.origin == bbxOrigin (the widget validates this).
+  ///   - bbxOriginUrlToBotbooru only returns non-null for URLs starting with
+  ///     bbxOrigin (the widget validates this too).
+  ///   - The resolver maps known botbooru paths to download URLs; the download
+  ///     fetch goes to `bbxOrigin/<path>` (cross-origin, CORS-gated).
+  ///   - The bbx server's own host-lock ensures it only ever reaches botbooru.com.
+  Future<void> _handleBbxImport(String botbooruUrl, String bbxOrigin) async {
+    if (!canStartDiscoverImport(_busy)) return;
+    final store = context.read<AppStore>();
+    final messenger = ScaffoldMessenger.of(context);
+
+    // Lorebook pages must not be fetched by the app — point the user at
+    // the "Download JSON" approach (same as the paste-URL path).
+    if (isBotbooruLorebookUrl(botbooruUrl)) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Open the lorebook in Discover and use "Download JSON" to '
+            'import it.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _status = 'Resolving…';
+    });
+    try {
+      // 1. Resolve the page URL to a download URL
+      //    (e.g. /character/123 → /download/png/123).
+      final resolved = await resolveCommunityUrl(botbooruUrl);
+      final downloadBotbooruUrl = resolved?.pngUrl.toString() ?? botbooruUrl;
+
+      // 2. Map the botbooru download URL to the bbx ORIGIN endpoint.
+      //    The bbx server returns CORS headers allowing the Pyre main origin
+      //    to read the bytes cross-origin (bbxCorsOriginFor in pyre_server).
+      final proxyTarget = _bbxCrossOriginTarget(downloadBotbooruUrl, bbxOrigin);
+      if (proxyTarget == null) {
+        throw 'Could not map the download URL to the bbx endpoint.';
+      }
+
+      setState(() => _status = 'Downloading…');
+      // fetchCappedNoRedirect from bbxOrigin — cross-origin, CORS-safe.
+      final resp = await fetchCappedNoRedirect(proxyTarget);
+      if (resp.statusCode >= 400) {
+        throw describeHttpFailure(resp, host: 'botbooru.com');
+      }
+
+      // 3. Parse → confirm → save via the shared import core.
+      await _doImportCharacterBytes(
+        resp.bodyBytes,
+        store: store,
+        messenger: messenger,
+        galleryDomSrcs: const [], // gallery not available on web
+        allowGallery: false,
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Import failed: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _status = null;
+        });
+      }
+    }
+  }
+
+  /// v2: Map a `https://botbooru.com/<path>` download URL to a bbx-origin Uri
+  /// (`$bbxOrigin/<path>`) for the cross-origin CORS fetch. Returns null if
+  /// [botbooruUrl] is not a botbooru URL.
+  static Uri? _bbxCrossOriginTarget(String botbooruUrl, String bbxOrigin) {
+    const prefix = 'https://botbooru.com/';
+    if (!botbooruUrl.startsWith(prefix)) return null;
+    final path = botbooruUrl.substring(prefix.length);
+    final base =
+        bbxOrigin.endsWith('/') ? bbxOrigin.substring(0, bbxOrigin.length - 1) : bbxOrigin;
+    return Uri.tryParse('$base/$path');
   }
 
   Widget _buildWindowsWebview() {

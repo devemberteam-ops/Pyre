@@ -36,6 +36,7 @@ import '../models/models.dart';
 import '../state/app_store.dart';
 import 'attachment_refs.dart';
 import 'attachment_store.dart';
+import 'bbx_utils.dart';
 import 'chat_api.dart';
 import 'device_registry.dart';
 import 'key_crypto.dart';
@@ -82,6 +83,13 @@ class PyreServer {
   int? _port;
   BindMode? _bind;
   AppStore? _store;
+
+  // ── v2 secure bbx: dedicated bbx server on a SEPARATE port ───────────────
+  // The iframe loads botbooru from this origin → cross-origin with the Pyre
+  // web app (mainPort) → botbooru JS cannot read the Pyre app's localStorage.
+  // The main server (_http / _port) has NO botbooru proxy route at all.
+  HttpServer? _bbxHttp;
+  int? _bbxPort;
 
   // ── Wave CY.18.110 (audit S1): per-device throttling of the LLM
   // proxy. Both maps are keyed by the paired device's stable id
@@ -244,6 +252,31 @@ class PyreServer {
     _bind = bind;
     debugPrint('[PyreServer] listening on $address:$_port (bind=$bind)');
 
+    // v2 secure bbx: bind the dedicated bbx server on a SEPARATE port.
+    // Try mainPort+1 first; if taken (SocketException), fall back to
+    // ephemeral port 0 (kernel assigns). The bbx handler has NO auth
+    // middleware — it only proxies botbooru.com with CORS for mainPort.
+    final bbxHandler = const Pipeline().addHandler(_bbxRouter.call);
+    try {
+      _bbxHttp = await shelf_io.serve(bbxHandler, address, _port! + 1);
+    } on SocketException {
+      // Port+1 is taken → let the kernel pick an ephemeral port.
+      try {
+        _bbxHttp = await shelf_io.serve(bbxHandler, address, 0);
+      } catch (e) {
+        // Non-fatal: bbx embed won't work but the rest of Pyre is fine.
+        debugPrint('[PyreServer] bbx server failed to bind: $e');
+        _bbxHttp = null;
+      }
+    } catch (e) {
+      debugPrint('[PyreServer] bbx server failed to bind: $e');
+      _bbxHttp = null;
+    }
+    _bbxPort = _bbxHttp?.port;
+    if (_bbxPort != null) {
+      debugPrint('[PyreServer] bbx server on $address:$_bbxPort');
+    }
+
     // Wave CY.18.72: opportunistic orphan-attachment GC. The desktop
     // is the only place where the attachment store lives, so this is
     // also the only place GC needs to run. Fire-and-forget — even on
@@ -290,6 +323,17 @@ class PyreServer {
       await h.close(force: false);
     } catch (e) {
       debugPrint('[PyreServer] stop failed: $e');
+    }
+    // v2: also close the dedicated bbx server.
+    final bbx = _bbxHttp;
+    _bbxHttp = null;
+    _bbxPort = null;
+    if (bbx != null) {
+      try {
+        await bbx.close(force: false);
+      } catch (e) {
+        debugPrint('[PyreServer] bbx stop failed: $e');
+      }
     }
   }
 
@@ -1249,119 +1293,192 @@ class PyreServer {
       );
     });
 
-    // Pyre 1.1.3 (PoC, Gui): same-origin reverse-proxy so the botbooru Discover
-    // embed can work on WEB. exe/apk point a native webview at botbooru.com (a
-    // top-level navigation → their frame-ancestors / X-Frame-Options don't
-    // apply). The web can only <iframe>, which IS framing → botbooru blocks it.
-    // So the only way to show their front-end inside the Pyre web app is to
-    // SERVE it from THIS origin: fetch the page here, drop the frame-blocking
-    // headers, and rewrite root-relative URLs + runtime fetch/XHR back through
-    // the proxy. PUBLIC (an iframe navigation can't send a bearer); hardcoded
-    // to botbooru.com so it's never an open relay.
-    r.all('/bbx/<rest|.*>', _proxyBotbooru);
+    // v2 SECURE bbx: the botbooru proxy has moved to a SEPARATE-ORIGIN server
+    // (_bbxRouter / _bbxHttp / _bbxPort). The main origin (this server) no
+    // longer proxies botbooru at all — there is intentionally NO /bbx/ route
+    // here. This is the key security fix: botbooru JS loaded in an iframe
+    // cannot touch the Pyre app's localStorage/bearer because the iframe is
+    // now cross-origin (bbxPort ≠ mainPort).
+    //
+    // PUBLIC: /bbx-info tells the web client which port the bbx server is on
+    // so it can compute bbxOrigin = scheme://host:bbxPort and point the iframe
+    // there. Returns {"port": <int>} or {"port": null} (if bbx failed to bind).
+    r.get('/bbx-info', (Request req) {
+      return Response.ok(
+        jsonEncode({'port': _bbxPort}),
+        headers: {'content-type': 'application/json'},
+      );
+    });
 
     return r;
   }
 
   /// Browser-ish UA so botbooru's Cloudflare serves the real page (a Dart
-  /// default UA risks a bot challenge). PoC — Discover proxy only.
+  /// default UA risks a bot challenge).
   static const String _kBbBrowserUA =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-  /// Pyre 1.1.3 (PoC): proxy a botbooru.com request through THIS origin so the
-  /// web Discover iframe can render their front-end. Forwards the method/body,
-  /// strips the frame-blocking + CSP headers, and rewrites HTML so the SPA's
-  /// assets + runtime calls route back through `/bbx/`.
-  Future<Response> _proxyBotbooru(Request req, String rest) async {
+  // ---------------------------------------------------------------------------
+  // v2 SECURE bbx — dedicated-origin router + proxy
+  // ---------------------------------------------------------------------------
+
+  /// The router for the bbx dedicated server. Has NO auth middleware — it only
+  /// proxies botbooru.com with CORS restricted to the Pyre main origin.
+  /// The handler is `r.all('/<rest|.*>', _proxyBotbooruDedicated)`.
+  Router get _bbxRouter {
+    final r = Router();
+    r.all('/<rest|.*>', _proxyBotbooruDedicated);
+    return r;
+  }
+
+  /// v2 SECURE: proxy a botbooru.com request through the DEDICATED bbx origin.
+  ///
+  /// Changes from the removed v1 `_proxyBotbooru`:
+  ///   - B2 fix: `followRedirects = false`; redirects are followed manually,
+  ///     re-checking bbxHostLocked on every hop (bounded to 5 hops) so a
+  ///     redirect chain can never escape botbooru.com.
+  ///   - CORS: `Access-Control-Allow-Origin` = Pyre main origin ONLY (port ==
+  ///     _port), via bbxCorsOriginFor(). Never `*`. No credentials.
+  ///     OPTIONS preflight → 200 + CORS headers (no upstream call needed).
+  ///   - HTML rewrite: uses rewriteBotbooruHtmlDedicated (absolute → relative,
+  ///     postMessage shim) instead of the v1 /bbx/-prefix rewrite.
+  ///   - Security invariants maintained: host-lock, 25MB cap, cookie pass-through
+  ///     (user session), error scrub. This server holds no AppStore reference.
+  Future<Response> _proxyBotbooruDedicated(Request req, String rest) async {
     final q = req.requestedUri.query;
-    final target =
+    final initialTarget =
         Uri.parse('https://botbooru.com/$rest${q.isNotEmpty ? '?$q' : ''}');
+
+    // Host-lock on the initial target.
+    if (!bbxHostLocked(initialTarget)) {
+      debugPrint('[bbxServer] host-lock rejected: ${initialTarget.host}');
+      return Response.forbidden('proxy target not allowed');
+    }
+
+    // CORS: compute the allowed origin from the request's Origin header.
+    // mainPort can be null while the server is stopping — treat as no match.
+    final reqOrigin = req.headers['origin'] ?? '';
+    final corsOrigin = bbxCorsOriginFor(reqOrigin, _port ?? -1);
+    final corsHeaders = <String, String>{
+      'access-control-allow-methods': 'GET, POST, OPTIONS',
+      'access-control-allow-headers': 'content-type',
+      'access-control-max-age': '3600',
+      // No credentials: botbooru JS in the iframe uses its OWN cookies for
+      // its session; Pyre does NOT send credentials across origins.
+      // (We do forward Cookie below so the user's logged-in session is
+      // maintained — that's the browser's own cookie jar on the bbx origin.)
+    };
+    if (corsOrigin != null) {
+      corsHeaders['access-control-allow-origin'] = corsOrigin;
+      corsHeaders['vary'] = 'Origin';
+    }
+
+    // OPTIONS preflight: respond immediately without hitting upstream.
+    if (req.method == 'OPTIONS') {
+      return Response.ok('', headers: corsHeaders);
+    }
+
+    // Manual redirect loop (B2 fix). Maximum 5 hops; stop on non-3xx.
+    var target = initialTarget;
+    const maxHops = 5;
     final client = http.Client();
     try {
-      final fwd = http.Request(req.method, target)
-        ..followRedirects = true
-        ..headers['user-agent'] = _kBbBrowserUA
-        ..headers['accept'] = req.headers['accept'] ?? '*/*';
-      final lang = req.headers['accept-language'];
-      if (lang != null) fwd.headers['accept-language'] = lang;
-      if (req.method == 'POST' ||
-          req.method == 'PUT' ||
-          req.method == 'PATCH') {
-        fwd.bodyBytes =
-            await req.read().fold<List<int>>(<int>[], (b, d) => b..addAll(d));
-        final ct = req.headers['content-type'];
-        if (ct != null) fwd.headers['content-type'] = ct;
+      for (var hop = 0; hop <= maxHops; hop++) {
+        // Build the forwarded request (manual redirect = no automatic follow).
+        final fwd = http.Request(req.method, target)
+          ..followRedirects = false
+          ..headers['user-agent'] = _kBbBrowserUA
+          ..headers['accept'] = req.headers['accept'] ?? '*/*';
+        final lang = req.headers['accept-language'];
+        if (lang != null) fwd.headers['accept-language'] = lang;
+        // Pass the user's session cookie so the botbooru front-end renders the
+        // logged-in view (same as the native webview). Never logged.
+        final cookie = req.headers['cookie'];
+        if (cookie != null) fwd.headers['cookie'] = cookie;
+        // Forward body only on first hop (redirects are GET per HTTP spec).
+        if (hop == 0 &&
+            (req.method == 'POST' ||
+                req.method == 'PUT' ||
+                req.method == 'PATCH')) {
+          fwd.bodyBytes = await req
+              .read()
+              .fold<List<int>>(<int>[], (b, d) => b..addAll(d));
+          final ct = req.headers['content-type'];
+          if (ct != null) fwd.headers['content-type'] = ct;
+        }
+
+        final upstream =
+            await client.send(fwd).timeout(const Duration(seconds: 30));
+
+        // Handle redirects manually so we can re-check host-lock per hop.
+        if (upstream.statusCode >= 300 && upstream.statusCode < 400) {
+          // Drain the redirect response body (usually empty) to free the socket.
+          await upstream.stream.drain<void>();
+          final location = upstream.headers['location'];
+          if (location == null || location.isEmpty) {
+            return Response.internalServerError(
+                body: 'redirect with no Location');
+          }
+          // Resolve relative Location against the current target.
+          final nextTarget = target.resolve(location);
+          // Re-check host-lock: the redirect destination MUST still be botbooru.com.
+          if (!bbxHostLocked(nextTarget)) {
+            debugPrint('[bbxServer] redirect host-lock rejected: '
+                '${nextTarget.host} (hop $hop)');
+            return Response(502, body: 'redirect target not allowed');
+          }
+          target = nextTarget;
+          if (hop == maxHops) {
+            return Response(502, body: 'too many redirects');
+          }
+          continue; // follow the redirect
+        }
+
+        // Non-redirect: stream the response with a 25MB cap.
+        final chunks = <List<int>>[];
+        int total = 0;
+        await for (final chunk in upstream.stream) {
+          total += chunk.length;
+          if (total > kBbxMaxResponseBytes) {
+            debugPrint('[bbxServer] response too large (>$kBbxMaxResponseBytes)');
+            return Response.internalServerError(body: 'proxy response too large');
+          }
+          chunks.add(chunk);
+        }
+        final bytes = Uint8List.fromList(chunks.expand((c) => c).toList());
+
+        final contentType =
+            upstream.headers['content-type'] ?? 'application/octet-stream';
+        // Fresh headers ONLY — drops upstream X-Frame-Options + CSP so the
+        // iframe (on bbxPort) can render botbooru. Forward set-cookie so the
+        // user's botbooru session is maintained (cookies go to bbxPort, not
+        // mainPort — cross-origin session isolation is maintained).
+        final outHeaders = <String, String>{
+          'content-type': contentType,
+          ...corsHeaders,
+        };
+        final setCookie = upstream.headers['set-cookie'];
+        if (setCookie != null) outHeaders['set-cookie'] = setCookie;
+
+        if (contentType.contains('text/html')) {
+          return Response.ok(
+            rewriteBotbooruHtmlDedicated(
+                utf8.decode(bytes, allowMalformed: true)),
+            headers: outHeaders,
+          );
+        }
+        return Response.ok(bytes, headers: outHeaders);
       }
-      final upstream =
-          await client.send(fwd).timeout(const Duration(seconds: 30));
-      final bytes = await upstream.stream.toBytes();
-      final contentType =
-          upstream.headers['content-type'] ?? 'application/octet-stream';
-      // Fresh headers ONLY — this drops upstream's X-Frame-Options + CSP
-      // (incl. frame-ancestors) so the same-origin iframe can render it.
-      final outHeaders = <String, String>{'content-type': contentType};
-      if (contentType.contains('text/html')) {
-        return Response.ok(
-          _rewriteBotbooruHtml(utf8.decode(bytes, allowMalformed: true)),
-          headers: outHeaders,
-        );
-      }
-      return Response.ok(bytes, headers: outHeaders);
+      // Should not reach here (loop exits via continue or return above).
+      return Response(502, body: 'redirect loop');
     } catch (e) {
-      debugPrint('[PyreServer] botbooru proxy error: $e');
-      return Response.internalServerError(body: 'botbooru proxy error: $e');
+      // Scrub raw exceptions — never send stack traces in the HTTP body.
+      debugPrint('[bbxServer] proxy error: $e');
+      return Response.internalServerError(body: 'proxy error');
     } finally {
       client.close();
     }
-  }
-
-  /// PoC HTML rewrite: route botbooru's root-relative URLs + runtime fetch/XHR
-  /// back through `/bbx/`. Crude on purpose — the PoC proves the concept; a
-  /// real version would parse instead of string-replace.
-  static String _rewriteBotbooruHtml(String html) {
-    // 1) Root-relative URLs in attributes → through the proxy.
-    html = html
-        .replaceAll('href="/', 'href="/bbx/')
-        .replaceAll('src="/', 'src="/bbx/')
-        .replaceAll("href='/", "href='/bbx/")
-        .replaceAll("src='/", "src='/bbx/");
-    // 2) Shim runtime fetch/XHR (the SPA calls /api/... at runtime).
-    const shim = '''
-<script>
-(function(){
-  var P='/bbx/';
-  function rw(u){
-    try{
-      if(typeof u!=='string'||!u) return u;
-      if(u.indexOf('https://botbooru.com/')===0) return P+u.slice(21);
-      if(u.charAt(0)==='/' && u.indexOf('//')!==0 && u.indexOf(P)!==0) return P+u.slice(1);
-      return u;
-    }catch(e){return u;}
-  }
-  // 1) runtime data calls
-  var of=window.fetch;
-  window.fetch=function(i,init){ try{ if(typeof i==='string'){i=rw(i);} else if(i&&i.url){i=new Request(rw(i.url),i);} }catch(e){} return of.call(this,i,init); };
-  var oo=XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open=function(){ try{arguments[1]=rw(arguments[1]);}catch(e){} return oo.apply(this,arguments); };
-  // 2) setAttribute('src'|'href', ...)
-  var osa=Element.prototype.setAttribute;
-  Element.prototype.setAttribute=function(n,v){ try{ if(n==='src'||n==='href'){v=rw(v);} }catch(e){} return osa.call(this,n,v); };
-  // 3) direct .src / .href property assignment (img.src='/...')
-  function pp(c,p){ try{ var pr=window[c]&&window[c].prototype; if(!pr) return; var d=Object.getOwnPropertyDescriptor(pr,p); if(!d||!d.set) return; Object.defineProperty(pr,p,{configurable:true,enumerable:d.enumerable,get:function(){return d.get.call(this);},set:function(v){d.set.call(this,rw(v));}}); }catch(e){} }
-  pp('HTMLImageElement','src'); pp('HTMLScriptElement','src'); pp('HTMLSourceElement','src'); pp('HTMLMediaElement','src'); pp('HTMLLinkElement','href'); pp('HTMLAnchorElement','href');
-  // 4) safety net for innerHTML-inserted nodes
-  function fix(el){ try{ if(el.nodeType!==1) return; var s; if(el.hasAttribute('src')){s=el.getAttribute('src'); if(rw(s)!==s)el.setAttribute('src',s);} if(el.hasAttribute('href')){s=el.getAttribute('href'); if(rw(s)!==s)el.setAttribute('href',s);} if(el.querySelectorAll){var k=el.querySelectorAll('[src],[href]'); for(var j=0;j<k.length;j++)fix(k[j]);} }catch(e){} }
-  try{ new MutationObserver(function(ms){ for(var a=0;a<ms.length;a++){var nn=ms[a].addedNodes; if(nn)for(var b=0;b<nn.length;b++)fix(nn[b]);} }).observe(document.documentElement,{childList:true,subtree:true}); }catch(e){}
-})();
-</script>
-''';
-    if (html.contains('<head>')) {
-      html = html.replaceFirst('<head>', '<head>$shim');
-    } else {
-      html = shim + html;
-    }
-    return html;
   }
 
   /// Wave CY.18.76: locate the Flutter web build to self-host. Looks
