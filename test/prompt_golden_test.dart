@@ -680,6 +680,265 @@ void main() {
               'for the same chat id');
       expect(firstRun, _expected10);
     });
+
+    // -------------------------------------------------------------------
+    // Scenario 11 — modular preset with a PURE role-split before/after case:
+    // a beforeHistory block with role 'user' AND an afterHistory block with
+    // role 'assistant' (both become real turns, NOT flattened into the
+    // system/post-history text slots). Distinct from scenario 6 (which
+    // covers depth turns + a system-role afterHistory block that flattens
+    // into post-history text) and from scenario 6's beforeTurns (assistant
+    // role only, no afterTurns coverage at all).
+    // -------------------------------------------------------------------
+    test('11_modular_role_split_before_after', () {
+      final character = Character(
+        id: 'gc-char-11',
+        name: 'Sera',
+        description: 'A quiet blacksmith.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final preset = Preset(
+        id: 'gc-preset-11',
+        name: 'Role-split preset',
+        promptBlocks: [
+          PromptBlock(
+            id: 'gc-pb-11-core',
+            name: 'Core',
+            content: 'CORE: You are {{char}}.',
+          ),
+          PromptBlock(
+            id: 'gc-pb-11-before-user',
+            name: 'Before-history user turn',
+            content: 'BEFORE-USER-ROLE-TURN: state your name.',
+            role: 'user',
+            // beforeHistory by default -> beforeTurns (role-split, not text)
+          ),
+          PromptBlock(
+            id: 'gc-pb-11-after-assistant',
+            name: 'After-history assistant turn',
+            content: 'AFTER-ASSISTANT-ROLE-TURN: understood, staying in character.',
+            role: 'assistant',
+            position: PromptBlockPosition.afterHistory,
+          ),
+        ],
+        createdAt: 0,
+      );
+      final messages = <Message>[
+        _msg('gc11-m1', MessageKind.user, 'Hello, Sera.'),
+        _msg('gc11-m2', MessageKind.char,
+            '*Sera nods.* "Hello."'),
+      ];
+      final chat = Chat(
+        id: 'gc-chat-11',
+        characterIds: [character.id],
+        characterSnapshots: {character.id: character},
+        presetId: preset.id,
+        messages: messages,
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        character: character,
+        persona: null,
+        preset: preset,
+        responderId: character.id,
+        beatsCap: 3,
+        lookupCharacter: _charLookup([character]),
+        lookupBook: _bookLookup(const []),
+        inFlightMessageId: null,
+      );
+      final result = buildChatPrompt(inputs);
+      expect(_serialize(result.turns), _expected11);
+    });
+
+    // -------------------------------------------------------------------
+    // Scenario 12 — Guide injection at BOTH positions: same inputs except
+    // for `guidePosition`, proving `injectGuide`'s two branches distinctly.
+    // -------------------------------------------------------------------
+    test('12a_guide_system_note_at_end', () {
+      final character = Character(
+        id: 'gc-char-12',
+        name: 'Sera',
+        description: 'A quiet blacksmith.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final messages = <Message>[
+        _msg('gc12-m1', MessageKind.user, 'Hello, Sera.'),
+        _msg('gc12-m2', MessageKind.char, '*Sera nods.* "Hello."'),
+      ];
+      final chat = Chat(
+        id: 'gc-chat-12',
+        characterIds: [character.id],
+        characterSnapshots: {character.id: character},
+        messages: messages,
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        character: character,
+        persona: null,
+        preset: null,
+        responderId: character.id,
+        beatsCap: 3,
+        lookupCharacter: _charLookup([character]),
+        lookupBook: _bookLookup(const []),
+        inFlightMessageId: null,
+        guideNote: 'Have Sera mention the anvil.',
+        guidePosition: GuideInjectionPosition.systemNoteAtEnd,
+      );
+      final result = buildChatPrompt(inputs);
+      expect(_serialize(result.turns), _expected12a);
+    });
+
+    test('12b_guide_before_last_user_turn', () {
+      final character = Character(
+        id: 'gc-char-12',
+        name: 'Sera',
+        description: 'A quiet blacksmith.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final messages = <Message>[
+        _msg('gc12-m1', MessageKind.user, 'Hello, Sera.'),
+        _msg('gc12-m2', MessageKind.char, '*Sera nods.* "Hello."'),
+      ];
+      final chat = Chat(
+        id: 'gc-chat-12',
+        characterIds: [character.id],
+        characterSnapshots: {character.id: character},
+        messages: messages,
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        character: character,
+        persona: null,
+        preset: null,
+        responderId: character.id,
+        beatsCap: 3,
+        lookupCharacter: _charLookup([character]),
+        lookupBook: _bookLookup(const []),
+        inFlightMessageId: null,
+        guideNote: 'Have Sera mention the anvil.',
+        guidePosition: GuideInjectionPosition.beforeLastUserTurn,
+      );
+      final result = buildChatPrompt(inputs);
+      expect(_serialize(result.turns), _expected12b);
+    });
+
+    // -------------------------------------------------------------------
+    // Scenario 13 — regen mid-stream: `inFlightMessageId` set to a real
+    // history message id proves that message is SKIPPED from replay.
+    // -------------------------------------------------------------------
+    test('13_regen_mid_stream_skips_inflight', () {
+      final character = Character(
+        id: 'gc-char-13',
+        name: 'Sera',
+        description: 'A quiet blacksmith.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final messages = <Message>[
+        _msg('gc13-m1', MessageKind.user, 'Hello, Sera.'),
+        _msg('gc13-m2', MessageKind.char, '*Sera nods.* "Hello."'),
+        _msg('gc13-m3', MessageKind.user, 'What are you making?'),
+        // This is the in-flight regen target: an existing assistant reply
+        // being regenerated. It must be SKIPPED from the replayed history.
+        _msg('gc13-m4', MessageKind.char, '*Sera shrugs.* "A horseshoe."'),
+      ];
+      final chat = Chat(
+        id: 'gc-chat-13',
+        characterIds: [character.id],
+        characterSnapshots: {character.id: character},
+        messages: messages,
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        character: character,
+        persona: null,
+        preset: null,
+        responderId: character.id,
+        beatsCap: 3,
+        lookupCharacter: _charLookup([character]),
+        lookupBook: _bookLookup(const []),
+        inFlightMessageId: 'gc13-m4', // the regen target -> skipped
+      );
+      final result = buildChatPrompt(inputs);
+      expect(_serialize(result.turns), _expected13);
+    });
+
+    // -------------------------------------------------------------------
+    // Scenario 14 — lorebook PROBABILISTIC entry with a FIXED `loreSeed`
+    // (the new A1 field), proving the roll is deterministic when a seed is
+    // supplied. `useProbability: true, probability: 50` on a key that
+    // matches the history — the seed pins the roll so this golden is
+    // stable across runs (see the loreSeed value chosen: verified to fire
+    // by running once and inspecting the actual output).
+    // -------------------------------------------------------------------
+    test('14_lorebook_probabilistic_seeded', () {
+      final character = Character(
+        id: 'gc-char-14',
+        name: 'Sera',
+        description: 'A quiet blacksmith.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final book = Lorebook(
+        id: 'gc-book-14',
+        name: 'Forge Lore',
+        entries: [
+          LoreEntry(
+            id: 'gc-le-14',
+            keys: const ['anvil'],
+            content: 'The anvil rings differently when rain is coming.',
+            useProbability: true,
+            probability: 50,
+            order: 1,
+          ),
+        ],
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final messages = <Message>[
+        _msg('gc14-m1', MessageKind.user, 'Tell me about the anvil.'),
+      ];
+      final chat = Chat(
+        id: 'gc-chat-14',
+        characterIds: [character.id],
+        characterSnapshots: {character.id: character},
+        attachedLorebookIds: [book.id],
+        messages: messages,
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        character: character,
+        persona: null,
+        preset: null,
+        responderId: character.id,
+        beatsCap: 3,
+        lookupCharacter: _charLookup([character]),
+        lookupBook: _bookLookup([book]),
+        inFlightMessageId: null,
+        loreSeed: 7, // fixed seed -> deterministic probability roll
+      );
+      final result = buildChatPrompt(inputs);
+      // Determinism check: same seed -> same roll across two independent
+      // builds in this same process run.
+      final second = buildChatPrompt(inputs);
+      expect(_serialize(second.turns), _serialize(result.turns),
+          reason: 'a fixed loreSeed must produce the same probability roll '
+              'across repeated builds');
+      expect(_serialize(result.turns), _expected14);
+    });
   });
 }
 
@@ -914,3 +1173,79 @@ Roll: gamma
 ===TURN===
 user
 Hi there.''';
+
+const String _expected11 = '''system
+CORE: You are Sera.
+You are Sera.
+
+Description:
+A quiet blacksmith.
+===TURN===
+user
+BEFORE-USER-ROLE-TURN: state your name.
+===TURN===
+user
+Hello, Sera.
+===TURN===
+assistant
+*Sera nods.* "Hello."
+===TURN===
+assistant
+AFTER-ASSISTANT-ROLE-TURN: understood, staying in character.''';
+
+const String _expected12a = '''system
+You are Sera.
+
+Description:
+A quiet blacksmith.
+===TURN===
+user
+Hello, Sera.
+===TURN===
+assistant
+*Sera nods.* "Hello."
+===TURN===
+system
+[Guidance for your next reply — follow this, then continue naturally: Have Sera mention the anvil.]''';
+
+const String _expected12b = '''system
+You are Sera.
+
+Description:
+A quiet blacksmith.
+===TURN===
+system
+[Guidance for your next reply — follow this, then continue naturally: Have Sera mention the anvil.]
+===TURN===
+user
+Hello, Sera.
+===TURN===
+assistant
+*Sera nods.* "Hello."''';
+
+const String _expected13 = '''system
+You are Sera.
+
+Description:
+A quiet blacksmith.
+===TURN===
+user
+Hello, Sera.
+===TURN===
+assistant
+*Sera nods.* "Hello."
+===TURN===
+user
+What are you making?''';
+
+const String _expected14 = '''system
+You are Sera.
+
+Description:
+A quiet blacksmith.
+
+--- Lore ---
+The anvil rings differently when rain is coming.
+===TURN===
+user
+Tell me about the anvil.''';

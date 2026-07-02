@@ -1776,32 +1776,18 @@ class _ChatScreenState extends State<ChatScreen> {
     final persona = _chatPersona(store, chat);
     final preset = store.activePreset;
 
-    // Debug trace — visible in `flutter logs` while a generation runs.
-    // Helps diagnose "why didn't my lorebook fire?" without inspecting
-    // the prompt. One-line per fired entry plus a count summary. Mirrors
-    // the same collect+scan the builder runs (pure functions, cheap), so
-    // the trace reflects exactly what `buildChatPrompt` injected.
-    final attached = collectBoundLorebooks(
+    // Motor Fase 1 (Slice A / Tier-1 #9): the number of BOUND books, only
+    // needed for the "no entries matched" debug line's book count — the
+    // actual scan (and its roll) now comes from `buildChatPrompt`'s result
+    // below, so there is exactly ONE `scanLorebookHits` call per turn (no
+    // more independent, possibly-disagreeing probability roll here).
+    final attachedBookCount = collectBoundLorebooks(
       chat: chat,
       persona: persona,
       lookupBook: store.lorebookById,
       lookupCharacter: store.characterById,
       responderId: responderId,
-    );
-    final scan = scanLorebookHits(attached, chat.messages);
-    if (scan.hits.isNotEmpty) {
-      debugPrint(
-          '[Lorebook] ${scan.hits.length}/${scan.totalScanned} '
-          'entries fired this turn'
-          '${scan.skippedDisabled > 0 ? " (${scan.skippedDisabled} disabled, skipped)" : ""}:');
-      for (final t in scan.trace) {
-        debugPrint('[Lorebook]   · $t');
-      }
-    } else if (attached.isNotEmpty) {
-      debugPrint(
-          '[Lorebook] no entries matched this turn '
-          '(scanned ${scan.totalScanned} across ${attached.length} book(s))');
-    }
+    ).length;
 
     // Guide: only honour the one-shot note when the feature is enabled. A
     // null/blank note makes `buildChatPrompt`/`injectGuide` a no-op, so the
@@ -1828,7 +1814,30 @@ class _ChatScreenState extends State<ChatScreen> {
       guidePosition: guideSettings.injectionPosition,
       includePostHistory: includePostHistory,
     );
-    return buildChatPrompt(inputs).turns;
+    final result = buildChatPrompt(inputs);
+
+    // Debug trace — visible in `flutter logs` while a generation runs. Helps
+    // diagnose "why didn't my lorebook fire?" without inspecting the prompt.
+    // One-line per fired entry plus a count summary. Reads the SAME scan
+    // `buildChatPrompt` used to assemble the turns above (not a fresh
+    // re-scan), so the trace can never disagree with what was actually
+    // injected for a probabilistic entry.
+    final scan = result.scan;
+    if (scan.hits.isNotEmpty) {
+      debugPrint(
+          '[Lorebook] ${scan.hits.length}/${scan.totalScanned} '
+          'entries fired this turn'
+          '${scan.skippedDisabled > 0 ? " (${scan.skippedDisabled} disabled, skipped)" : ""}:');
+      for (final t in scan.trace) {
+        debugPrint('[Lorebook]   · $t');
+      }
+    } else if (attachedBookCount > 0) {
+      debugPrint(
+          '[Lorebook] no entries matched this turn '
+          '(scanned ${scan.totalScanned} across $attachedBookCount book(s))');
+    }
+
+    return result.turns;
   }
 
   /// Wave CY.18.5: scroll the chat list until [messageId]'s bubble is

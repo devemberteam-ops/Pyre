@@ -23,6 +23,7 @@
 // if ever needed). Keeping it dependency-free is what makes it testable
 // and harness-usable.
 
+import 'dart:math';
 import 'dart:typed_data';
 
 import '../models/models.dart';
@@ -132,6 +133,13 @@ class ChatPromptInputs {
   /// safety-tuned models. Default true → normal chat assembly is unchanged.
   final bool includePostHistory;
 
+  /// Motor Fase 1 (Slice A / discovery 2): an optional seed for the lorebook
+  /// probability roll (`scanLorebookHits`'s `rng:`). null (the production
+  /// default) → the scan uses its own non-seeded `Random()`, EXACTLY as
+  /// before this field existed (byte-identical). Only tests that need a
+  /// deterministic probabilistic-lorebook golden pass a fixed value.
+  final int? loreSeed;
+
   const ChatPromptInputs({
     required this.chat,
     required this.character,
@@ -146,6 +154,7 @@ class ChatPromptInputs {
     this.guideNote,
     this.guidePosition = GuideInjectionPosition.systemNoteAtEnd,
     this.includePostHistory = true,
+    this.loreSeed,
   });
 }
 
@@ -153,7 +162,17 @@ class ChatPromptInputs {
 class ChatPromptResult {
   final List<ChatTurn> turns;
   final List<PromptSegment> segments;
-  const ChatPromptResult({required this.turns, required this.segments});
+
+  /// Motor Fase 1 (Slice A / Tier-1 #9): the lorebook scan this build actually
+  /// used to decide what fired. Exposed so a caller that ALSO wants a debug
+  /// trace (chat_screen's `_buildTurns`) can read the SAME roll instead of
+  /// re-invoking `scanLorebookHits` a second time with its own independent
+  /// (non-seeded) `Random()` — which could disagree with what was actually
+  /// injected for a probabilistic entry.
+  final LorebookScanResult scan;
+
+  const ChatPromptResult(
+      {required this.turns, required this.segments, required this.scan});
 }
 
 /// Prompt Manager Core (Task 4): splice depth-injected preset turns into the
@@ -245,7 +264,11 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     lookupCharacter: inputs.lookupCharacter,
     responderId: inputs.responderId,
   );
-  final scan = scanLorebookHits(attached, chat.messages);
+  final scan = scanLorebookHits(
+    attached,
+    chat.messages,
+    rng: inputs.loreSeed == null ? null : Random(inputs.loreSeed),
+  );
   final loreText = StringBuffer();
   for (final h in scan.hits) {
     loreText.writeln(h.content);
@@ -617,7 +640,8 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     for (final s in segments)
       PromptSegment(s.kind, nameFill(s.text), note: s.note),
   ];
-  return ChatPromptResult(turns: filledTurns, segments: filledSegments);
+  return ChatPromptResult(
+      turns: filledTurns, segments: filledSegments, scan: scan);
 }
 
 /// The template markers that splice LIVE card content (character / persona /
