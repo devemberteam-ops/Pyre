@@ -40,4 +40,43 @@ void main() {
       expect(creatorInputLocked(mode: 'edit', flow: 'freeform'), isFalse);
     });
   });
+
+  group('creatorShouldStartEmbeddedLorebookFlow', () {
+    test(
+      'routes explicit lorebook entry request from an active creator chat',
+      () {
+        expect(
+          creatorShouldStartEmbeddedLorebookFlow(
+            lorebookModeActive: false,
+            hasActiveSession: true,
+            hasPendingAttachments: false,
+            text:
+                'A fim de testes preciso que você crie 5 entradas para lorebook',
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test('does not route vague lorebook mentions or attachment turns', () {
+      expect(
+        creatorShouldStartEmbeddedLorebookFlow(
+          lorebookModeActive: false,
+          hasActiveSession: true,
+          hasPendingAttachments: false,
+          text: 'preciso revisar o lorebook depois',
+        ),
+        isFalse,
+      );
+      expect(
+        creatorShouldStartEmbeddedLorebookFlow(
+          lorebookModeActive: false,
+          hasActiveSession: true,
+          hasPendingAttachments: true,
+          text: 'crie 5 entradas para lorebook',
+        ),
+        isFalse,
+      );
+    });
+  });
 }

@@ -10,6 +10,7 @@ import 'package:pyre/services/lorebook_entry_schema.dart';
 import 'package:pyre/services/lorebook_architect_prompts.dart';
 import 'package:pyre/services/lorebook_entry_build.dart';
 import 'package:pyre/services/chat_api.dart' show ChatTurn;
+import 'package:pyre/models/models.dart' show LoreSelectiveLogic;
 
 void main() {
   // ── entryJsonToLoreEntry ───────────────────────────────────────────────────
@@ -17,14 +18,17 @@ void main() {
     test('clean JSON maps correctly', () {
       final entry = entryJsonToLoreEntry({
         'keys': ['Thalorim', 'Thal', 'the city'],
-        'content': 'Thalorim is a walled coastal city known for its salt markets.',
+        'content':
+            'Thalorim is a walled coastal city known for its salt markets.',
         'constant': false,
         'comment': 'City: Thalorim',
       });
 
       expect(entry.keys, ['Thalorim', 'Thal', 'the city']);
-      expect(entry.content,
-          'Thalorim is a walled coastal city known for its salt markets.');
+      expect(
+        entry.content,
+        'Thalorim is a walled coastal city known for its salt markets.',
+      );
       expect(entry.constant, isFalse);
       expect(entry.id, startsWith('lore-entry-'));
     });
@@ -51,8 +55,14 @@ void main() {
     });
 
     test('each call generates a unique id', () {
-      final a = entryJsonToLoreEntry({'keys': ['k'], 'content': 'c'});
-      final b = entryJsonToLoreEntry({'keys': ['k'], 'content': 'c'});
+      final a = entryJsonToLoreEntry({
+        'keys': ['k'],
+        'content': 'c',
+      });
+      final b = entryJsonToLoreEntry({
+        'keys': ['k'],
+        'content': 'c',
+      });
       expect(a.id, isNot(equals(b.id)));
     });
 
@@ -136,17 +146,25 @@ void main() {
 
     // ── Missing/wrong-typed fields → safe defaults ──────────────────────────
     test('missing content → empty string', () {
-      final entry = entryJsonToLoreEntry({'keys': ['k']});
+      final entry = entryJsonToLoreEntry({
+        'keys': ['k'],
+      });
       expect(entry.content, '');
     });
 
     test('null content → empty string', () {
-      final entry = entryJsonToLoreEntry({'keys': ['k'], 'content': null});
+      final entry = entryJsonToLoreEntry({
+        'keys': ['k'],
+        'content': null,
+      });
       expect(entry.content, '');
     });
 
     test('int content → empty string (non-string type rejected)', () {
-      final entry = entryJsonToLoreEntry({'keys': ['k'], 'content': 42});
+      final entry = entryJsonToLoreEntry({
+        'keys': ['k'],
+        'content': 42,
+      });
       expect(entry.content, '');
     });
 
@@ -186,12 +204,60 @@ void main() {
         returnsNormally,
       );
     });
+
+    test('advanced lorebook fields map correctly', () {
+      final entry = entryJsonToLoreEntry({
+        'keys': ['Ashveil', 'Cyprian Ashveil'],
+        'secondaryKeys': ['sunlight', 'cinder'],
+        'selectiveLogic': 'andAll',
+        'content': 'Cyprian Ashveil avoids direct sunlight.',
+        'constant': false,
+        'enabled': true,
+        'order': 75,
+        'caseSensitive': false,
+        'matchWholeWords': true,
+        'probability': 80,
+        'useProbability': true,
+      });
+
+      expect(entry.secondaryKeys, ['sunlight', 'cinder']);
+      expect(entry.selectiveLogic, LoreSelectiveLogic.andAll);
+      expect(entry.order, 75);
+      expect(entry.caseSensitive, isFalse);
+      expect(entry.matchWholeWords, isTrue);
+      expect(entry.probability, 80);
+      expect(entry.useProbability, isTrue);
+    });
+
+    test('entries wrapper maps multiple entries', () {
+      final entries = entryJsonToLoreEntries({
+        'entries': [
+          {
+            'keys': ['Ashveil'],
+            'content': 'Ashveil is a gray-skinned imp.',
+            'constant': false,
+          },
+          {
+            'keys': ['Cinder Wastes'],
+            'content': 'The Cinder Wastes surround the old road.',
+            'constant': false,
+            'order': 50,
+          },
+        ],
+      });
+
+      expect(entries.length, 2);
+      expect(entries[0].keys, ['Ashveil']);
+      expect(entries[1].keys, ['Cinder Wastes']);
+      expect(entries[1].order, 50);
+    });
   });
 
   // ── hasBuildEntryMarker ────────────────────────────────────────────────────
   group('hasBuildEntryMarker', () {
     test('detects the marker in a complete reply', () {
-      const reply = "Sure thing!\n[[BUILD_ENTRY]]\n"
+      const reply =
+          "Sure thing!\n[[BUILD_ENTRY]]\n"
           '{"keys":["Tide-Priests"],"content":"The Tide-Priests serve the deep.","constant":false,"comment":"Faction: Tide-Priests"}';
       expect(hasBuildEntryMarker(reply), isTrue);
     });
@@ -211,20 +277,27 @@ void main() {
 
   // ── stripBuildEntryMarker ─────────────────────────────────────────────────
   group('stripBuildEntryMarker', () {
-    test('strips the [[BUILD_ENTRY]] token, leaving confirmation and JSON line', () {
-      const raw = 'Great, building it now.\n\n[[BUILD_ENTRY]]\n'
-          '{"keys":["Thalorim"],"content":"A coastal city.","constant":false,"comment":"City: Thalorim"}';
-      final stripped = stripBuildEntryMarker(raw);
-      // The marker token is stripped; the confirmation + JSON object survive.
-      expect(stripped.contains('[[BUILD_ENTRY]]'), isFalse);
-      expect(stripped.contains('Great, building it now.'), isTrue);
-      // The JSON object line is preserved — the drafter needs it.
-      expect(stripped.contains('"Thalorim"'), isTrue);
-    });
+    test(
+      'strips the [[BUILD_ENTRY]] token, leaving confirmation and JSON line',
+      () {
+        const raw =
+            'Great, building it now.\n\n[[BUILD_ENTRY]]\n'
+            '{"keys":["Thalorim"],"content":"A coastal city.","constant":false,"comment":"City: Thalorim"}';
+        final stripped = stripBuildEntryMarker(raw);
+        // The marker token is stripped; the confirmation + JSON object survive.
+        expect(stripped.contains('[[BUILD_ENTRY]]'), isFalse);
+        expect(stripped.contains('Great, building it now.'), isTrue);
+        // The JSON object line is preserved — the drafter needs it.
+        expect(stripped.contains('"Thalorim"'), isTrue);
+      },
+    );
 
     test('no marker → trimmed input returned unchanged', () {
       const raw = '  Let me know if you want to adjust the keys.  ';
-      expect(stripBuildEntryMarker(raw), 'Let me know if you want to adjust the keys.');
+      expect(
+        stripBuildEntryMarker(raw),
+        'Let me know if you want to adjust the keys.',
+      );
     });
 
     test('multiple markers all stripped', () {
@@ -350,35 +423,38 @@ void main() {
       expect(entry, isNull);
     });
 
-    test('reasoning preamble (<think>…</think>) before JSON → still parses',
-        () async {
-      const withReasoning =
-          '<think>The user wants an entry about Thalorim. Let me draft the JSON.'
-          ' {"keys":["draft"],"content":"draft content."}'  // draft inside think
-          '</think>\n'
-          '$validJson'; // real answer after </think>
-      final entry = await draftLoreEntry(
-        turns: [ChatTurn('user', 'ok')],
-        call: fakeCall(withReasoning),
-      );
-      // Should pick up the object AFTER </think> (Thalorim), not the draft inside.
-      expect(entry, isNotNull);
-      expect(entry!.keys, containsAll(['Thalorim', 'Thal']));
-    });
+    test(
+      'reasoning preamble (<think>…</think>) before JSON → still parses',
+      () async {
+        const withReasoning =
+            '<think>The user wants an entry about Thalorim. Let me draft the JSON.'
+            ' {"keys":["draft"],"content":"draft content."}' // draft inside think
+            '</think>\n'
+            '$validJson'; // real answer after </think>
+        final entry = await draftLoreEntry(
+          turns: [ChatTurn('user', 'ok')],
+          call: fakeCall(withReasoning),
+        );
+        // Should pick up the object AFTER </think> (Thalorim), not the draft inside.
+        expect(entry, isNotNull);
+        expect(entry!.keys, containsAll(['Thalorim', 'Thal']));
+      },
+    );
 
-    test('reasoning with JSON ONLY inside <think> → falls back and still parses',
-        () async {
-      // Degenerate case: the model put its answer ONLY inside <think>.
-      const onlyInThink =
-          '<think>$validJson</think>';
-      final entry = await draftLoreEntry(
-        turns: [ChatTurn('user', 'ok')],
-        call: fakeCall(onlyInThink),
-      );
-      // extractJsonAfterReasoning falls back to scanning the whole buffer.
-      expect(entry, isNotNull);
-      expect(entry!.keys, containsAll(['Thalorim', 'Thal']));
-    });
+    test(
+      'reasoning with JSON ONLY inside <think> → falls back and still parses',
+      () async {
+        // Degenerate case: the model put its answer ONLY inside <think>.
+        const onlyInThink = '<think>$validJson</think>';
+        final entry = await draftLoreEntry(
+          turns: [ChatTurn('user', 'ok')],
+          call: fakeCall(onlyInThink),
+        );
+        // extractJsonAfterReasoning falls back to scanning the whole buffer.
+        expect(entry, isNotNull);
+        expect(entry!.keys, containsAll(['Thalorim', 'Thal']));
+      },
+    );
 
     test('truncated reply triggers ONE continuation then parses', () async {
       // The partial is a truncated JSON object — string cut mid-value (no closing quote).
@@ -408,24 +484,28 @@ void main() {
       expect(entry.content, 'A walled city by the sea.');
     });
 
-    test('truncated then garbage continuation → returns null after 1 continuation',
-        () async {
-      var callCount = 0;
-      Future<String> trackingCall(List<ChatTurn> turns) async {
-        callCount++;
-        // Partial truncated mid-string — looksTruncatedJson → true.
-        if (callCount == 1) return '{"keys":["k"],"content":"partial value that never';
-        // The continuation is garbage and does not complete the JSON.
-        return 'still garbage no closing brace ever';
-      }
+    test(
+      'truncated then garbage continuation → returns null after 1 continuation',
+      () async {
+        var callCount = 0;
+        Future<String> trackingCall(List<ChatTurn> turns) async {
+          callCount++;
+          // Partial truncated mid-string — looksTruncatedJson → true.
+          if (callCount == 1) {
+            return '{"keys":["k"],"content":"partial value that never';
+          }
+          // The continuation is garbage and does not complete the JSON.
+          return 'still garbage no closing brace ever';
+        }
 
-      final entry = await draftLoreEntry(
-        turns: [ChatTurn('user', 'ok')],
-        call: trackingCall,
-      );
-      expect(callCount, 2); // bounded: max 1 continuation
-      expect(entry, isNull);
-    });
+        final entry = await draftLoreEntry(
+          turns: [ChatTurn('user', 'ok')],
+          call: trackingCall,
+        );
+        expect(callCount, 2); // bounded: max 1 continuation
+        expect(entry, isNull);
+      },
+    );
 
     test('network error (call throws) → returns null', () async {
       Future<String> errorCall(List<ChatTurn> _) async {
@@ -439,19 +519,24 @@ void main() {
       expect(entry, isNull);
     });
 
-    test('continuation call throws → returns null (bounded, no rethrow)', () async {
-      var callCount = 0;
-      Future<String> trackingCall(List<ChatTurn> turns) async {
-        callCount++;
-        if (callCount == 1) return '{"keys":["k"],"content":"partial'; // truncated
-        throw Exception('provider unavailable');
-      }
+    test(
+      'continuation call throws → returns null (bounded, no rethrow)',
+      () async {
+        var callCount = 0;
+        Future<String> trackingCall(List<ChatTurn> turns) async {
+          callCount++;
+          if (callCount == 1) {
+            return '{"keys":["k"],"content":"partial'; // truncated
+          }
+          throw Exception('provider unavailable');
+        }
 
-      final entry = await draftLoreEntry(
-        turns: [ChatTurn('user', 'ok')],
-        call: trackingCall,
-      );
-      expect(entry, isNull);
-    });
+        final entry = await draftLoreEntry(
+          turns: [ChatTurn('user', 'ok')],
+          call: trackingCall,
+        );
+        expect(entry, isNull);
+      },
+    );
   });
 }

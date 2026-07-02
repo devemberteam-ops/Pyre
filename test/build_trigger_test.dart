@@ -121,6 +121,36 @@ void main() {
     });
   });
 
+  group('shouldAutoFireBuildMarker', () {
+    test('fires when marker reply is a plain confirmation', () {
+      const raw = 'Fechado, vou montar a carta agora.\n[[BUILD_SHEET]]';
+      final marker = detectAndStripBuildMarker(raw);
+      expect(shouldAutoFireBuildMarker(marker), isTrue);
+    });
+
+    test('does not fire when marker reply is still asking a question', () {
+      const raw =
+          'Isso parece na direcao certa? Quer ajustar o local, ou prefere que eu monte agora?\n[[BUILD_SHEET]]';
+      final marker = detectAndStripBuildMarker(raw);
+      expect(marker.found, isTrue);
+      expect(shouldAutoFireBuildMarker(marker), isFalse);
+    });
+
+    test('does not fire when marker reply asks for the signal', () {
+      const raw =
+          'Se ja esta no ponto, e so dar o sinal que eu gero agora.\n[[BUILD_SHEET]]';
+      final marker = detectAndStripBuildMarker(raw);
+      expect(marker.found, isTrue);
+      expect(shouldAutoFireBuildMarker(marker), isFalse);
+    });
+
+    test('does not fire without a marker', () {
+      const raw = 'Want me to build it, or keep shaping it?';
+      final marker = detectAndStripBuildMarker(raw);
+      expect(shouldAutoFireBuildMarker(marker), isFalse);
+    });
+  });
+
   // C-2 (CRITICAL): a normal send during an in-flight structured build must be
   // blocked, or it bumps `_streamGen` and the build silently discards itself.
   group('creatorSendBlocked', () {

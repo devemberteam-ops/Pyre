@@ -18,29 +18,67 @@
 // needs to surface it; `entryJsonToLoreEntry` simply discards it so the
 // function signature stays clean.
 
-import '../models/models.dart' show LoreEntry, newId;
+import '../models/models.dart'
+    show LoreEntry, LoreSelectiveLogic, loreSelectiveLogicFromSt, newId;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// The JSON shape description — useful as a doc-comment reference for prompt
 /// construction and test data.
-const String kLoreEntryJsonShape = '{"keys":["..."],"content":"...",'
-    '"constant":false,"comment":"short label"}';
+const String kLoreEntryJsonShape =
+    '{"entries":[{"keys":["..."],"secondaryKeys":["..."],'
+    '"selectiveLogic":"andAny","content":"...","constant":false,'
+    '"order":0,"caseSensitive":false,"matchWholeWords":true,'
+    '"probability":100,"useProbability":false,"comment":"short label"}]}';
+
+/// Map an AI-emitted JSON object to one or more [LoreEntry] objects.
+///
+/// Accepts both the modern wrapper shape:
+///   {"entries":[{...},{...}]}
+/// and the legacy single-entry shape:
+///   {"keys":[...],"content":"...","constant":false}
+List<LoreEntry> entryJsonToLoreEntries(Map<String, dynamic> json) {
+  final rawEntries = json['entries'];
+  if (rawEntries is List) {
+    return rawEntries
+        .whereType<Map>()
+        .map((m) => entryJsonToLoreEntry(m.cast<String, dynamic>()))
+        .where((e) => e.keys.isNotEmpty || e.content.trim().isNotEmpty)
+        .toList();
+  }
+  final single = entryJsonToLoreEntry(json);
+  return single.keys.isEmpty && single.content.trim().isEmpty
+      ? <LoreEntry>[]
+      : <LoreEntry>[single];
+}
 
 /// Map an AI-emitted JSON object to a [LoreEntry] with a fresh id.
 ///
 /// Tolerant: any missing/null/wrong-typed field falls back to a safe default.
 /// Never throws. Keys are trimmed and empty strings dropped.
 LoreEntry entryJsonToLoreEntry(Map<String, dynamic> json) {
+  final probability = (_parseInt(json['probability'])?.clamp(0, 100) ?? 100)
+      .toInt();
+  final explicitUseProbability = _parseBoolOrNull(json['useProbability']);
   return LoreEntry(
     id: newId('lore-entry'),
     keys: _parseKeys(json['keys']),
     content: _parseString(json['content']),
     constant: _parseBool(json['constant']),
-    // All other LoreEntry fields use their constructor defaults:
-    //   enabled=true, order=0, secondaryKeys=[], selectiveLogic=andAny,
-    //   caseSensitive=null, matchWholeWords=null, probability=100,
-    //   useProbability=false.
+    enabled: _parseBoolOrNull(json['enabled']) ?? true,
+    order:
+        _parseInt(json['order']) ??
+        _parseInt(json['insertion_order']) ??
+        _parseInt(json['priority']) ??
+        0,
+    secondaryKeys: _parseKeys(
+      json['secondaryKeys'] ?? json['secondary_keys'] ?? json['keysecondary'],
+    ),
+    selectiveLogic: _parseSelectiveLogic(json['selectiveLogic']),
+    caseSensitive: _parseBoolOrNull(json['caseSensitive']),
+    matchWholeWords: _parseBoolOrNull(json['matchWholeWords']),
+    probability: probability,
+    useProbability: explicitUseProbability ?? probability < 100,
   );
 }
 
@@ -86,4 +124,46 @@ bool _parseBool(dynamic v) {
     return s == 'true' || s == '1';
   }
   return false;
+}
+
+bool? _parseBoolOrNull(dynamic v) {
+  if (v is bool) return v;
+  if (v is int) return v != 0;
+  if (v is num) return v != 0;
+  if (v is String) {
+    final s = v.toLowerCase().trim();
+    if (s == 'true' || s == '1' || s == 'yes') return true;
+    if (s == 'false' || s == '0' || s == 'no') return false;
+  }
+  return null;
+}
+
+int? _parseInt(dynamic v) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v.trim());
+  return null;
+}
+
+LoreSelectiveLogic _parseSelectiveLogic(dynamic v) {
+  if (v is int || v is num) return loreSelectiveLogicFromSt(v);
+  if (v is String) {
+    final s = v.trim();
+    final normalized = s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
+    switch (normalized) {
+      case '0':
+      case 'andany':
+        return LoreSelectiveLogic.andAny;
+      case '1':
+      case 'notall':
+        return LoreSelectiveLogic.notAll;
+      case '2':
+      case 'notany':
+        return LoreSelectiveLogic.notAny;
+      case '3':
+      case 'andall':
+        return LoreSelectiveLogic.andAll;
+    }
+  }
+  return LoreSelectiveLogic.andAny;
 }

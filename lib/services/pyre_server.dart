@@ -1221,10 +1221,7 @@ class PyreServer {
       }
       final messages = rawMessages
           .whereType<Map>()
-          .map((m) => ChatTurn(
-                (m['role'] as String?) ?? 'user',
-                (m['content'] as String?) ?? '',
-              ))
+          .map(chatTurnFromLanProxyJson)
           .toList();
 
       // Sampling overrides: take client's hint when provided, else

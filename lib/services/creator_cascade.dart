@@ -37,11 +37,7 @@ List<String> requiredKeysFor(String? mode) {
   // first_mes, tags, creator_notes — those are character-only. Tagline
   // is optional (never required).
   if (mode == 'persona') {
-    return const [
-      'name',
-      'description',
-      'mes_example',
-    ];
+    return const ['name', 'description', 'mes_example'];
   }
   // character (and any legacy/unknown block mode)
   return const [
@@ -142,8 +138,10 @@ const List<String> kDescriptionSectionOrder = <String>[
 /// `dotAll` lets a section body span multiple lines; the back-reference
 /// `\1` requires the close tag to match the open tag, so an unclosed /
 /// mismatched tag is NOT captured (→ treated as incomplete).
-final RegExp _kDescriptionSectionRe =
-    RegExp(r'<([\w ]+?)>(.*?)</\1>', dotAll: true);
+final RegExp _kDescriptionSectionRe = RegExp(
+  r'<([\w ]+?)>(.*?)</\1>',
+  dotAll: true,
+);
 
 /// Parse [text] into an ordered list of [DescriptionSection]s: each
 /// `<Tag>…</Tag>` segment (tag + trimmed inner value) interleaved with the
@@ -201,8 +199,9 @@ String _serializeDescriptionSections(List<DescriptionSection> sections) {
 /// [incoming] contributes no well-formed sections, [current] is returned
 /// byte-for-byte unchanged.
 String mergeDescriptionSections(String current, String incoming) {
-  final incomingSections =
-      parseDescriptionSections(incoming).where((s) => s.tag.isNotEmpty);
+  final incomingSections = parseDescriptionSections(
+    incoming,
+  ).where((s) => s.tag.isNotEmpty);
   if (incomingSections.isEmpty) return current;
 
   final merged = parseDescriptionSections(current);
@@ -256,6 +255,8 @@ String? creatorModeLabel({
     case 'persona':
       if (editingPersonaId != null) return 'Edit persona';
       return 'Build a persona';
+    case 'lorebook':
+      return 'Build a lorebook';
     case 'edit':
       if (editingPersonaId != null) return 'Edit persona';
       return 'Edit card';
@@ -320,6 +321,73 @@ BuildMarkerResult detectAndStripBuildMarker(String raw) {
   // marker sat on its own final line.
   final stripped = raw.replaceAll(_buildSheetMarkerRe, '\n').trim();
   return BuildMarkerResult(stripped, true);
+}
+
+/// True when a detected build marker should actually auto-fire the structured
+/// build.
+///
+/// This is a second safety gate after marker detection. Some models can emit
+/// `[[BUILD_SHEET]]` while the visible reply is still a proposal like "want me
+/// to build, or should we keep shaping it?". In that case the user has NOT
+/// given the go-ahead, so the runtime ignores the marker and leaves the chat in
+/// the conversational phase. A typed `/build` command bypasses this helper.
+bool shouldAutoFireBuildMarker(BuildMarkerResult marker) {
+  if (!marker.found) return false;
+  final text = marker.text.trim();
+  if (text.isEmpty) return true;
+  final folded = _foldBuildGateText(text);
+  if (folded.contains('?')) return false;
+
+  const waitingPhrases = <String>[
+    'want me to',
+    'do you want',
+    'should i',
+    'would you like',
+    'would you prefer',
+    'or keep',
+    'or should',
+    'or prefer',
+    'tell me when',
+    'say the word',
+    'let me know',
+    'if you want',
+    'when you are ready',
+    "when you're ready",
+    'keep shaping',
+    'keep going',
+    'quer ajustar',
+    'quer que eu',
+    'prefere',
+    'ou prefere',
+    'me diz',
+    'me diga',
+    'dar o sinal',
+    'se quiser',
+    'quando quiser',
+    'quando estiver',
+    'quando sentir',
+    'se ja ta no ponto',
+    'se ja esta no ponto',
+    'polir',
+  ];
+  return !waitingPhrases.any(folded.contains);
+}
+
+String _foldBuildGateText(String text) {
+  return text
+      .toLowerCase()
+      .replaceAll('\u00e1', 'a')
+      .replaceAll('\u00e0', 'a')
+      .replaceAll('\u00e2', 'a')
+      .replaceAll('\u00e3', 'a')
+      .replaceAll('\u00e9', 'e')
+      .replaceAll('\u00ea', 'e')
+      .replaceAll('\u00ed', 'i')
+      .replaceAll('\u00f3', 'o')
+      .replaceAll('\u00f4', 'o')
+      .replaceAll('\u00f5', 'o')
+      .replaceAll('\u00fa', 'u')
+      .replaceAll('\u00e7', 'c');
 }
 
 /// True when the user's OUTGOING Creator-input message is the deterministic

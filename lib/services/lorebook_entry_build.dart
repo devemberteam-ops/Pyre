@@ -18,9 +18,8 @@
 // Bounded: max 1 continuation → always terminates.
 
 import 'chat_api.dart' show ChatTurn;
-import 'creator_json.dart'
-    show extractJsonAfterReasoning, looksTruncatedJson;
-import 'lorebook_entry_schema.dart' show entryJsonToLoreEntry;
+import 'creator_json.dart' show extractJsonAfterReasoning, looksTruncatedJson;
+import 'lorebook_entry_schema.dart' show entryJsonToLoreEntries;
 import '../models/models.dart' show LoreEntry;
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -45,6 +44,16 @@ Future<LoreEntry?> draftLoreEntry({
   required List<ChatTurn> turns,
   required Future<String> Function(List<ChatTurn>) call,
 }) async {
+  final entries = await draftLoreEntries(turns: turns, call: call);
+  return entries == null || entries.isEmpty ? null : entries.first;
+}
+
+/// Build one or more [LoreEntry] objects from a completed architect
+/// conversation. Accepts both {"entries":[...]} and the legacy single object.
+Future<List<LoreEntry>?> draftLoreEntries({
+  required List<ChatTurn> turns,
+  required Future<String> Function(List<ChatTurn>) call,
+}) async {
   // ── Initial call ──────────────────────────────────────────────────────────
   final String raw;
   try {
@@ -55,7 +64,7 @@ Future<LoreEntry?> draftLoreEntry({
 
   // ── Attempt 1: extract JSON from the initial reply ─────────────────────
   final Map<String, dynamic>? parsed = _extractFromRaw(raw);
-  if (parsed != null) return entryJsonToLoreEntry(parsed);
+  if (parsed != null) return entryJsonToLoreEntries(parsed);
 
   // ── Truncation check: bounded continuation (max 1) ─────────────────────
   if (!looksTruncatedJson(raw)) {
@@ -81,12 +90,14 @@ Future<LoreEntry?> draftLoreEntry({
   // Stitch the partial + continuation and re-extract.
   final stitched = '$raw$continuationRaw';
   final Map<String, dynamic>? stitchedParsed = _extractFromRaw(stitched);
-  if (stitchedParsed != null) return entryJsonToLoreEntry(stitchedParsed);
+  if (stitchedParsed != null) return entryJsonToLoreEntries(stitchedParsed);
 
   // Try the continuation chunk alone (in case the model re-emitted the full
   // object rather than resuming mid-stream — common with some providers).
-  final Map<String, dynamic>? continuationOnly = _extractFromRaw(continuationRaw);
-  if (continuationOnly != null) return entryJsonToLoreEntry(continuationOnly);
+  final Map<String, dynamic>? continuationOnly = _extractFromRaw(
+    continuationRaw,
+  );
+  if (continuationOnly != null) return entryJsonToLoreEntries(continuationOnly);
 
   // Nothing parseable after one continuation → best-effort null.
   return null;

@@ -32,7 +32,7 @@ So we built the frontend we wanted:
 
 - **Mobile-first, not mobile-afterthought.** The whole UI is designed for a thumb, then scaled up to the desktop — not the reverse.
 - **Nothing is hosted but by you.** Your characters and your chats are your business. They sit on your device, full stop. You bring the model; we never see a single message.
-- **The marketplace comes to you.** Pyre integrates directly with **BotBooru**, the community card hub — browse and one-tap-import without ever leaving the app or breaking the scene.
+- **The marketplace comes to you.** Pyre integrates directly with **BotBooru**, the community card hub. On supported embedded platforms you can browse and one-tap-import without ever leaving the app.
 - **No sanitizing.** Pyre doesn't host, generate, or moderate content. What you write and what your model says is between the two of you.
 - **Clean for newcomers, deep for power users.** A calm default experience, with every knob underneath for people who live in this stuff.
 
@@ -72,7 +72,7 @@ We're **Ember Team** — a small, independent group. We've put months into Pyre,
 - Leaked API keys in provider error messages are scrubbed before they ever hit your screen.
 
 ### 🌐 BotBooru / Discover
-- A built-in, allowlisted window into **BotBooru** (and other trusted card hubs) with **one-tap PNG import** — the host is verified before anything downloads.
+- An allowlisted window into **BotBooru** (and other trusted card hubs) with **one-tap PNG import** on embedded platforms — the host is verified before anything downloads.
 
 ### 🔄 Sync & desktop
 - **Cross-device sync** — run the desktop app as a hub, pair your phone with a QR code, and your library follows you. The web build can even run *through* your desktop so your API key never leaves it.
@@ -88,7 +88,7 @@ We're **Ember Team** — a small, independent group. We've put months into Pyre,
 | | Android | Windows | Linux | Web |
 |---|:---:|:---:|:---:|:---:|
 | Chat, characters, creator, lorebooks, memory | ✅ | ✅ | ✅ | ✅ |
-| BotBooru in-app browser | ✅ | ✅ | — | — |
+| BotBooru / Discover browser | embedded | WebView2 | external | via desktop hub |
 | Acts as a sync **hub** | — | ✅ | ✅ | — |
 | Syncs **to** a hub | ✅ | ✅ | — | ✅ (via desktop) |
 | Tray / shortcuts / window state | — | ✅ | ✅ | — |

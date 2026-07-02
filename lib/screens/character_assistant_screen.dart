@@ -57,6 +57,13 @@ import '../services/card_import.dart';
 import '../services/image_describe.dart';
 import '../services/image_resize.dart';
 import '../services/generation_keepalive.dart';
+import '../services/lorebook_architect_prompts.dart'
+    show
+        hasBuildEntryMarker,
+        isExplicitLorebookEntryRequest,
+        isBuildEntryCommand,
+        kLorebookEntryArchitectPrompt;
+import '../services/lorebook_entry_build.dart' show draftLoreEntries;
 import '../services/png_encoder.dart';
 import '../services/png_parser.dart';
 import '../services/token_estimate.dart';
@@ -71,6 +78,7 @@ import '../widgets/lorebook_binding_section.dart';
 // in as-is) and the "Save & open editor" save-action was retired.
 import 'character_creator_help_screen.dart';
 import 'chat_picker_screens.dart';
+import 'lorebook_creator_screen.dart';
 
 /// Whether the Creator chat input should be LOCKED for a session in the
 /// given ([mode], [flow]) state.
@@ -88,6 +96,18 @@ bool creatorInputLocked({required String? mode, required String? flow}) {
   if (mode == null) return true;
   if (mode != 'edit' && flow == null) return true;
   return false;
+}
+
+bool creatorShouldStartEmbeddedLorebookFlow({
+  required bool lorebookModeActive,
+  required bool hasActiveSession,
+  required bool hasPendingAttachments,
+  required String text,
+}) {
+  return !lorebookModeActive &&
+      hasActiveSession &&
+      !hasPendingAttachments &&
+      isExplicitLorebookEntryRequest(text);
 }
 
 class CharacterAssistantScreen extends StatefulWidget {
@@ -132,6 +152,7 @@ class CharacterAssistantScreen extends StatefulWidget {
 class _PendingAttachment {
   final String kind; // 'image' | 'card' | 'doc'
   final String filename;
+
   /// Raw image bytes (already downscaled to ≤1280px JPEG). Held in
   /// memory ONLY while staged — the chip renders directly from
   /// these via Image.memory, skipping the base64 round-trip that
@@ -139,13 +160,16 @@ class _PendingAttachment {
   /// the user sends, these get encoded into [CreatorAttachment]'s
   /// data URL for persistence.
   Uint8List? imageBytes;
+
   /// Material to feed the LLM at send time — vision profile (images),
   /// chara_card_v2 JSON pretty-print (cards), document text (docs).
   /// Null while a vision call is still in flight.
   String? extracted;
+
   /// In-flight vision call. Awaited at send time if the user hits
   /// send before it finishes. Null for card / doc (filled synchronously).
   Future<void>? analysing;
+
   /// Last error from the vision API, if it failed. Allows the user to
   /// dismiss the chip and continue or just send the image without
   /// the structured profile.
@@ -159,8 +183,14 @@ class _PendingAttachment {
   });
 }
 
-class _CharacterAssistantScreenState
-    extends State<CharacterAssistantScreen> {
+class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
+  static const String _canvasLorebookIdsKey = '_pyre_lorebookIds';
+  static const String _canvasLorebookNameKey = '_pyre_lorebookName';
+  static const String _canvasLorebookEntriesKey = '_pyre_lorebookEntries';
+  static const String _canvasLorebookDraftingKey = '_pyre_lorebookDrafting';
+  static const String _embeddedLorebookStartMarker =
+      'Embedded lorebook drafting is now active';
+
   /// Wave CV: the opening message now offers a CHOICE — character vs
   /// scenario — surfaced as two buttons rendered inline under this
   /// message. The chat input is locked until the user picks. After the
@@ -172,16 +202,18 @@ class _CharacterAssistantScreenState
   /// Keeping it short and choice-focused — the deeper flow detail comes
   /// in the follow-up greeting once the mode is locked.
   static const String _greeting =
-      "Hey — I'm Pyre's Character Creator. I can build two things with "
+      "Hey — I'm Pyre's Creator. I can build three things with "
       "you:\n\n"
       "  • **A character** — one persona for roleplay: name, look, "
       "voice, personality, and the contradictions that make them feel "
       "real.\n"
       "  • **A scenario** — a whole setting with a narrator that voices "
       "its NPCs, built around the world, the cast, and the opening "
-      "scene.\n\n"
-      "Pick one below — I focus on one at a time, since the two need "
-      "pretty different cards.\n\n"
+      "scene.\n"
+      "  • **A lorebook** — world info entries with trigger keys, "
+      "reference material, and editable drafts.\n\n"
+      "Pick one below — I focus on one at a time, since each path needs "
+      "a different build flow.\n\n"
       "**Heads-up on timing:** once you say go, I write the whole card "
       "in one pass — usually **3-5 minutes** depending on your "
       "provider. The app isn't frozen, it's working; keep it open or "
@@ -239,6 +271,13 @@ class _CharacterAssistantScreenState
       "building the sheet — or just say \"you decide\" and I'll run with "
       "it.";
 
+  static const String _lorebookFreeformGreeting =
+      "Locked in on a **lorebook**. We'll build it in the Sheet as visible, "
+      "editable entries: trigger keys, reference content, and whether each "
+      "entry is constant. Tell me the world, cast, places, factions, rules, "
+      "or attach reference material. When an entry is ready, type **/entry** "
+      "or **build it** and I'll add it to the Sheet for review before saving.";
+
   /// Persona Creator: greeting when EDITING an existing persona with AI.
   // creator-01 (mega audit 2026-06-04): dropped the "tap Apply changes"
   // instruction — that button was removed in Wave 242 and never existed
@@ -290,6 +329,7 @@ class _CharacterAssistantScreenState
   bool _updatingCanvas = false;
   String _streamBuffer = '';
   StreamSubscription<String>? _streamSub;
+
   /// Wave CY.18.44: generation counter for the active stream. Every time
   /// we create a new subscription (initial turn, continuation, retry,
   /// canvas updater) we bump this and capture it in the closure. Each
@@ -344,8 +384,8 @@ class _CharacterAssistantScreenState
   void _onScroll() {
     if (!_scrollCtl.hasClients) return;
     final pos = _scrollCtl.position;
-    final atBottom = pos.maxScrollExtent <= 60 ||
-        pos.maxScrollExtent - pos.pixels < 60;
+    final atBottom =
+        pos.maxScrollExtent <= 60 || pos.maxScrollExtent - pos.pixels < 60;
     if (atBottom != _stickToBottom) {
       setState(() => _stickToBottom = atBottom);
     }
@@ -426,8 +466,7 @@ class _CharacterAssistantScreenState
         // not the character/scenario block architects.
         s.mode = 'edit';
         store.renameCreatorSession(s.id, character.name);
-        store.updateCreatorSessionCanvas(
-            s.id, _characterToCanvas(character));
+        store.updateCreatorSessionCanvas(s.id, _characterToCanvas(character));
         store.updateCreatorSessionMessages(s.id, [
           CreatorMessage(
             role: 'assistant',
@@ -490,7 +529,6 @@ class _CharacterAssistantScreenState
       // (Reverts Wave CY.18.16's sheet-first default.)
       _showCanvas = false;
     });
-
   }
 
   /// Wave CY.18.16: runtime-injected creator name. The user's
@@ -550,6 +588,8 @@ class _CharacterAssistantScreenState
       'character_version': c.characterVersion,
       'creator_notes': c.creatorNotes,
       'extensions': Map<String, dynamic>.from(c.extensions),
+      if (c.lorebookIds.isNotEmpty)
+        _canvasLorebookIdsKey: List<String>.from(c.lorebookIds),
     };
   }
 
@@ -564,6 +604,8 @@ class _CharacterAssistantScreenState
       'description': p.description,
       'mes_example': p.dialogueExamples,
       if (p.tagline != null && p.tagline!.isNotEmpty) 'tagline': p.tagline,
+      if (p.lorebookIds.isNotEmpty)
+        _canvasLorebookIdsKey: List<String>.from(p.lorebookIds),
     };
   }
 
@@ -599,6 +641,105 @@ class _CharacterAssistantScreenState
     return s?.canvas ?? const <String, dynamic>{};
   }
 
+  List<String> _canvasLorebookIds(Map<String, dynamic> canvas) {
+    final raw = canvas[_canvasLorebookIdsKey];
+    if (raw is! List) return const <String>[];
+    return [
+      for (final id in raw)
+        if (id is String && id.trim().isNotEmpty) id.trim(),
+    ];
+  }
+
+  List<LoreEntry> _canvasLorebookEntries(Map<String, dynamic> canvas) {
+    final raw = canvas[_canvasLorebookEntriesKey];
+    if (raw is! List) return <LoreEntry>[];
+    final out = <LoreEntry>[];
+    for (final item in raw) {
+      if (item is! Map) continue;
+      try {
+        out.add(LoreEntry.fromJson(item.cast<String, dynamic>()));
+      } catch (_) {
+        // Ignore malformed draft rows; the editor can keep going.
+      }
+    }
+    return out;
+  }
+
+  String _canvasLorebookName(Map<String, dynamic> canvas) {
+    final raw = canvas[_canvasLorebookNameKey];
+    if (raw is String && raw.trim().isNotEmpty) return raw.trim();
+    final title = context.read<AppStore>().activeCreatorSession?.title;
+    if (title != null && title.trim().isNotEmpty) return title.trim();
+    return 'New lorebook';
+  }
+
+  void _setCanvasLorebookEntries(AppStore store, List<LoreEntry> entries) {
+    final id = _sessionId;
+    if (id == null) return;
+    final canvas = Map<String, dynamic>.from(_sessionCanvas(store));
+    canvas[_canvasLorebookEntriesKey] = entries
+        .map((entry) => entry.toJson())
+        .toList();
+    store.updateCreatorSessionCanvas(id, canvas);
+  }
+
+  void _startEmbeddedLorebookDrafting(AppStore store) {
+    final id = _sessionId;
+    if (id == null) return;
+    final canvas = Map<String, dynamic>.from(_sessionCanvas(store));
+    final sessionMode = store.activeCreatorSession?.mode;
+    final targetLabel = sessionMode == 'persona' ? 'persona' : 'card';
+    final cardName =
+        canvas['name'] is String && (canvas['name'] as String).trim().isNotEmpty
+        ? (canvas['name'] as String).trim()
+        : store.activeCreatorSession?.derivedTitle() ?? targetLabel;
+    canvas[_canvasLorebookDraftingKey] = true;
+    canvas[_canvasLorebookNameKey] =
+        canvas[_canvasLorebookNameKey] ?? '$cardName lore';
+    canvas[_canvasLorebookEntriesKey] = _canvasLorebookEntries(
+      canvas,
+    ).map((e) => e.toJson()).toList();
+    store.updateCreatorSessionCanvas(id, canvas);
+    final messages = List<CreatorMessage>.from(_sessionMessages(store))
+      ..add(
+        CreatorMessage(
+          role: 'assistant',
+          content:
+              '$_embeddedLorebookStartMarker for this $targetLabel. Tell me what world facts, places, factions, rules, or NPC lore should become entries. Type /entry when one is ready; I will add it to the Sheet instead of opening another screen.',
+        ),
+      );
+    store.updateCreatorSessionMessages(id, messages);
+    setState(() => _showCanvas = false);
+  }
+
+  List<String> _mergeLorebookIds(List<String> primary, List<String> secondary) {
+    final seen = <String>{};
+    final out = <String>[];
+    for (final id in [...primary, ...secondary]) {
+      if (id.trim().isEmpty || !seen.add(id)) continue;
+      out.add(id);
+    }
+    return out;
+  }
+
+  Map<String, dynamic> _canvasForCardData(Map<String, dynamic> canvas) {
+    final out = Map<String, dynamic>.from(canvas);
+    out.remove(_canvasLorebookIdsKey);
+    out.remove(_canvasLorebookNameKey);
+    out.remove(_canvasLorebookEntriesKey);
+    out.remove(_canvasLorebookDraftingKey);
+    return out;
+  }
+
+  void _setCanvasLorebookIds(AppStore store, List<String> ids) {
+    final id = _sessionId;
+    if (id == null) return;
+    final canvas = Map<String, dynamic>.from(_sessionCanvas(store));
+    canvas.remove(_canvasLorebookIdsKey);
+    if (ids.isNotEmpty) canvas[_canvasLorebookIdsKey] = ids;
+    store.updateCreatorSessionCanvas(id, canvas);
+  }
+
   /// True when a canvas field has been meaningfully filled by the
   /// updater (non-empty string / list / map). Empty defaults render
   /// as "—  in the canvas view.
@@ -623,6 +764,17 @@ class _CharacterAssistantScreenState
     return ModelSettings.fromJson(base.toJson())
       ..temperature = base.creatorTemperature
       ..maxTokens = base.creatorMaxTokens;
+  }
+
+  static const int _kLorebookMaxTokensFloor = 32768;
+
+  ModelSettings _lorebookChatSettings(ModelSettings base) {
+    final cap = base.creatorMaxTokens < _kLorebookMaxTokensFloor
+        ? _kLorebookMaxTokensFloor
+        : base.creatorMaxTokens;
+    return ModelSettings.fromJson(base.toJson())
+      ..temperature = base.creatorTemperature
+      ..maxTokens = cap;
   }
 
   /// H-11: vision output-token FLOOR. A clinical single-character profile
@@ -740,8 +892,7 @@ class _CharacterAssistantScreenState
     final session = store.activeCreatorSession;
     if (session == null) return false;
     if (_underlyingBuildMode(session) == null) return false;
-    return session.messages
-        .any((m) => m.role == 'user' && m.kind == null);
+    return session.messages.any((m) => m.role == 'user' && m.kind == null);
   }
 
   /// Index (in the active session's messages) of the build-status line this
@@ -752,11 +903,9 @@ class _CharacterAssistantScreenState
   /// remember its index for in-place updates.
   void _appendBuildStatus(AppStore store, String text) {
     final messages = List<CreatorMessage>.from(_sessionMessages(store));
-    messages.add(CreatorMessage(
-      role: 'assistant',
-      kind: 'freeformWarning',
-      content: text,
-    ));
+    messages.add(
+      CreatorMessage(role: 'assistant', kind: 'freeformWarning', content: text),
+    );
     _buildStatusIndex = messages.length - 1;
     _persistMessages(store, messages);
     store.flushPersist();
@@ -820,8 +969,8 @@ class _CharacterAssistantScreenState
     // other top-level fields — first_mes, scenario, tags — in place).
     String foreignDescription = '';
     if (_isEditSession(session)) {
-      final existingDesc =
-          (_sessionCanvas(store)['description'] ?? '').toString();
+      final existingDesc = (_sessionCanvas(store)['description'] ?? '')
+          .toString();
       existing = existingDesc.trim().isEmpty
           ? <String, String>{}
           : decomposeDescription(existingDesc, mode);
@@ -831,10 +980,8 @@ class _CharacterAssistantScreenState
       // non-empty Description means the card uses a convention Pyre can't
       // parse → treat it as foreign and keep the raw Description.
       if (existingDesc.trim().isNotEmpty && mode != cs.CreatorMode.scenario) {
-        final knownKeys =
-            cs.schemaFor(mode).map((f) => f.key).toSet();
-        final recognised =
-            existing.keys.where(knownKeys.contains).length;
+        final knownKeys = cs.schemaFor(mode).map((f) => f.key).toSet();
+        final recognised = existing.keys.where(knownKeys.contains).length;
         if (recognised < 2) foreignDescription = existingDesc;
       }
       // Audit 2026-06-04 (High): seed the top-level `scenario` from the canvas
@@ -847,8 +994,8 @@ class _CharacterAssistantScreenState
       // (Character mode only; scenario mode round-trips it via the merge
       // branch and isn't affected.)
       if (mode == cs.CreatorMode.character) {
-        final curScenario =
-            (_sessionCanvas(store)['scenario'] ?? '').toString();
+        final curScenario = (_sessionCanvas(store)['scenario'] ?? '')
+            .toString();
         if (curScenario.trim().isNotEmpty) {
           existing['scenario'] = curScenario;
         }
@@ -883,7 +1030,10 @@ class _CharacterAssistantScreenState
         final raw = canvas[canvasKey];
         final List<String> list;
         if (raw is List) {
-          list = raw.whereType<String>().where((s) => s.trim().isNotEmpty).toList();
+          list = raw
+              .whereType<String>()
+              .where((s) => s.trim().isNotEmpty)
+              .toList();
         } else if (raw is String && raw.trim().isNotEmpty) {
           list = [raw.trim()];
         } else {
@@ -911,9 +1061,10 @@ class _CharacterAssistantScreenState
     final provider = store.creatorProvider;
     if (provider == null) {
       _appendBuildStatus(
-          store,
-          '⚠ No provider configured. Open "More → API Connections" to add '
-          'one, then ask me to build the sheet again (or type /build).');
+        store,
+        '⚠ No provider configured. Open "More → API Connections" to add '
+        'one, then ask me to build the sheet again (or type /build).',
+      );
       return;
     }
     final settings = _creatorChatSettings(store.modelSettings);
@@ -924,16 +1075,19 @@ class _CharacterAssistantScreenState
     final transcript = <ChatTurn>[
       for (final m in msgs)
         if (m.kind == null && _composeTurnContent(m).trim().isNotEmpty)
-          ChatTurn(m.role == 'assistant' ? 'assistant' : 'user',
-              _composeTurnContent(m)),
+          ChatTurn(
+            m.role == 'assistant' ? 'assistant' : 'user',
+            _composeTurnContent(m),
+          ),
     ];
 
     final batches = cs.batchesFor(mode);
     setState(() => _structuredBuilding = true);
     _appendBuildStatus(
-        store,
-        '⏳  Building the sheet… this runs in a few passes and can take a '
-        'couple of minutes. Keep the app open.');
+      store,
+      '⏳  Building the sheet… this runs in a few passes and can take a '
+      'couple of minutes. Keep the app open.',
+    );
 
     var batchIndex = 0;
     // BLOCKER 1: latch when a provider rejects `response_format`. The transport
@@ -965,16 +1119,19 @@ class _CharacterAssistantScreenState
         buildTurns: (keys, decided) {
           // Advance the displayed pass only on a FRESH full batch — a targeted
           // missing-key re-request (a subset of a batch) reuses the same pass.
-          final isFreshBatch = batches.any((b) =>
-              b.length == keys.length && b.every((k) => keys.contains(k)));
+          final isFreshBatch = batches.any(
+            (b) => b.length == keys.length && b.every((k) => keys.contains(k)),
+          );
           if (isFreshBatch) {
             batchIndex++;
             // Creator M2: only update the on-screen status if THIS build's
             // session is still active — otherwise the pass counter would
             // write into whatever session the user switched to.
             if (myGen == _streamGen) {
-              _updateBuildStatus(store,
-                  '⏳  Filling the sheet… pass $batchIndex of ${batches.length}.');
+              _updateBuildStatus(
+                store,
+                '⏳  Filling the sheet… pass $batchIndex of ${batches.length}.',
+              );
             }
           }
           return buildBatchTurns(
@@ -1012,7 +1169,7 @@ class _CharacterAssistantScreenState
             extraBody: jsonModeUnsupported
                 ? null
                 : const {
-                    'response_format': {'type': 'json_object'}
+                    'response_format': {'type': 'json_object'},
                   },
             debugTag: 'creator-structured',
             rawSink: rawSink,
@@ -1048,7 +1205,8 @@ class _CharacterAssistantScreenState
       // `existing`, but the edit batches only re-request BASE keys, so the model
       // never returns world#2. Carry those duplicate-suffix keys forward so the
       // edit re-render reproduces the duplicate instead of dropping it.
-      final buildFields = (_isEditSession(session) &&
+      final buildFields =
+          (_isEditSession(session) &&
               mode == cs.CreatorMode.scenario &&
               existing.isNotEmpty)
           ? carryForwardDuplicateTags(fields, existing)
@@ -1070,7 +1228,8 @@ class _CharacterAssistantScreenState
           final newEmpty =
               (v is String && v.trim().isEmpty) || (v is List && v.isEmpty);
           final orig = canvas[k];
-          final hadContent = (orig is String && orig.trim().isNotEmpty) ||
+          final hadContent =
+              (orig is String && orig.trim().isNotEmpty) ||
               (orig is List && orig.isNotEmpty);
           if (newEmpty && hadContent) return;
         }
@@ -1091,8 +1250,8 @@ class _CharacterAssistantScreenState
       final doneMsg = missing.isEmpty
           ? '✓  Card\'s ready. Open the Sheet tab to review, tweak, or Save.'
           : '✓  Card built. A few fields came back empty '
-              '(${missing.join(', ')}) — you can re-run the build or fill them '
-              'by hand in the Sheet tab.';
+                '(${missing.join(', ')}) — you can re-run the build or fill them '
+                'by hand in the Sheet tab.';
       _updateBuildStatus(store, doneMsg);
       if (mounted) setState(() => _showCanvas = true); // surface the Sheet
 
@@ -1104,12 +1263,12 @@ class _CharacterAssistantScreenState
       if (missing.isEmpty && !editing) {
         final offer = mode == cs.CreatorMode.scenario
             ? 'Want a **key-art image prompt** for the card thumbnail? Say the '
-                'word and I\'ll draft one (natural-language + danbooru tags) you '
-                'can paste into your image generator.'
+                  'word and I\'ll draft one (natural-language + danbooru tags) you '
+                  'can paste into your image generator.'
             : 'Want an **image prompt** to make an avatar? Just ask — I\'ll '
-                'draft one: a natural-language version (for GPT Image / '
-                'Midjourney / Flux) plus danbooru tags (for SDXL / Pony / '
-                'Illustrious). Portrait works best.';
+                  'draft one: a natural-language version (for GPT Image / '
+                  'Midjourney / Flux) plus danbooru tags (for SDXL / Pony / '
+                  'Illustrious). Portrait works best.';
         final messages = List<CreatorMessage>.from(_sessionMessages(store));
         messages.add(CreatorMessage(role: 'assistant', content: offer));
         _persistMessages(store, messages);
@@ -1122,9 +1281,10 @@ class _CharacterAssistantScreenState
       // switched to mid-build.
       if (myGen == _streamGen) {
         _updateBuildStatus(
-            store,
-            '⚠ The build hit a problem (${e.toString()}). Whatever was filled '
-            'is in the Sheet tab — you can re-run the build.');
+          store,
+          '⚠ The build hit a problem (${e.toString()}). Whatever was filled '
+          'is in the Sheet tab — you can re-run the build.',
+        );
       }
     } finally {
       // H3: release the keep-alive started at the top of this build so the
@@ -1134,6 +1294,124 @@ class _CharacterAssistantScreenState
       // H2: clear the cancel token so a stale pointer doesn't linger after
       // the build finishes normally or via error.
       if (_buildCancelToken == cancelToken) _buildCancelToken = null;
+    }
+  }
+
+  Future<void> _runLorebookStructuredBuildFlow({String? seedRaw}) async {
+    final store = context.read<AppStore>();
+    final id = _sessionId;
+    if (id == null || _structuredBuilding || _generating) return;
+    final session = store.activeCreatorSession;
+    final canvas = _sessionCanvas(store);
+    final lorebookActive =
+        session?.mode == 'lorebook' ||
+        canvas[_canvasLorebookDraftingKey] == true;
+    if (!lorebookActive) return;
+
+    final seeded = seedRaw == null
+        ? const <EntryDraft>[]
+        : extractEntryDraftsFromReply(seedRaw);
+    if (seeded.isNotEmpty) {
+      for (final draft in seeded) {
+        _commitLorebookEntryDraft(draft.entry);
+      }
+      return;
+    }
+
+    final provider = store.creatorProvider;
+    if (provider == null) {
+      _appendBuildStatus(
+        store,
+        '⚠ No provider configured. Open "More > API Connections" to add one.',
+      );
+      return;
+    }
+
+    setState(() => _structuredBuilding = true);
+    _appendBuildStatus(store, 'Building lorebook entries...');
+    await _keepAliveStart();
+    var jsonModeUnsupported = false;
+    try {
+      final latestCanvas = _sessionCanvas(store);
+      final conversation = _lorebookArchitectMessages(
+        _sessionMessages(
+          store,
+        ).where((m) => m.kind == null).toList(growable: false),
+        embedded: session?.mode != 'lorebook',
+      );
+      final turns =
+          _buildLorebookArchitectTurns(
+            canvas: latestCanvas,
+            messages: conversation,
+            addendum: store.modelSettings.creatorPromptAddendum,
+            embedded: session?.mode != 'lorebook',
+          )..add(
+            ChatTurn(
+              'user',
+              'Build the requested lorebook entries now. If the user asked for '
+                  'a count, honor it when reasonable; otherwise create 1-5 '
+                  'focused entries based on the current scope. Return only one '
+                  'JSON object shaped as {"entries":[...]} with keys, '
+                  'secondaryKeys, selectiveLogic, content, constant, enabled, '
+                  'order, caseSensitive, matchWholeWords, probability, '
+                  'useProbability, and comment. Keys must be natural trigger '
+                  'phrases people would actually write in chat; do not pad '
+                  'with decorative tags, title-cased descriptions, or '
+                  'thesaurus synonyms. Use secondaryKeys to narrow broad '
+                  'natural keys. No analysis, no markdown, no <think>, no '
+                  'marker.',
+            ),
+          );
+
+      final entries = await draftLoreEntries(
+        turns: turns,
+        call: (callTurns) async {
+          final rawSink = StringBuffer();
+          final text = await completeChatStreamed(
+            provider: provider,
+            settings: _lorebookChatSettings(store.modelSettings),
+            messages: callTurns,
+            extraBody: jsonModeUnsupported
+                ? null
+                : const {
+                    'response_format': {'type': 'json_object'},
+                  },
+            debugTag: 'creator-lorebook-structured',
+            rawSink: rawSink,
+            onParamFallback: () => jsonModeUnsupported = true,
+          );
+          if (extractJsonObject(text) != null) return text;
+          final raw = rawSink.toString();
+          if (extractJsonAfterReasoning(raw) != null) return raw;
+          return text;
+        },
+      );
+
+      if (!mounted) return;
+      if (entries == null || entries.isEmpty) {
+        _updateBuildStatus(
+          store,
+          'I could not get valid lorebook entries from the model. Try again '
+          'or switch the creator provider.',
+        );
+        return;
+      }
+
+      for (final entry in entries) {
+        _commitLorebookEntryDraft(entry);
+      }
+      _updateBuildStatus(
+        store,
+        entries.length == 1
+            ? 'Lorebook entry added to the Sheet. Review or edit it before saving.'
+            : '${entries.length} lorebook entries added to the Sheet. Review or edit them before saving.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _updateBuildStatus(store, '⚠ Lorebook build hit a problem: $e');
+    } finally {
+      _keepAliveStop();
+      if (mounted) setState(() => _structuredBuilding = false);
     }
   }
 
@@ -1173,23 +1451,68 @@ class _CharacterAssistantScreenState
     // `[[BUILD_SHEET]]` marker. When the user's outgoing message is exactly
     // `/build` (or `/build the sheet`), don't send it to the architect — fire
     // the build directly (guarded) and surface a tiny confirmation.
-    if (isBuildCommand(text) && _pendingAttachments.isEmpty) {
+    final activeSession = store.activeCreatorSession;
+    final activeCanvas = _sessionCanvas(store);
+    final lorebookModeActive =
+        activeSession?.mode == 'lorebook' ||
+        activeCanvas[_canvasLorebookDraftingKey] == true;
+    final lorebookBuildCommand =
+        lorebookModeActive &&
+        _pendingAttachments.isEmpty &&
+        (isBuildCommand(text) || isBuildEntryCommand(text));
+    if (lorebookBuildCommand) {
+      _inputCtl.clear();
+      final messages = List<CreatorMessage>.from(_sessionMessages(store))
+        ..add(CreatorMessage(role: 'user', content: text));
+      _persistMessages(store, messages);
+      setState(() {});
+      _scrollToBottom();
+      unawaited(_runLorebookStructuredBuildFlow());
+      return;
+    }
+    final embeddedLorebookEntryRequest = creatorShouldStartEmbeddedLorebookFlow(
+      lorebookModeActive: lorebookModeActive,
+      hasActiveSession: activeSession != null,
+      hasPendingAttachments: _pendingAttachments.isNotEmpty,
+      text: text,
+    );
+    if (embeddedLorebookEntryRequest) {
+      _inputCtl.clear();
+      final messages = List<CreatorMessage>.from(_sessionMessages(store))
+        ..add(CreatorMessage(role: 'user', content: text));
+      _persistMessages(store, messages);
+      _startEmbeddedLorebookDrafting(store);
+      setState(() {});
+      _scrollToBottom();
+      unawaited(_runLorebookStructuredBuildFlow());
+      return;
+    }
+    if (isBuildCommand(text) &&
+        _pendingAttachments.isEmpty &&
+        !lorebookBuildCommand) {
       _inputCtl.clear();
       final messenger = ScaffoldMessenger.of(context);
       if (_structuredBuilding || _generating) {
         messenger.showSnackBar(
-            const SnackBar(content: Text('Already building the sheet…')));
+          const SnackBar(content: Text('Already building the sheet…')),
+        );
         return;
       }
       final session = store.activeCreatorSession;
       if (session == null || _underlyingBuildMode(session) == null) {
-        messenger.showSnackBar(const SnackBar(
-            content: Text('Nothing to build yet — start a character, '
-                'scenario, or persona first.')));
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Nothing to build yet — start a character, '
+              'scenario, or persona first.',
+            ),
+          ),
+        );
         return;
       }
       messenger.showSnackBar(
-          const SnackBar(content: Text('Building the sheet…')));
+        const SnackBar(content: Text('Building the sheet…')),
+      );
       unawaited(_runStructuredBuildFlow());
       return;
     }
@@ -1215,30 +1538,30 @@ class _CharacterAssistantScreenState
     // turn). Cards / docs still carry their extracted text (folded
     // into the user's outgoing text by _composeTurnContent).
     final attachments = pending
-        .map((p) => CreatorAttachment(
-              kind: p.kind,
-              filename: p.filename,
-              imageDataUrl: p.imageBytes == null
-                  ? null
-                  : encodeImageDataUrl(p.imageBytes!),
-              extracted: p.kind == 'image'
-                  ? ''
-                  : (p.extracted ??
+        .map(
+          (p) => CreatorAttachment(
+            kind: p.kind,
+            filename: p.filename,
+            imageDataUrl: p.imageBytes == null
+                ? null
+                : encodeImageDataUrl(p.imageBytes!),
+            extracted: p.kind == 'image'
+                ? ''
+                : (p.extracted ??
                       (p.error != null
                           ? '(Attachment `${p.filename}` could not be parsed: ${p.error}.)'
                           : '')),
-            ))
+          ),
+        )
         .toList();
 
     final newMessages = List<CreatorMessage>.from(_sessionMessages(store));
 
     // Persist the user turn IMMEDIATELY so the bubble appears before
     // the vision call (which can take 5-15s on a 5MB photo).
-    newMessages.add(CreatorMessage(
-      role: 'user',
-      content: text,
-      attachments: attachments,
-    ));
+    newMessages.add(
+      CreatorMessage(role: 'user', content: text, attachments: attachments),
+    );
 
     // Per image, drop an empty assistant placeholder right away so
     // the user sees a "…" bubble while the vision call runs instead
@@ -1275,8 +1598,7 @@ class _CharacterAssistantScreenState
     if (imagePending.isNotEmpty) {
       if (visionProv == null) {
         for (final ph in placeholders) {
-          ph.content =
-              '⚠ No provider configured. Open More → API Connections.';
+          ph.content = '⚠ No provider configured. Open More → API Connections.';
         }
         _persistMessages(store, newMessages);
         if (mounted) setState(() {});
@@ -1310,7 +1632,9 @@ class _CharacterAssistantScreenState
               placeholder.content = profile;
               if (dispatchSessionId != null) {
                 store.updateCreatorSessionMessages(
-                    dispatchSessionId, newMessages);
+                  dispatchSessionId,
+                  newMessages,
+                );
               }
               if (!mounted) return;
               setState(() {});
@@ -1320,7 +1644,9 @@ class _CharacterAssistantScreenState
                   '⚠ Could not analyse `${p.filename}`: $e\n\nSwitch the creator provider to a vision-capable one (Venice qwen, Pixtral, Qwen-VL, Claude / GPT) in More → API Connections.';
               if (dispatchSessionId != null) {
                 store.updateCreatorSessionMessages(
-                    dispatchSessionId, newMessages);
+                  dispatchSessionId,
+                  newMessages,
+                );
               }
               if (!mounted) return;
               setState(() {});
@@ -1362,7 +1688,6 @@ class _CharacterAssistantScreenState
   /// finishes (no more LLM calls). Null when no build is in flight.
   BuildCancelToken? _buildCancelToken;
 
-
   /// One-shot per-turn system-prompt override. When non-null,
   /// `_runConversation` uses THIS as the architect/system prompt for the
   /// NEXT turn, then clears it (single-use). Currently nothing sets it
@@ -1399,7 +1724,20 @@ class _CharacterAssistantScreenState
     session.flow = 'freeform';
     final followUp = mode == 'scenario'
         ? _scenarioFreeformGreeting
+        : mode == 'lorebook'
+        ? _lorebookFreeformGreeting
         : _characterFreeformGreeting;
+    if (mode == 'lorebook') {
+      session.canvas = {
+        ...session.canvas,
+        _canvasLorebookNameKey: session.derivedTitle() == 'Untitled'
+            ? 'New lorebook'
+            : session.derivedTitle(),
+        _canvasLorebookEntriesKey: _canvasLorebookEntries(
+          session.canvas,
+        ).map((e) => e.toJson()).toList(),
+      };
+    }
     final updated = List<CreatorMessage>.from(session.messages)
       ..add(CreatorMessage(role: 'assistant', content: followUp));
     store.updateCreatorSessionMessages(id, updated);
@@ -1442,7 +1780,6 @@ class _CharacterAssistantScreenState
   /// selection, freeform appendix for block modes, addendum framing) lives
   /// in the builder. Behaviour is byte-identical.
 
-
   /// Conversation turn — uses the architect prompt that matches the
   /// session's mode (Wave CV) as the system message. Streams the
   /// assistant's reply into a new message slot and persists each chunk.
@@ -1453,7 +1790,8 @@ class _CharacterAssistantScreenState
     if (id == null) return;
     if (provider == null) {
       _finishWithError(
-          'No provider configured. Open "More → API Connections".');
+        'No provider configured. Open "More → API Connections".',
+      );
       return;
     }
     final messages = List<CreatorMessage>.from(_sessionMessages(store));
@@ -1486,19 +1824,35 @@ class _CharacterAssistantScreenState
     final override = _systemPromptOverride;
     _systemPromptOverride = null;
     final preset = store.activeCreatorPreset;
-    final turns = buildCreatorArchitectTurns(
-      canvas: _sessionCanvas(store),
-      conversation: [
-        for (final m in messages.sublist(0, messages.length - 1))
-          CreatorTurn(m.role, _composeTurnContent(m)),
-      ],
-      mode: store.activeCreatorSession?.mode,
-      characterPrompt: preset?.characterPrompt,
-      scenarioPrompt: preset?.scenarioPrompt,
-      editPrompt: preset?.editPrompt,
-      addendum: store.modelSettings.creatorPromptAddendum,
-      systemPromptOverride: override,
-    );
+    final activeCanvas = _sessionCanvas(store);
+    final sessionMode = store.activeCreatorSession?.mode;
+    final lorebookArchitectActive =
+        sessionMode == 'lorebook' ||
+        activeCanvas[_canvasLorebookDraftingKey] == true;
+    final turns = lorebookArchitectActive
+        ? _buildLorebookArchitectTurns(
+            canvas: activeCanvas,
+            messages: _lorebookArchitectMessages(
+              messages.sublist(0, messages.length - 1),
+              embedded: sessionMode != 'lorebook',
+            ),
+            addendum: store.modelSettings.creatorPromptAddendum,
+            systemPromptOverride: override,
+            embedded: sessionMode != 'lorebook',
+          )
+        : buildCreatorArchitectTurns(
+            canvas: _sessionCanvas(store),
+            conversation: [
+              for (final m in messages.sublist(0, messages.length - 1))
+                CreatorTurn(m.role, _composeTurnContent(m)),
+            ],
+            mode: sessionMode,
+            characterPrompt: preset?.characterPrompt,
+            scenarioPrompt: preset?.scenarioPrompt,
+            editPrompt: preset?.editPrompt,
+            addendum: store.modelSettings.creatorPromptAddendum,
+            systemPromptOverride: override,
+          );
 
     await _streamArchitectTurn(
       store: store,
@@ -1506,6 +1860,109 @@ class _CharacterAssistantScreenState
       messages: messages,
       reply: reply,
     );
+  }
+
+  List<ChatTurn> _buildLorebookArchitectTurns({
+    required Map<String, dynamic> canvas,
+    required List<CreatorMessage> messages,
+    required String addendum,
+    String? systemPromptOverride,
+    bool embedded = false,
+  }) {
+    final entries = _canvasLorebookEntries(canvas);
+    final state = StringBuffer()
+      ..writeln('--- CURRENT LOREBOOK SHEET ---')
+      ..writeln('Name: ${_canvasLorebookName(canvas)}')
+      ..writeln('Entries: ${entries.length}');
+    for (var i = 0; i < entries.length; i++) {
+      final e = entries[i];
+      state
+        ..writeln()
+        ..writeln('Entry ${i + 1}:')
+        ..writeln('keys: ${e.keys.join(', ')}')
+        ..writeln('constant: ${e.constant}')
+        ..writeln('content: ${e.content}');
+    }
+    final add = addendum.trim();
+    final prompt =
+        StringBuffer(systemPromptOverride ?? kLorebookEntryArchitectPrompt)
+          ..writeln()
+          ..writeln()
+          ..writeln(
+            'You are running inside Pyre\'s main Creator, not a separate '
+            'lorebook screen. Every committed entry is added to the visible '
+            'Sheet canvas, where the user can edit/delete it before saving the '
+            'lorebook. Avoid duplicating existing entries unless the user asks.',
+          )
+          ..writeln();
+    if (embedded) {
+      prompt
+        ..writeln(
+          'This lorebook draft is embedded in an in-progress card/persona. '
+          'Use the compact asset context below as background, but keep the '
+          'conversation focused only on lorebook entries.',
+        )
+        ..writeln()
+        ..writeln(_embeddedLorebookAssetContext(canvas));
+    }
+    prompt
+      ..writeln()
+      ..writeln(state.toString());
+    if (add.isNotEmpty) {
+      prompt
+        ..writeln()
+        ..writeln('--- USER ADDITIONS ---')
+        ..writeln(add);
+    }
+    return [
+      ChatTurn('system', prompt.toString()),
+      for (final m in messages) ChatTurn(m.role, _composeTurnContent(m)),
+    ];
+  }
+
+  List<CreatorMessage> _lorebookArchitectMessages(
+    List<CreatorMessage> messages, {
+    required bool embedded,
+  }) {
+    if (!embedded) return messages;
+    final start = messages.lastIndexWhere(
+      (m) =>
+          m.role == 'assistant' &&
+          m.content.contains(_embeddedLorebookStartMarker),
+    );
+    if (start < 0) {
+      return messages.length <= 8
+          ? messages
+          : messages.sublist(messages.length - 8);
+    }
+    final includeTriggerUser = start > 0 && messages[start - 1].role == 'user';
+    return messages.sublist(includeTriggerUser ? start - 1 : start);
+  }
+
+  String _embeddedLorebookAssetContext(Map<String, dynamic> canvas) {
+    final fields = <String, String>{
+      'name': canvasText(canvas['name']).trim(),
+      'tagline': canvasText(canvas['tagline']).trim(),
+      'description': canvasText(canvas['description']).trim(),
+      'scenario': canvasText(canvas['scenario']).trim(),
+      'personality': canvasText(canvas['personality']).trim(),
+      'first_mes': canvasText(canvas['first_mes']).trim(),
+    };
+    final b = StringBuffer('--- EMBEDDED ASSET CONTEXT ---');
+    fields.forEach((key, value) {
+      if (value.isEmpty) return;
+      b
+        ..writeln()
+        ..writeln('$key: ${_compactLorebookContextValue(value)}');
+    });
+    return b.toString();
+  }
+
+  String _compactLorebookContextValue(String value) {
+    final normalized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+    const maxChars = 900;
+    if (normalized.length <= maxChars) return normalized;
+    return '${normalized.substring(0, maxChars).trimRight()}...';
   }
 
   /// Wave AZ: the actual SSE streaming pump for an architect turn.
@@ -1520,7 +1977,9 @@ class _CharacterAssistantScreenState
     final provider = store.creatorProvider;
     if (provider == null) {
       _finishWithError(
-          'No provider configured. Open "More → API Connections".', reply: reply);
+        'No provider configured. Open "More → API Connections".',
+        reply: reply,
+      );
       return;
     }
 
@@ -1538,95 +1997,118 @@ class _CharacterAssistantScreenState
     // this one (user tapped Stop + restarted, or _abortInFlightStream
     // fired for a session switch). Stale callbacks no-op cleanly.
     final myGen = ++_streamGen;
+    final isLorebookMode =
+        store.activeCreatorSession?.mode == 'lorebook' ||
+        _sessionCanvas(store)[_canvasLorebookDraftingKey] == true;
     try {
-      _streamSub = streamChatCompletion(
-        provider: provider,
-        // Apply creator-specific temperature + max_tokens overrides
-        // so the design conversation can be tuned independently of
-        // the regular chat (see ModelSettings.creatorTemperature etc.).
-        settings: _creatorChatSettings(store.modelSettings),
-        // Wave CY.18.125: NULL, not the RP preset. `_samplingPayload`
-        // resolves max_tokens as `preset?.maxTokens ?? settings.maxTokens`,
-        // so passing the active RP preset (whose reply cap is ~1-2k)
-        // OVERRODE the creator's creatorMaxTokens (12000) and capped every
-        // block at the RP limit → cut at finish_reason=length right before
-        // `<<BLOCK_END>>` → the truncation/continuation-exhaust loop. The
-        // creator's sampling lives in _creatorChatSettings; the preset
-        // injects NO prompt content here (only sampling), so dropping it is
-        // a sampling-only change — mirrors the sheet-update + vision paths.
-        preset: null,
-        messages: turns,
-        // creator-07 (mega audit 2026-06-04): dropped the vestigial
-        // `stop: ['<<BLOCK_END>>']`. The freeform architect appendix is
-        // conversation-only and no longer instructs the model to emit
-        // `<<BLOCK_END>>` (the deterministic JSON build owns formatting),
-        // so the stop sequence never fired — dead + misleading. The
-        // _sanitiseBlockMarker scrub below still strips any stray marker a
-        // model emits on its own, so removing the server-side stop is safe.
-        debugTag: 'creator-architect', // Wave CY.18.214 diagnostics tag
-      ).listen(
-        (chunk) {
-          if (!mounted || myGen != _streamGen) return;
-          _streamBuffer += chunk;
-          // Creator Structured Build: Phase-1 is pure conversation. Stream
-          // the architect's reply live, stripping any stray control markers
-          // so they never leak into chat. The card data is produced
-          // separately by the deterministic JSON build pipeline.
-          reply.content = _sanitiseBlockMarker(_streamBuffer);
-          _persistMessages(store, messages);
-          _scrollToBottom();
-        },
-        // Wave CY.18.44: mounted-guard the onError hop. Symmetric with
-        // the onDone handler below — that one starts with `if (!mounted)
-        // return;` so a stream error fired AFTER the user navigated
-        // away from the creator screen now no-ops cleanly instead of
-        // calling _finishWithError, which would touch setState /
-        // persistMessages on a disposed widget.
-        onError: (e) {
-          if (!mounted || myGen != _streamGen) return;
-          // Wave CY.18.45: pass originalError so offline/timeout
-          // exceptions surface as friendly user messages instead of
-          // raw SocketException toString().
-          _finishWithError(e.toString(), reply: reply, originalError: e);
-        },
-        onDone: () async {
-          if (!mounted || myGen != _streamGen) return;
+      _streamSub =
+          streamChatCompletion(
+            provider: provider,
+            // Apply creator-specific temperature + max_tokens overrides
+            // so the design conversation can be tuned independently of
+            // the regular chat (see ModelSettings.creatorTemperature etc.).
+            settings: isLorebookMode
+                ? _lorebookChatSettings(store.modelSettings)
+                : _creatorChatSettings(store.modelSettings),
+            // Wave CY.18.125: NULL, not the RP preset. `_samplingPayload`
+            // resolves max_tokens as `preset?.maxTokens ?? settings.maxTokens`,
+            // so passing the active RP preset (whose reply cap is ~1-2k)
+            // OVERRODE the creator's creatorMaxTokens (12000) and capped every
+            // block at the RP limit → cut at finish_reason=length right before
+            // `<<BLOCK_END>>` → the truncation/continuation-exhaust loop. The
+            // creator's sampling lives in _creatorChatSettings; the preset
+            // injects NO prompt content here (only sampling), so dropping it is
+            // a sampling-only change — mirrors the sheet-update + vision paths.
+            preset: null,
+            messages: turns,
+            // creator-07 (mega audit 2026-06-04): dropped the vestigial
+            // `stop: ['<<BLOCK_END>>']`. The freeform architect appendix is
+            // conversation-only and no longer instructs the model to emit
+            // `<<BLOCK_END>>` (the deterministic JSON build owns formatting),
+            // so the stop sequence never fired — dead + misleading. The
+            // _sanitiseBlockMarker scrub below still strips any stray marker a
+            // model emits on its own, so removing the server-side stop is safe.
+            debugTag: 'creator-architect', // Wave CY.18.214 diagnostics tag
+          ).listen(
+            (chunk) {
+              if (!mounted || myGen != _streamGen) return;
+              _streamBuffer += chunk;
+              // Creator Structured Build: Phase-1 is pure conversation. Stream
+              // the architect's reply live, stripping any stray control markers
+              // so they never leak into chat. The card data is produced
+              // separately by the deterministic JSON build pipeline.
+              reply.content = isLorebookMode
+                  ? _sanitiseLorebookArchitectText(_streamBuffer)
+                  : _sanitiseBlockMarker(_streamBuffer);
+              _persistMessages(store, messages);
+              _scrollToBottom();
+            },
+            // Wave CY.18.44: mounted-guard the onError hop. Symmetric with
+            // the onDone handler below — that one starts with `if (!mounted)
+            // return;` so a stream error fired AFTER the user navigated
+            // away from the creator screen now no-ops cleanly instead of
+            // calling _finishWithError, which would touch setState /
+            // persistMessages on a disposed widget.
+            onError: (e) {
+              if (!mounted || myGen != _streamGen) return;
+              // Wave CY.18.45: pass originalError so offline/timeout
+              // exceptions surface as friendly user messages instead of
+              // raw SocketException toString().
+              _finishWithError(e.toString(), reply: reply, originalError: e);
+            },
+            onDone: () async {
+              if (!mounted || myGen != _streamGen) return;
 
-          // Creator Structured Build: Phase-1 stays conversational. The
-          // card data is produced by the deterministic JSON pipeline. It is
-          // fired BY MESSAGE (Wave CY.18.242) — when the architect decides the
-          // user has signalled readiness it emits the ASCII marker
-          // `[[BUILD_SHEET]]` on its own final line. Detect its presence in the
-          // RAW buffer (so we still know to fire even though `_sanitiseBlockMarker`
-          // already strips it for display), then render the cleaned reply.
-          final markerPresent = detectAndStripBuildMarker(_streamBuffer).found;
-          final text = _sanitiseBlockMarker(_streamBuffer);
-          reply.content = text.trim().isEmpty
-              ? '⚠ The model returned an empty response. Try again, or '
-                  'switch the creator provider in More → API Connections.'
-              : text;
-          _persistMessages(store, messages);
-          setState(() => _generating = false);
-          context.read<AppStore>().flushPersist();
-          _keepAliveStop();
+              // Creator Structured Build: Phase-1 stays conversational. The
+              // card data is produced by the deterministic JSON pipeline. It is
+              // fired BY MESSAGE (Wave CY.18.242) — when the architect decides the
+              // user has signalled readiness it emits the ASCII marker
+              // `[[BUILD_SHEET]]` on its own final line. Detect its presence in the
+              // RAW buffer (so we still know to fire even though
+              // `_sanitiseBlockMarker` already strips it for display), then
+              // pass the cleaned visible text through a second confirmation
+              // gate so a proposal/question cannot accidentally build.
+              final text = isLorebookMode
+                  ? _sanitiseLorebookArchitectText(_streamBuffer)
+                  : _sanitiseBlockMarker(_streamBuffer);
+              final marker = isLorebookMode
+                  ? null
+                  : detectAndStripBuildMarker(_streamBuffer);
+              final markerPresent = isLorebookMode
+                  ? hasBuildEntryMarker(_streamBuffer)
+                  : shouldAutoFireBuildMarker(marker!);
+              final markerOnlyLorebookBuild =
+                  isLorebookMode && markerPresent && text.trim().isEmpty;
+              reply.content = markerOnlyLorebookBuild
+                  ? 'Building lorebook entries...'
+                  : text.trim().isEmpty
+                  ? '⚠ The model returned an empty response. Try again, or '
+                        'switch the creator provider in More → API Connections.'
+                  : text;
+              _persistMessages(store, messages);
+              setState(() => _generating = false);
+              context.read<AppStore>().flushPersist();
+              _keepAliveStop();
 
-          // Auto-fire the structured build when the architect emitted the
-          // marker. `_runStructuredBuildFlow` self-guards (it returns early on
-          // `_structuredBuilding` / `_generating`, and on a non-buildable mode
-          // — so the marker is a no-op outside a build session) so it can't
-          // double-fire. Works in BOTH create and edit mode —
-          // `_runStructuredBuildFlow` branches on `editing` internally.
-          if (markerPresent && !_structuredBuilding) {
-            unawaited(_runStructuredBuildFlow());
-          }
-        },
-      );
+              // Auto-fire the structured build when the architect emitted the
+              // marker. `_runStructuredBuildFlow` self-guards (it returns early on
+              // `_structuredBuilding` / `_generating`, and on a non-buildable mode
+              // — so the marker is a no-op outside a build session) so it can't
+              // double-fire. Works in BOTH create and edit mode —
+              // `_runStructuredBuildFlow` branches on `editing` internally.
+              if (isLorebookMode && markerPresent) {
+                unawaited(
+                  _runLorebookStructuredBuildFlow(seedRaw: _streamBuffer),
+                );
+              } else if (markerPresent && !_structuredBuilding) {
+                unawaited(_runStructuredBuildFlow());
+              }
+            },
+          );
     } catch (e) {
       _finishWithError(e.toString(), reply: reply, originalError: e);
     }
   }
-
-
 
   /// Flatten a CreatorMessage's attachments + text into the single
   /// string the LLM sees. Attachments are prepended (each as its own
@@ -1634,19 +2116,23 @@ class _CharacterAssistantScreenState
   /// prose. Empty extracted blocks (e.g. when an image vision call
   /// failed) are skipped — the model would just be confused otherwise.
   String _composeTurnContent(CreatorMessage m) {
-    if (m.attachments.isEmpty) return m.content;
+    final content = m.role == 'assistant'
+        ? ChatText.stripReasoningStrict(m.content)
+        : m.content;
+    if (m.attachments.isEmpty) return content;
     final blocks = <String>[];
     for (final a in m.attachments) {
       if (a.extracted.trim().isEmpty) continue;
       blocks.add(a.extracted);
     }
-    if (m.content.trim().isNotEmpty) {
-      blocks.add(m.content);
+    if (content.trim().isNotEmpty) {
+      blocks.add(content);
     } else if (blocks.isEmpty) {
       // Edge: an image attached but vision failed AND user typed nothing.
       // Surface a placeholder so the assistant turn isn't empty.
       blocks.add(
-          '(User attached ${m.attachments.length} file(s) but did not type anything.)');
+        '(User attached ${m.attachments.length} file(s) but did not type anything.)',
+      );
     }
     return blocks.join('\n\n');
   }
@@ -1688,10 +2174,14 @@ class _CharacterAssistantScreenState
   /// for the existing chat-side `<think>` hiding. In the Creator brief
   /// we just want them gone — the chat bubble there is a user-facing
   /// announcement, not a Chat tab with reasoning toggle UX.
-  static final RegExp _thinkBlock =
-      RegExp(r'<think>[\s\S]*?</think>', multiLine: true);
-  static final RegExp _thinkOpenTail =
-      RegExp(r'<think>[\s\S]*$', multiLine: true);
+  static final RegExp _thinkBlock = RegExp(
+    r'<think>[\s\S]*?</think>',
+    multiLine: true,
+  );
+  static final RegExp _thinkOpenTail = RegExp(
+    r'<think>[\s\S]*$',
+    multiLine: true,
+  );
 
   String _sanitiseBlockMarker(String raw) {
     // Strip every complete occurrence anywhere in the buffer first…
@@ -1721,6 +2211,31 @@ class _CharacterAssistantScreenState
     final marker = detectAndStripBuildMarker(s);
     s = marker.text;
     return s.trim();
+  }
+
+  String _sanitiseLorebookArchitectText(String raw) {
+    final clean = lorebookCreatorDisplayText(raw);
+    final visible = ChatText.stripReasoningStrict(clean);
+    final jsonStart = visible.indexOf(RegExp(r'\{'));
+    if (jsonStart < 0) return visible;
+    if (jsonStart == 0) return '';
+    return visible.substring(0, jsonStart).trim();
+  }
+
+  void _commitLorebookEntryDraft(LoreEntry entry) {
+    final store = context.read<AppStore>();
+    final entries = _canvasLorebookEntries(_sessionCanvas(store));
+    entries.add(entry);
+    _setCanvasLorebookEntries(store, entries);
+    setState(() {
+      _showCanvas = true;
+      _recentlyChangedCanvasKeys = {_canvasLorebookEntriesKey};
+    });
+    _changedHighlightTimer?.cancel();
+    _changedHighlightTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      setState(() => _recentlyChangedCanvasKeys = const <String>{});
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -1757,8 +2272,9 @@ class _CharacterAssistantScreenState
             ? parseCharaCardJson(utf8.decode(bytes))
             : parseCharaCardPng(bytes);
       } catch (e) {
-        messenger.showSnackBar(SnackBar(
-            content: Text('Not a valid chara_card_v2 file: $e')));
+        messenger.showSnackBar(
+          SnackBar(content: Text('Not a valid chara_card_v2 file: $e')),
+        );
         return;
       }
       final pretty = const JsonEncoder.withIndent('  ').convert(card.raw);
@@ -1785,19 +2301,19 @@ class _CharacterAssistantScreenState
       }
 
       setState(() {
-        _pendingAttachments.add(_PendingAttachment(
-          kind: 'card',
-          filename: f.name,
-          extracted: extracted,
-        ));
+        _pendingAttachments.add(
+          _PendingAttachment(
+            kind: 'card',
+            filename: f.name,
+            extracted: extracted,
+          ),
+        );
       });
       // Wave AY: the unified _greeting already explains attachments are
       // welcome. No need to swap the greeting on attach — the chip row
       // above the input + the user's typed context tell the story.
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Attach failed: $e')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('Attach failed: $e')));
     }
   }
 
@@ -1814,8 +2330,10 @@ class _CharacterAssistantScreenState
     if (provider == null) {
       messenger.showSnackBar(
         const SnackBar(
-            content: Text(
-                'No provider configured. Open "More → API Connections".')),
+          content: Text(
+            'No provider configured. Open "More → API Connections".',
+          ),
+        ),
       );
       return;
     }
@@ -1861,9 +2379,7 @@ class _CharacterAssistantScreenState
       setState(() => _pendingAttachments.add(pending));
       // Wave AY: greeting is now static (see _greeting).
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Attach failed: $e')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('Attach failed: $e')));
     }
   }
 
@@ -1899,23 +2415,26 @@ class _CharacterAssistantScreenState
             messenger.showSnackBar(
               const SnackBar(
                 content: Text(
-                    'PDF appears to be image-only (scanned). Pyre can\'t OCR it — paste the relevant text as a .txt or .md instead.'),
+                  'PDF appears to be image-only (scanned). Pyre can\'t OCR it — paste the relevant text as a .txt or .md instead.',
+                ),
                 duration: Duration(seconds: 6),
               ),
             );
             return;
           }
         } catch (e) {
-          messenger.showSnackBar(SnackBar(
-              content: Text('Could not parse the PDF: $e')));
+          messenger.showSnackBar(
+            SnackBar(content: Text('Could not parse the PDF: $e')),
+          );
           return;
         }
       } else {
         try {
           content = utf8.decode(bytes);
         } catch (e) {
-          messenger.showSnackBar(SnackBar(
-              content: Text('File is not valid UTF-8 text: $e')));
+          messenger.showSnackBar(
+            SnackBar(content: Text('File is not valid UTF-8 text: $e')),
+          );
           return;
         }
       }
@@ -1939,17 +2458,17 @@ class _CharacterAssistantScreenState
       }
 
       setState(() {
-        _pendingAttachments.add(_PendingAttachment(
-          kind: 'doc',
-          filename: f.name,
-          extracted: extracted,
-        ));
+        _pendingAttachments.add(
+          _PendingAttachment(
+            kind: 'doc',
+            filename: f.name,
+            extracted: extracted,
+          ),
+        );
       });
       // Wave AY: greeting is now static (see _greeting).
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Attach failed: $e')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('Attach failed: $e')));
     }
   }
 
@@ -1964,15 +2483,22 @@ class _CharacterAssistantScreenState
   Future<void> _editCanvasField(String key, dynamic current) async {
     final id = _sessionId;
     if (id == null) return;
+    if (key.startsWith('$_canvasLorebookEntriesKey:')) {
+      final rawIndex = int.tryParse(key.split(':').last);
+      if (rawIndex != null) {
+        await _editLorebookCanvasEntry(rawIndex);
+      }
+      return;
+    }
     // Wave BD: alternate_greetings has its own dedicated editor — a
     // proper list of multi-line textareas with add/delete buttons.
     // The generic "one item per line" editor mangles paragraph-style
     // content because each greeting is 3-5 paragraphs of formatted
     // prose, not a single line.
     if (key == 'alternate_greetings') {
-      await _editAlternateGreetings(current is List
-          ? current.map((e) => '$e').toList()
-          : <String>[]);
+      await _editAlternateGreetings(
+        current is List ? current.map((e) => '$e').toList() : <String>[],
+      );
       return;
     }
     final isList = current is List;
@@ -1980,8 +2506,8 @@ class _CharacterAssistantScreenState
     final initial = isList
         ? (current).map((e) => '$e').join('\n')
         : isMap
-            ? const JsonEncoder.withIndent('  ').convert(current)
-            : '${current ?? ''}';
+        ? const JsonEncoder.withIndent('  ').convert(current)
+        : '${current ?? ''}';
     final ctl = TextEditingController(text: initial);
     final saved = await showDialog<String?>(
       context: context,
@@ -1999,8 +2525,7 @@ class _CharacterAssistantScreenState
                   padding: EdgeInsets.only(bottom: 8),
                   child: Text(
                     'One item per line.',
-                    style: TextStyle(
-                        color: EmberColors.textMid, fontSize: 11),
+                    style: TextStyle(color: EmberColors.textMid, fontSize: 11),
                   ),
                 )
               else if (isMap)
@@ -2008,8 +2533,7 @@ class _CharacterAssistantScreenState
                   padding: EdgeInsets.only(bottom: 8),
                   child: Text(
                     'JSON object. Invalid JSON keeps the previous value.',
-                    style: TextStyle(
-                        color: EmberColors.textMid, fontSize: 11),
+                    style: TextStyle(color: EmberColors.textMid, fontSize: 11),
                   ),
                 ),
               TextField(
@@ -2018,12 +2542,10 @@ class _CharacterAssistantScreenState
                 minLines: 4,
                 maxLines: 16,
                 style: TextStyle(
-                  fontFamily:
-                      isMap ? 'monospace' : null,
+                  fontFamily: isMap ? 'monospace' : null,
                   fontSize: 13,
                 ),
-                decoration:
-                    const InputDecoration(border: OutlineInputBorder()),
+                decoration: const InputDecoration(border: OutlineInputBorder()),
               ),
             ],
           ),
@@ -2079,6 +2601,233 @@ class _CharacterAssistantScreenState
     });
   }
 
+  Future<void> _editLorebookCanvasEntry(int index) async {
+    final id = _sessionId;
+    if (id == null) return;
+    final store = context.read<AppStore>();
+    final entries = _canvasLorebookEntries(_sessionCanvas(store));
+    if (index < 0 || index >= entries.length) return;
+    final entry = entries[index];
+    final keysCtl = TextEditingController(text: entry.keys.join(', '));
+    final secondaryCtl = TextEditingController(
+      text: entry.secondaryKeys.join(', '),
+    );
+    final contentCtl = TextEditingController(text: entry.content);
+    final orderCtl = TextEditingController(text: entry.order.toString());
+    var constant = entry.constant;
+    var logic = entry.selectiveLogic;
+    var caseSensitive = entry.caseSensitive;
+    var matchWholeWords = entry.matchWholeWords;
+    var useProbability = entry.useProbability;
+    var probability = entry.probability;
+    var delete = false;
+    String triLabel(bool? value) =>
+        value == null ? 'Default' : (value ? 'On' : 'Off');
+    bool? triNext(bool? value) => value == null ? true : (value ? false : null);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final maxHeight = MediaQuery.of(ctx).size.height * 0.88;
+          return AlertDialog(
+            backgroundColor: EmberColors.bgPanel,
+            title: Text('Edit lore entry ${index + 1}'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxHeight),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: keysCtl,
+                        minLines: 1,
+                        maxLines: 3,
+                        decoration: const InputDecoration(
+                          labelText: 'Trigger keywords',
+                          helperText: 'Comma-separated',
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: secondaryCtl,
+                        minLines: 1,
+                        maxLines: 3,
+                        decoration: const InputDecoration(
+                          labelText: 'Secondary keywords',
+                          helperText: 'Optional comma-separated filters',
+                        ),
+                        onChanged: (_) => setLocal(() {}),
+                      ),
+                      if (secondaryCtl.text.trim().isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        DropdownButtonFormField<LoreSelectiveLogic>(
+                          initialValue: logic,
+                          decoration: const InputDecoration(labelText: 'Logic'),
+                          items: const [
+                            DropdownMenuItem(
+                              value: LoreSelectiveLogic.andAny,
+                              child: Text('Any of these'),
+                            ),
+                            DropdownMenuItem(
+                              value: LoreSelectiveLogic.andAll,
+                              child: Text('All of these'),
+                            ),
+                            DropdownMenuItem(
+                              value: LoreSelectiveLogic.notAny,
+                              child: Text('None of these'),
+                            ),
+                            DropdownMenuItem(
+                              value: LoreSelectiveLogic.notAll,
+                              child: Text('Not all of these'),
+                            ),
+                          ],
+                          onChanged: (v) => setLocal(
+                            () => logic = v ?? LoreSelectiveLogic.andAny,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: contentCtl,
+                        minLines: 5,
+                        maxLines: 12,
+                        decoration: const InputDecoration(
+                          labelText: 'Content to inject',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: constant,
+                        title: const Text('Always inject (constant)'),
+                        onChanged: (v) => setLocal(() => constant = v ?? false),
+                      ),
+                      TextField(
+                        controller: orderCtl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Order',
+                          helperText: 'Higher priority entries inject later',
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          const Expanded(child: Text('Case sensitive')),
+                          TextButton(
+                            onPressed: () => setLocal(
+                              () => caseSensitive = triNext(caseSensitive),
+                            ),
+                            child: Text(triLabel(caseSensitive)),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          const Expanded(child: Text('Match whole words')),
+                          TextButton(
+                            onPressed: () => setLocal(
+                              () => matchWholeWords = triNext(matchWholeWords),
+                            ),
+                            child: Text(triLabel(matchWholeWords)),
+                          ),
+                        ],
+                      ),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: useProbability,
+                        title: const Text('Use trigger chance'),
+                        onChanged: (v) => setLocal(() => useProbability = v),
+                      ),
+                      if (useProbability)
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Slider(
+                                value: probability.toDouble().clamp(0, 100),
+                                min: 0,
+                                max: 100,
+                                divisions: 100,
+                                label: '$probability%',
+                                onChanged: (v) =>
+                                    setLocal(() => probability = v.round()),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 44,
+                              child: Text(
+                                '$probability%',
+                                textAlign: TextAlign.end,
+                              ),
+                            ),
+                          ],
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  delete = true;
+                  Navigator.pop(ctx, true);
+                },
+                child: const Text('Delete'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    final savedKeysText = keysCtl.text;
+    final savedSecondaryText = secondaryCtl.text;
+    final savedContentText = contentCtl.text;
+    final savedOrder = int.tryParse(orderCtl.text.trim()) ?? entry.order;
+    keysCtl.dispose();
+    secondaryCtl.dispose();
+    contentCtl.dispose();
+    orderCtl.dispose();
+    if (saved != true || !mounted) return;
+    if (delete) {
+      entries.removeAt(index);
+    } else {
+      entries[index] = LoreEntry(
+        id: entry.id,
+        keys: savedKeysText
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList(),
+        content: savedContentText.trim(),
+        constant: constant,
+        enabled: entry.enabled,
+        order: savedOrder,
+        secondaryKeys: savedSecondaryText
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList(),
+        selectiveLogic: logic,
+        caseSensitive: caseSensitive,
+        matchWholeWords: matchWholeWords,
+        probability: probability.clamp(0, 100),
+        useProbability: useProbability,
+      );
+    }
+    _setCanvasLorebookEntries(store, entries);
+    setState(() => _recentlyChangedCanvasKeys = {_canvasLorebookEntriesKey});
+  }
+
   /// Wave BD: dedicated editor for `alternate_greetings`. Renders one
   /// multi-line textarea per greeting with add/delete affordances —
   /// the user never has to think about `---` separators, JSON arrays,
@@ -2099,7 +2848,9 @@ class _CharacterAssistantScreenState
         builder: (ctx, setLocal) => Dialog(
           backgroundColor: EmberColors.bgPanel,
           insetPadding: const EdgeInsets.symmetric(
-              horizontal: 16, vertical: 24),
+            horizontal: 16,
+            vertical: 24,
+          ),
           child: ConstrainedBox(
             constraints: BoxConstraints(
               maxWidth: 560,
@@ -2145,12 +2896,10 @@ class _CharacterAssistantScreenState
                 ),
                 Flexible(
                   child: ListView.separated(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
                     shrinkWrap: true,
                     itemCount: controllers.length,
-                    separatorBuilder: (_, _) =>
-                        const SizedBox(height: 12),
+                    separatorBuilder: (_, _) => const SizedBox(height: 12),
                     itemBuilder: (_, i) => Container(
                       padding: const EdgeInsets.fromLTRB(12, 8, 6, 12),
                       decoration: BoxDecoration(
@@ -2167,8 +2916,9 @@ class _CharacterAssistantScreenState
                                 child: Text(
                                   'GREETING ${i + 1}',
                                   style: TextStyle(
-                                    color: EmberColors.primary
-                                        .withValues(alpha: 0.8),
+                                    color: EmberColors.primary.withValues(
+                                      alpha: 0.8,
+                                    ),
                                     fontWeight: FontWeight.w700,
                                     fontSize: 10,
                                     letterSpacing: 1.1,
@@ -2177,8 +2927,9 @@ class _CharacterAssistantScreenState
                               ),
                               IconButton(
                                 icon: const Icon(
-                                    Icons.delete_outline,
-                                    size: 18),
+                                  Icons.delete_outline,
+                                  size: 18,
+                                ),
                                 color: EmberColors.textMid,
                                 tooltip: 'Remove this greeting',
                                 onPressed: controllers.length > 1
@@ -2213,22 +2964,27 @@ class _CharacterAssistantScreenState
                               fillColor: EmberColors.bgPanel,
                               isDense: true,
                               contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 10),
+                                horizontal: 10,
+                                vertical: 10,
+                              ),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
-                                borderSide:
-                                    BorderSide(color: EmberColors.stroke),
+                                borderSide: BorderSide(
+                                  color: EmberColors.stroke,
+                                ),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
-                                borderSide:
-                                    BorderSide(color: EmberColors.stroke),
+                                borderSide: BorderSide(
+                                  color: EmberColors.stroke,
+                                ),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
                                 borderSide: BorderSide(
-                                  color: EmberColors.primary
-                                      .withValues(alpha: 0.7),
+                                  color: EmberColors.primary.withValues(
+                                    alpha: 0.7,
+                                  ),
                                 ),
                               ),
                             ),
@@ -2284,8 +3040,7 @@ class _CharacterAssistantScreenState
     if (!committed || !mounted) return;
     final store = context.read<AppStore>();
     final canvas = Map<String, dynamic>.from(_sessionCanvas(store));
-    canvas['alternate_greetings'] =
-        values.where((v) => v.isNotEmpty).toList();
+    canvas['alternate_greetings'] = values.where((v) => v.isNotEmpty).toList();
     store.updateCreatorSessionCanvas(id, canvas);
     setState(() => _recentlyChangedCanvasKeys = {'alternate_greetings'});
     _changedHighlightTimer?.cancel();
@@ -2431,7 +3186,8 @@ class _CharacterAssistantScreenState
     final isLast = index == messages.length - 1;
     final isUser = m.role == 'user';
     final isAssistant = m.role == 'assistant';
-    final canRetry = isAssistant &&
+    final canRetry =
+        isAssistant &&
         isLast &&
         !_generating &&
         messages.length >= 2 &&
@@ -2446,8 +3202,7 @@ class _CharacterAssistantScreenState
           children: [
             if (canRetry)
               ListTile(
-                leading: Icon(Icons.refresh,
-                    color: EmberColors.primary),
+                leading: Icon(Icons.refresh, color: EmberColors.primary),
                 title: const Text('Retry (regenerate this reply)'),
                 onTap: () {
                   Navigator.pop(sheet);
@@ -2461,7 +3216,8 @@ class _CharacterAssistantScreenState
                 Navigator.pop(sheet);
                 await Clipboard.setData(ClipboardData(text: m.content));
                 messenger.showSnackBar(
-                    const SnackBar(content: Text('Copied.')));
+                  const SnackBar(content: Text('Copied.')),
+                );
               },
             ),
             if (isUser)
@@ -2470,8 +3226,7 @@ class _CharacterAssistantScreenState
                 title: const Text('Edit + re-run from here'),
                 subtitle: Text(
                   'Replaces your message and drops everything that came after — the assistant generates a fresh reply.',
-                  style: TextStyle(
-                      color: EmberColors.textMid, fontSize: 11),
+                  style: TextStyle(color: EmberColors.textMid, fontSize: 11),
                 ),
                 onTap: () {
                   Navigator.pop(sheet);
@@ -2479,37 +3234,43 @@ class _CharacterAssistantScreenState
                 },
               ),
             Divider(color: EmberColors.stroke),
-            Builder(builder: (_) {
-              final cascade = store.chatSettings.cascadeDelete;
-              return ListTile(
-                leading: Icon(Icons.delete_outline,
-                    color: EmberColors.danger),
-                title: Text(
-                  cascade ? 'Delete this and after' : 'Delete just this',
-                  style: TextStyle(color: EmberColors.danger),
-                ),
-                subtitle: cascade
-                    ? Text(
-                        'Chat Settings → Delete behavior is on "This and after".',
-                        style: TextStyle(
-                            color: EmberColors.textMid, fontSize: 11),
-                      )
-                    : null,
-                onTap: () async {
-                  Navigator.pop(sheet);
-                  if (cascade) {
-                    final ok = await confirmDelete(
-                      context,
-                      title: 'Delete this and all messages after?',
-                      message:
-                          'You\'ll lose this message and every reply that came after it.',
-                    );
-                    if (!ok) return;
-                  }
-                  _deleteMessage(m, cascade: cascade);
-                },
-              );
-            }),
+            Builder(
+              builder: (_) {
+                final cascade = store.chatSettings.cascadeDelete;
+                return ListTile(
+                  leading: Icon(
+                    Icons.delete_outline,
+                    color: EmberColors.danger,
+                  ),
+                  title: Text(
+                    cascade ? 'Delete this and after' : 'Delete just this',
+                    style: TextStyle(color: EmberColors.danger),
+                  ),
+                  subtitle: cascade
+                      ? Text(
+                          'Chat Settings → Delete behavior is on "This and after".',
+                          style: TextStyle(
+                            color: EmberColors.textMid,
+                            fontSize: 11,
+                          ),
+                        )
+                      : null,
+                  onTap: () async {
+                    Navigator.pop(sheet);
+                    if (cascade) {
+                      final ok = await confirmDelete(
+                        context,
+                        title: 'Delete this and all messages after?',
+                        message:
+                            'You\'ll lose this message and every reply that came after it.',
+                      );
+                      if (!ok) return;
+                    }
+                    _deleteMessage(m, cascade: cascade);
+                  },
+                );
+              },
+            ),
           ],
         ),
       ),
@@ -2578,7 +3339,11 @@ class _CharacterAssistantScreenState
     final imageAttachment = updatedUser.attachments.firstWhere(
       (a) => a.kind == 'image' && a.imageDataUrl != null,
       orElse: () => CreatorAttachment(
-          kind: '', filename: '', imageDataUrl: null, extracted: ''),
+        kind: '',
+        filename: '',
+        imageDataUrl: null,
+        extracted: '',
+      ),
     );
     final hasImage = imageAttachment.imageDataUrl != null;
 
@@ -2647,14 +3412,17 @@ class _CharacterAssistantScreenState
     // description because the architect has no eyes. The whole
     // point of the vision-then-architect split is that vision lays
     // down the clinical visual ground truth.
-    final lastUser = messages.isNotEmpty &&
-            messages.last.role == 'user'
+    final lastUser = messages.isNotEmpty && messages.last.role == 'user'
         ? messages.last
         : null;
     final imageAttachment = lastUser?.attachments.firstWhere(
       (a) => a.kind == 'image' && a.imageDataUrl != null,
       orElse: () => CreatorAttachment(
-          kind: '', filename: '', imageDataUrl: null, extracted: ''),
+        kind: '',
+        filename: '',
+        imageDataUrl: null,
+        extracted: '',
+      ),
     );
     final hasImageToReanalyse =
         imageAttachment != null && imageAttachment.imageDataUrl != null;
@@ -2702,9 +3470,7 @@ class _CharacterAssistantScreenState
     try {
       bytes = base64Decode(imageAttachment.imageDataUrl!.split(',').last);
     } catch (e) {
-      _finishWithError(
-        'Could not decode the image bytes for retry: $e',
-      );
+      _finishWithError('Could not decode the image bytes for retry: $e');
       return;
     }
     final placeholder = CreatorMessage(role: 'assistant', content: '');
@@ -2749,8 +3515,11 @@ class _CharacterAssistantScreenState
   /// inside `<<PYRE_ERR_DETAILS>>...<<PYRE_ERR_DETAILS_END>>` markers
   /// so the renderer can offer a "Show full error" collapsible — the
   /// info is still there, just hidden by default.
-  void _finishWithError(String message,
-      {CreatorMessage? reply, Object? originalError}) {
+  void _finishWithError(
+    String message, {
+    CreatorMessage? reply,
+    Object? originalError,
+  }) {
     // Wave BM: drop the keep-alive refcount — stream is dead, no
     // reason to keep the foreground notification up. Safe even if
     // start() was never called (refcount clamps at zero).
@@ -2767,7 +3536,7 @@ class _CharacterAssistantScreenState
             originalError.kind == ChatApiErrorKind.timeout)) {
       formatted = originalError.kind == ChatApiErrorKind.offline
           ? 'You appear to be offline. Check your connection and tap '
-              'Retry.'
+                'Retry.'
           : originalError.message;
     } else {
       formatted = _formatApiError(message);
@@ -2797,9 +3566,10 @@ class _CharacterAssistantScreenState
   String _formatApiError(String raw) {
     String? friendly;
     String? statusTag;
-    final apiMatch =
-        RegExp(r'ChatApiError\((\d+)\):\s*(.*)$', dotAll: true)
-            .firstMatch(raw);
+    final apiMatch = RegExp(
+      r'ChatApiError\((\d+)\):\s*(.*)$',
+      dotAll: true,
+    ).firstMatch(raw);
     if (apiMatch != null) {
       final status = apiMatch.group(1)!;
       final body = apiMatch.group(2)!;
@@ -2818,7 +3588,9 @@ class _CharacterAssistantScreenState
             friendly = parsed['detail'] as String;
           }
         }
-      } catch (_) {/* not JSON — leave friendly null */}
+      } catch (_) {
+        /* not JSON — leave friendly null */
+      }
     }
     final headline = friendly ?? raw;
     final tag = statusTag != null ? ' ($statusTag)' : '';
@@ -2849,10 +3621,13 @@ class _CharacterAssistantScreenState
     if (canvas.isEmpty ||
         (canvas['name'] is! String) ||
         (canvas['name'] as String).trim().isEmpty) {
-      messenger.showSnackBar(const SnackBar(
-        content: Text(
-            'Sheet needs at least a name before saving. Keep chatting — it\'ll fill in.'),
-      ));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sheet needs at least a name before saving. Keep chatting — it\'ll fill in.',
+          ),
+        ),
+      );
       return;
     }
     // Persona Creator: a persona-mode session saves a Persona, not a
@@ -2861,6 +3636,7 @@ class _CharacterAssistantScreenState
     // edited.
     final session = store.activeCreatorSession;
     final isPersona = session?.mode == 'persona';
+    final canvasLorebookIds = _canvasLorebookIds(canvas);
     if (isPersona) {
       final editPersonaId = session?.editingPersonaId;
       String? personaAvatarUrl;
@@ -2896,18 +3672,21 @@ class _CharacterAssistantScreenState
           canvas: canvas,
           existingAvatarDataUrl: personaAvatarUrl,
           personaMode: true,
-          initialLorebookIds: personaLorebookIds,
-          onSubmit: ({
-            required Uint8List? avatarPng,
-            required _SaveAction action,
-            required List<String> lorebookIds,
-          }) =>
-              _commitSavePersona(
-            canvas: canvas,
-            avatarPng: avatarPng,
-            saveAsCopy: saveMode == _SaveMode.copy,
-            lorebookIds: lorebookIds,
+          initialLorebookIds: _mergeLorebookIds(
+            canvasLorebookIds,
+            personaLorebookIds,
           ),
+          onSubmit:
+              ({
+                required Uint8List? avatarPng,
+                required _SaveAction action,
+                required List<String> lorebookIds,
+              }) => _commitSavePersona(
+                canvas: canvas,
+                avatarPng: avatarPng,
+                saveAsCopy: saveMode == _SaveMode.copy,
+                lorebookIds: lorebookIds,
+              ),
         ),
       );
       return;
@@ -2916,8 +3695,9 @@ class _CharacterAssistantScreenState
     // save-sheet avatar slot from the original card so the user isn't
     // asked to re-pick. The save-sheet still allows replacing it.
     final editTargetId = store.activeCreatorSession?.editingCharacterId;
-    final existingChar =
-        editTargetId != null ? store.characterById(editTargetId) : null;
+    final existingChar = editTargetId != null
+        ? store.characterById(editTargetId)
+        : null;
     final existingAvatarUrl = existingChar?.avatar;
     final existingCharLorebookIds = existingChar != null
         ? List<String>.from(existingChar.lorebookIds)
@@ -2943,21 +3723,84 @@ class _CharacterAssistantScreenState
       builder: (_) => _SaveCardSheet(
         canvas: canvas,
         existingAvatarDataUrl: existingAvatarUrl,
-        initialLorebookIds: existingCharLorebookIds,
-        onSubmit: ({
-          required Uint8List? avatarPng,
-          required _SaveAction action,
-          required List<String> lorebookIds,
-        }) =>
-            _commitSave(
-          canvas: canvas,
-          avatarPng: avatarPng,
-          action: action,
-          saveAsCopy: charSaveMode == _SaveMode.copy,
-          lorebookIds: lorebookIds,
+        initialLorebookIds: _mergeLorebookIds(
+          canvasLorebookIds,
+          existingCharLorebookIds,
         ),
+        onSubmit:
+            ({
+              required Uint8List? avatarPng,
+              required _SaveAction action,
+              required List<String> lorebookIds,
+            }) => _commitSave(
+              canvas: canvas,
+              avatarPng: avatarPng,
+              action: action,
+              saveAsCopy: charSaveMode == _SaveMode.copy,
+              lorebookIds: lorebookIds,
+            ),
       ),
     );
+  }
+
+  Future<void> _saveLorebookFromCreator() async {
+    final store = context.read<AppStore>();
+    final id = _sessionId;
+    if (id == null) return;
+    final canvas = _sessionCanvas(store);
+    final entries = _canvasLorebookEntries(canvas);
+    final messenger = ScaffoldMessenger.of(context);
+    if (entries.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Add at least one lore entry first.')),
+      );
+      return;
+    }
+    final name = _canvasLorebookName(canvas);
+    final book = Lorebook(
+      id: newId('lore'),
+      name: name.trim().isEmpty ? 'New lorebook' : name.trim(),
+      entries: entries,
+    );
+    store.addLorebook(book);
+    store.markCreatorSessionSaved(id, book.id);
+    store.flushPersist();
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('Saved ${book.name} to Lorebooks.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  String? _materializeEmbeddedLorebookDraft(
+    AppStore store,
+    Map<String, dynamic> canvas,
+  ) {
+    final entries = _canvasLorebookEntries(canvas);
+    if (entries.isEmpty) return null;
+    final name = _canvasLorebookName(canvas);
+    final book = Lorebook(
+      id: newId('lore'),
+      name: name.trim().isEmpty ? 'Embedded lorebook' : name.trim(),
+      entries: entries,
+      hidden: true,
+    );
+    store.addLorebook(book);
+    final mergedIds = _mergeLorebookIds(_canvasLorebookIds(canvas), <String>[
+      book.id,
+    ]);
+    final sessionId = _sessionId;
+    if (sessionId != null) {
+      final updatedCanvas = Map<String, dynamic>.from(_sessionCanvas(store))
+        ..remove(_canvasLorebookNameKey)
+        ..remove(_canvasLorebookEntriesKey)
+        ..remove(_canvasLorebookDraftingKey);
+      store.updateCreatorSessionCanvas(sessionId, updatedCanvas);
+      _setCanvasLorebookIds(store, mergedIds);
+    }
+    return book.id;
   }
 
   /// Wave CY.18.217: when saving an EDITED card, ask whether to overwrite
@@ -3019,15 +3862,15 @@ class _CharacterAssistantScreenState
     var name = (canvas['name'] is String)
         ? (canvas['name'] as String).trim()
         : '';
-    final description =
-        canvasText(canvas['description']).trim();
+    final description = canvasText(canvas['description']).trim();
     final dialogue = canvasText(canvas['mes_example']).trim();
     final taglineRaw = canvasText(canvas['tagline']).trim();
     final tagline = taglineRaw.isEmpty ? null : taglineRaw;
     // B-2 / H-6: externalise the chosen avatar into the AttachmentStore so the
     // persona persists a pyre:// ref, not inline base64 (web → data: fallback).
-    final avatarUrl =
-        avatarPng != null ? await externalizeImageBytes(avatarPng) : null;
+    final avatarUrl = avatarPng != null
+        ? await externalizeImageBytes(avatarPng)
+        : null;
 
     final editTargetId = session?.editingPersonaId;
     Persona? existing;
@@ -3039,6 +3882,13 @@ class _CharacterAssistantScreenState
         }
       }
     }
+    final embeddedLorebookId = _materializeEmbeddedLorebookDraft(store, canvas);
+    final finalLorebookIds = _mergeLorebookIds(
+      lorebookIds,
+      embeddedLorebookId == null
+          ? const <String>[]
+          : <String>[embeddedLorebookId],
+    );
 
     // Wave CY.18.217: "Save as a copy" — leave `existing` aside so we
     // fall into the add-new branch, but inherit the original's avatar /
@@ -3053,7 +3903,7 @@ class _CharacterAssistantScreenState
         description: description,
         dialogueExamples: dialogue,
         avatar: avatarUrl ?? existing.avatar,
-        lorebookIds: List<String>.from(lorebookIds),
+        lorebookIds: List<String>.from(finalLorebookIds),
         gallery: List<String>.from(existing.gallery),
       );
       store.addPersona(created);
@@ -3083,7 +3933,7 @@ class _CharacterAssistantScreenState
         description: description,
         dialogueExamples: dialogue,
         avatar: avatarUrl ?? existing.avatar,
-        lorebookIds: List<String>.from(lorebookIds),
+        lorebookIds: List<String>.from(finalLorebookIds),
         gallery: List<String>.from(existing.gallery),
         createdAt: existing.createdAt,
         favorite: existing.favorite,
@@ -3098,7 +3948,7 @@ class _CharacterAssistantScreenState
         description: description,
         dialogueExamples: dialogue,
         avatar: avatarUrl,
-        lorebookIds: List<String>.from(lorebookIds),
+        lorebookIds: List<String>.from(finalLorebookIds),
       );
       store.addPersona(created);
       store.markCreatorSessionSaved(id, created.id);
@@ -3113,8 +3963,10 @@ class _CharacterAssistantScreenState
     if (mounted) Navigator.of(context).pop();
     messenger.showSnackBar(
       SnackBar(
-        content: Text('Saved ${name.isEmpty ? 'persona' : name} '
-            'to your personas.'),
+        content: Text(
+          'Saved ${name.isEmpty ? 'persona' : name} '
+          'to your personas.',
+        ),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 3),
       ),
@@ -3142,11 +3994,10 @@ class _CharacterAssistantScreenState
     final id = _sessionId;
     if (id == null) return;
     final messenger = ScaffoldMessenger.of(context);
-
     final wrapped = <String, dynamic>{
       'spec': 'chara_card_v2',
       'spec_version': '2.0',
-      'data': canvas,
+      'data': _canvasForCardData(canvas),
     };
     Character c;
     try {
@@ -3191,7 +4042,14 @@ class _CharacterAssistantScreenState
     // overwrite, copy, and the deleted-mid-session fallback). The canvas never
     // carries lorebookIds, so this is the only place they're set — closing the
     // gap where a fresh Creator build could never bind a world.
-    c.lorebookIds = List<String>.from(lorebookIds);
+    final embeddedLorebookId = _materializeEmbeddedLorebookDraft(store, canvas);
+    final finalLorebookIds = _mergeLorebookIds(
+      lorebookIds,
+      embeddedLorebookId == null
+          ? const <String>[]
+          : <String>[embeddedLorebookId],
+    );
+    c.lorebookIds = List<String>.from(finalLorebookIds);
     // Wave CS: "Edit with AI" session — UPDATE the existing character
     // in place rather than creating a new one. Preserves the original
     // character id (so existing chats keep pointing at it), the original
@@ -3302,9 +4160,11 @@ class _CharacterAssistantScreenState
         // the same UX whether they export from the list or from
         // the creator.
         if (avatarPng == null) {
-          messenger.showSnackBar(const SnackBar(
-            content: Text('Pick an avatar before exporting as PNG.'),
-          ));
+          messenger.showSnackBar(
+            const SnackBar(
+              content: Text('Pick an avatar before exporting as PNG.'),
+            ),
+          );
           return;
         }
         try {
@@ -3313,13 +4173,13 @@ class _CharacterAssistantScreenState
               .replaceAll(RegExp(r'[^A-Za-z0-9 _\-.]'), '')
               .trim()
               .replaceAll(' ', '_');
-          final filename =
-              '${safeName.isEmpty ? 'card' : safeName}.card.png';
+          final filename = '${safeName.isEmpty ? 'card' : safeName}.card.png';
           if (kIsWeb) {
             // Web has no filesystem — trigger a real browser download.
             downloadBytesToBrowser(pngBytes, filename, 'image/png');
             messenger.showSnackBar(
-                SnackBar(content: Text('Downloading $filename')));
+              SnackBar(content: Text('Downloading $filename')),
+            );
           } else {
             final dir = await getApplicationDocumentsDirectory();
             final outDir = Directory('${dir.path}/PyreExports');
@@ -3337,8 +4197,10 @@ class _CharacterAssistantScreenState
             } catch (e) {
               messenger.showSnackBar(
                 SnackBar(
-                    content: Text(
-                        'Share failed: $e — file saved to ${file.path}')),
+                  content: Text(
+                    'Share failed: $e — file saved to ${file.path}',
+                  ),
+                ),
               );
             }
           }
@@ -3493,8 +4355,7 @@ class _CharacterAssistantScreenState
             ),
             const SizedBox(width: 6),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
                 color: EmberColors.primary.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(5),
@@ -3528,17 +4389,19 @@ class _CharacterAssistantScreenState
             // feature already exists here; the gap was discovery. A count badge
             // appears once there's more than one saved session, drawing the eye
             // to the drawer, plus a clearer tooltip ("drafts" not just "menu").
-            Builder(builder: (_) {
-              final n = store.creatorSessions.length;
-              final btn = IconButton(
-                tooltip: n > 1
-                    ? 'Saved drafts & past sessions ($n)'
-                    : 'Saved drafts & sessions',
-                icon: const Icon(Icons.menu),
-                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-              );
-              return n > 1 ? Badge.count(count: n, child: btn) : btn;
-            }),
+            Builder(
+              builder: (_) {
+                final n = store.creatorSessions.length;
+                final btn = IconButton(
+                  tooltip: n > 1
+                      ? 'Saved drafts & past sessions ($n)'
+                      : 'Saved drafts & sessions',
+                  icon: const Icon(Icons.menu),
+                  onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                );
+                return n > 1 ? Badge.count(count: n, child: btn) : btn;
+              },
+            ),
           ],
         ),
         actions: [
@@ -3587,7 +4450,6 @@ class _CharacterAssistantScreenState
   }
 
   Widget _buildChat(AppStore store) {
-    final chatSettings = store.chatSettings;
     final messages = _sessionMessages(store);
     final canvas = _sessionCanvas(store);
     return Column(
@@ -3600,172 +4462,185 @@ class _CharacterAssistantScreenState
         Expanded(
           child: Stack(
             children: [
-          // SelectionArea makes every Text / Text.rich inside the
-          // subtree selectable without needing to convert each widget
-          // to SelectableText individually. Long-press to start, drag
-          // handles to extend, system context menu for copy / share.
-          SelectionArea(
-            child: ListView.builder(
-            controller: _scrollCtl,
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            itemCount: messages.length,
-            itemBuilder: (_, i) {
-              final m = messages[i];
-              // Wave CY.18.27: freeform synthetic-cue messages are
-              // RUNTIME-INTERNAL — they live in the message list (so
-              // retry / reload reconstruct the conversation correctly
-              // and the model sees them as user turns when next
-              // streaming) but the user should never see them in chat.
-              // Render as zero-height shrinkers.
-              if (m.kind == 'freeformCue') {
-                return const SizedBox.shrink();
-              }
-              // Wave CY.18.27: freeform warning bubble — rendered as
-              // a distinct system-info card, not an assistant bubble,
-              // so the user can tell at a glance "this is from Pyre,
-              // not from the architect".
-              if (m.kind == 'freeformWarning') {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: _FreeformWarningCard(text: m.content),
-                );
-              }
-              final isUser = m.role == 'user';
-              // Retry sits below the LAST assistant message — and only
-              // if the previous message is a user turn (so it can
-              // actually be retried; an LLM responding to its own
-              // greeting would just confuse the model).
-              final isLast = i == messages.length - 1;
-              final showRetry = isLast &&
-                  !isUser &&
-                  !_generating &&
-                  messages.length >= 2 &&
-                  messages[messages.length - 2].role == 'user';
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Column(
-                  crossAxisAlignment: isUser
-                      ? CrossAxisAlignment.end
-                      : CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: isUser
-                          ? MainAxisAlignment.end
-                          : MainAxisAlignment.start,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Flexible(
-                          // No GestureDetector here on purpose: SelectionArea
-                          // (wrapping the ListView) needs the long-press to
-                          // start native text selection. Actions are reachable
-                          // via the small "⋯" icon in the footer below.
-                          child: Container(
-                            constraints: BoxConstraints(
-                              maxWidth:
-                                  MediaQuery.of(context).size.width * 0.85,
-                            ),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 14, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: isUser
-                                  ? EmberColors.primary
-                                      .withValues(alpha: 0.18)
-                                  : EmberColors.bgPanel,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: isUser
-                                    ? EmberColors.primary
-                                        .withValues(alpha: 0.4)
-                                    : EmberColors.stroke,
-                              ),
-                            ),
-                            child: _MessageBody(
-                              message: m,
-                              hideReasoning: chatSettings.hideReasoning,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    // Wave CV: mode-choice buttons under the opening
-                    // greeting. Rendered only when this is the first
-                    // assistant message AND the session has no mode
-                    // yet (i.e. the user hasn't picked character vs
-                    // scenario). The "Edit with AI" entry point
-                    // pre-stamps mode='edit' so this never renders
-                    // there, and legacy drafts get 'character' from
-                    // the fromJson migration.
-                    if (i == 0 &&
+              // SelectionArea makes every Text / Text.rich inside the
+              // subtree selectable without needing to convert each widget
+              // to SelectableText individually. Long-press to start, drag
+              // handles to extend, system context menu for copy / share.
+              SelectionArea(
+                child: ListView.builder(
+                  controller: _scrollCtl,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  itemCount: messages.length,
+                  itemBuilder: (_, i) {
+                    final m = messages[i];
+                    // Wave CY.18.27: freeform synthetic-cue messages are
+                    // RUNTIME-INTERNAL — they live in the message list (so
+                    // retry / reload reconstruct the conversation correctly
+                    // and the model sees them as user turns when next
+                    // streaming) but the user should never see them in chat.
+                    // Render as zero-height shrinkers.
+                    if (m.kind == 'freeformCue') {
+                      return const SizedBox.shrink();
+                    }
+                    // Wave CY.18.27: freeform warning bubble — rendered as
+                    // a distinct system-info card, not an assistant bubble,
+                    // so the user can tell at a glance "this is from Pyre,
+                    // not from the architect".
+                    if (m.kind == 'freeformWarning') {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: _FreeformWarningCard(text: m.content),
+                      );
+                    }
+                    final isUser = m.role == 'user';
+                    // Retry sits below the LAST assistant message — and only
+                    // if the previous message is a user turn (so it can
+                    // actually be retried; an LLM responding to its own
+                    // greeting would just confuse the model).
+                    final isLast = i == messages.length - 1;
+                    final showRetry =
+                        isLast &&
                         !isUser &&
-                        store.activeCreatorSession?.mode == null)
-                      _ModeChoiceRow(
-                        onPickCharacter: () => _chooseMode('character'),
-                        onPickScenario: () => _chooseMode('scenario'),
-                      ),
-                    // Wave CY.18.101: stage-2 flow picker removed —
-                    // _chooseMode locks freeform directly.
-                    // Footer row — token count (assistant only) +
-                    // Retry (last assistant with prior user) + the
-                    // overflow "⋯" button that opens the message
-                    // action menu. Right-aligned for user messages,
-                    // left-aligned for assistant. We can't reuse a
-                    // long-press anymore — SelectionArea owns that
-                    // for native text selection.
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Row(
-                        mainAxisAlignment: isUser
-                            ? MainAxisAlignment.end
-                            : MainAxisAlignment.start,
-                        crossAxisAlignment: CrossAxisAlignment.center,
+                        !_generating &&
+                        messages.length >= 2 &&
+                        messages[messages.length - 2].role == 'user';
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Column(
+                        crossAxisAlignment: isUser
+                            ? CrossAxisAlignment.end
+                            : CrossAxisAlignment.start,
                         children: [
-                          // Wave CY.18.93: per-message token chip
-                          // removed. It estimated only the visible
-                          // assistant text, not the actual tokens
-                          // billed (which include system prompt,
-                          // attachments, hidden updater calls, etc).
-                          // Number bore no useful relationship to
-                          // real provider spend — misleading enough
-                          // that taking it out beats keeping a
-                          // wrong-but-precise-looking figure on
-                          // every reply.
-                          if (showRetry)
-                            TextButton.icon(
-                              style: TextButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 0),
-                                minimumSize: const Size(0, 26),
-                                tapTargetSize:
-                                    MaterialTapTargetSize.shrinkWrap,
-                                foregroundColor: EmberColors.textMid,
+                          Row(
+                            mainAxisAlignment: isUser
+                                ? MainAxisAlignment.end
+                                : MainAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Flexible(
+                                // No GestureDetector here on purpose: SelectionArea
+                                // (wrapping the ListView) needs the long-press to
+                                // start native text selection. Actions are reachable
+                                // via the small "⋯" icon in the footer below.
+                                child: Container(
+                                  constraints: BoxConstraints(
+                                    maxWidth:
+                                        MediaQuery.of(context).size.width *
+                                        0.85,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: isUser
+                                        ? EmberColors.primary.withValues(
+                                            alpha: 0.18,
+                                          )
+                                        : EmberColors.bgPanel,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: isUser
+                                          ? EmberColors.primary.withValues(
+                                              alpha: 0.4,
+                                            )
+                                          : EmberColors.stroke,
+                                    ),
+                                  ),
+                                  child: _MessageBody(
+                                    message: m,
+                                    hideReasoning: true,
+                                  ),
+                                ),
                               ),
-                              icon: const Icon(Icons.refresh, size: 14),
-                              label: const Text('Retry',
-                                  style: TextStyle(fontSize: 12)),
-                              onPressed: _retry,
+                            ],
+                          ),
+                          // Wave CV: mode-choice buttons under the opening
+                          // greeting. Rendered only when this is the first
+                          // assistant message AND the session has no mode
+                          // yet (i.e. the user hasn't picked character vs
+                          // scenario). The "Edit with AI" entry point
+                          // pre-stamps mode='edit' so this never renders
+                          // there, and legacy drafts get 'character' from
+                          // the fromJson migration.
+                          if (i == 0 &&
+                              !isUser &&
+                              store.activeCreatorSession?.mode == null)
+                            _ModeChoiceRow(
+                              onPickCharacter: () => _chooseMode('character'),
+                              onPickScenario: () => _chooseMode('scenario'),
+                              onPickLorebook: () => _chooseMode('lorebook'),
                             ),
-                          InkWell(
-                            customBorder: const CircleBorder(),
-                            onTap: () => _showMessageMenu(m),
-                            child: Padding(
-                              padding: EdgeInsets.all(6),
-                              child: Icon(
-                                Icons.more_horiz,
-                                size: 16,
-                                color: EmberColors.textMid,
-                              ),
+                          // Wave CY.18.101: stage-2 flow picker removed —
+                          // _chooseMode locks freeform directly.
+                          // Footer row — token count (assistant only) +
+                          // Retry (last assistant with prior user) + the
+                          // overflow "⋯" button that opens the message
+                          // action menu. Right-aligned for user messages,
+                          // left-aligned for assistant. We can't reuse a
+                          // long-press anymore — SelectionArea owns that
+                          // for native text selection.
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Row(
+                              mainAxisAlignment: isUser
+                                  ? MainAxisAlignment.end
+                                  : MainAxisAlignment.start,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                // Wave CY.18.93: per-message token chip
+                                // removed. It estimated only the visible
+                                // assistant text, not the actual tokens
+                                // billed (which include system prompt,
+                                // attachments, hidden updater calls, etc).
+                                // Number bore no useful relationship to
+                                // real provider spend — misleading enough
+                                // that taking it out beats keeping a
+                                // wrong-but-precise-looking figure on
+                                // every reply.
+                                if (showRetry)
+                                  TextButton.icon(
+                                    style: TextButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 0,
+                                      ),
+                                      minimumSize: const Size(0, 26),
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                      foregroundColor: EmberColors.textMid,
+                                    ),
+                                    icon: const Icon(Icons.refresh, size: 14),
+                                    label: const Text(
+                                      'Retry',
+                                      style: TextStyle(fontSize: 12),
+                                    ),
+                                    onPressed: _retry,
+                                  ),
+                                InkWell(
+                                  customBorder: const CircleBorder(),
+                                  onTap: () => _showMessageMenu(m),
+                                  child: Padding(
+                                    padding: EdgeInsets.all(6),
+                                    child: Icon(
+                                      Icons.more_horiz,
+                                      size: 16,
+                                      color: EmberColors.textMid,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
                       ),
-                    ),
-                  ],
+                    );
+                  },
                 ),
-              );
-            },
-          ),
-          ),
+              ),
               // Defence in depth: the state-tracked flag can lag a
               // frame behind the actual scroll metrics (controller
               // listeners fire on pixel changes, not on viewport /
@@ -3793,18 +4668,26 @@ class _CharacterAssistantScreenState
                       },
                       child: Padding(
                         padding: EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.arrow_downward,
-                                size: 14, color: EmberColors.primary),
+                            Icon(
+                              Icons.arrow_downward,
+                              size: 14,
+                              color: EmberColors.primary,
+                            ),
                             SizedBox(width: 6),
-                            Text('Jump to bottom',
-                                style: TextStyle(
-                                    color: EmberColors.primary,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600)),
+                            Text(
+                              'Jump to bottom',
+                              style: TextStyle(
+                                color: EmberColors.primary,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -3828,10 +4711,7 @@ class _CharacterAssistantScreenState
             child: Text(
               'Tell me when to build the sheet, or type /build',
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 11,
-                color: EmberColors.textDim,
-              ),
+              style: TextStyle(fontSize: 11, color: EmberColors.textDim),
             ),
           ),
         _InputBar(
@@ -3870,7 +4750,15 @@ class _CharacterAssistantScreenState
 
   Widget _buildCanvas(AppStore store) {
     final canvas = _sessionCanvas(store);
+    final isLorebookMode = store.activeCreatorSession?.mode == 'lorebook';
     final hasAnything = canvas.values.any(_isFilled);
+    final boundLorebookIds = _canvasLorebookIds(canvas);
+    final embeddedDraftEntries = _canvasLorebookEntries(canvas);
+    final embeddedDrafting = canvas[_canvasLorebookDraftingKey] == true;
+    final boundLorebooks = boundLorebookIds
+        .map(store.lorebookById)
+        .whereType<Lorebook>()
+        .toList();
     return Column(
       children: [
         Expanded(
@@ -3900,26 +4788,107 @@ class _CharacterAssistantScreenState
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
           child: SafeArea(
             top: false,
-            child: Row(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.chat_bubble_outline, size: 16),
-                    label: const Text('Keep chatting'),
-                    onPressed: () => setState(() => _showCanvas = false),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.check, size: 16),
-                    label: Text(
-                      store.activeCreatorSession?.mode == 'persona'
-                          ? 'Save persona'
-                          : 'Save card',
+                if (!isLorebookMode)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                    decoration: BoxDecoration(
+                      color: EmberColors.bgDeep,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: EmberColors.stroke),
                     ),
-                    onPressed: _saveCard,
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.library_books_outlined,
+                          size: 16,
+                          color: EmberColors.primary,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            boundLorebooks.isEmpty
+                                ? 'No embedded lorebook linked yet'
+                                : 'Embedded lorebook: ${boundLorebooks.map((b) => b.name).join(', ')}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: boundLorebooks.isEmpty
+                                  ? EmberColors.textDim
+                                  : EmberColors.textHigh,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        TextButton.icon(
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            minimumSize: const Size(0, 32),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: const Icon(Icons.auto_awesome, size: 14),
+                          label: Text(
+                            embeddedDrafting || embeddedDraftEntries.isNotEmpty
+                                ? 'Draft'
+                                : 'Add',
+                          ),
+                          onPressed: () =>
+                              _startEmbeddedLorebookDrafting(store),
+                        ),
+                      ],
+                    ),
                   ),
+                if (!isLorebookMode && embeddedDraftEntries.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Column(
+                      children: [
+                        for (var i = 0; i < embeddedDraftEntries.length; i++)
+                          _LorebookEntryCanvasCard(
+                            entry: embeddedDraftEntries[i],
+                            index: i,
+                            highlighted: _recentlyChangedCanvasKeys.contains(
+                              _canvasLorebookEntriesKey,
+                            ),
+                            onEdit: () => _editCanvasField(
+                              '$_canvasLorebookEntriesKey:$i',
+                              embeddedDraftEntries[i].toJson(),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.chat_bubble_outline, size: 16),
+                        label: const Text('Keep chatting'),
+                        onPressed: () => setState(() => _showCanvas = false),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.check, size: 16),
+                        label: Text(
+                          isLorebookMode
+                              ? 'Save lorebook'
+                              : store.activeCreatorSession?.mode == 'persona'
+                              ? 'Save persona'
+                              : 'Save card',
+                        ),
+                        onPressed: isLorebookMode
+                            ? _saveLorebookFromCreator
+                            : _saveCard,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -3969,8 +4938,13 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
     final all = widget.store.creatorSessionsByRecency;
     final sessions = _query.isEmpty
         ? all
-        : all.where((s) =>
-            s.derivedTitle().toLowerCase().contains(_query.toLowerCase())).toList();
+        : all
+              .where(
+                (s) => s.derivedTitle().toLowerCase().contains(
+                  _query.toLowerCase(),
+                ),
+              )
+              .toList();
     return Drawer(
       backgroundColor: EmberColors.bgPanel,
       child: SafeArea(
@@ -3993,7 +4967,9 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                         const SizedBox(width: 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
                           decoration: BoxDecoration(
                             color: EmberColors.bgDeep,
                             borderRadius: BorderRadius.circular(8),
@@ -4028,21 +5004,29 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                 decoration: InputDecoration(
                   hintText: 'Search sessions…',
                   hintStyle: const TextStyle(fontSize: 13),
-                  prefixIcon: Icon(Icons.search,
-                      size: 16, color: EmberColors.textMid),
+                  prefixIcon: Icon(
+                    Icons.search,
+                    size: 16,
+                    color: EmberColors.textMid,
+                  ),
                   suffixIcon: _query.isEmpty
                       ? null
                       : IconButton(
-                          icon: Icon(Icons.close,
-                              size: 14, color: EmberColors.textMid),
+                          icon: Icon(
+                            Icons.close,
+                            size: 14,
+                            color: EmberColors.textMid,
+                          ),
                           onPressed: () {
                             _searchCtl.clear();
                             setState(() => _query = '');
                           },
                         ),
                   isDense: true,
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                 ),
               ),
             ),
@@ -4057,8 +5041,7 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                               ? 'No sessions yet. Start chatting and one will appear here.'
                               : 'No sessions match "$_query".',
                           textAlign: TextAlign.center,
-                          style: TextStyle(
-                              color: EmberColors.textDim),
+                          style: TextStyle(color: EmberColors.textDim),
                         ),
                       ),
                     )
@@ -4071,11 +5054,15 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                         return ListTile(
                           dense: true,
                           selected: isActive,
-                          selectedTileColor:
-                              EmberColors.primary.withValues(alpha: 0.10),
+                          selectedTileColor: EmberColors.primary.withValues(
+                            alpha: 0.10,
+                          ),
                           leading: s.pinned
-                              ? Icon(Icons.push_pin,
-                                  size: 14, color: EmberColors.primary)
+                              ? Icon(
+                                  Icons.push_pin,
+                                  size: 14,
+                                  color: EmberColors.primary,
+                                )
                               : null,
                           title: Text(
                             s.derivedTitle(),
@@ -4088,15 +5075,19 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                             ),
                           ),
                           subtitle: Text(
-                            _relTime(s.updatedAt) +
-                                (saved ? ' · saved' : ''),
+                            _relTime(s.updatedAt) + (saved ? ' · saved' : ''),
                             style: TextStyle(
-                                color: EmberColors.textDim, fontSize: 11),
+                              color: EmberColors.textDim,
+                              fontSize: 11,
+                            ),
                           ),
                           trailing: PopupMenuButton<String>(
                             tooltip: 'Session',
-                            icon: Icon(Icons.more_vert,
-                                size: 18, color: EmberColors.textMid),
+                            icon: Icon(
+                              Icons.more_vert,
+                              size: 18,
+                              color: EmberColors.textMid,
+                            ),
                             onSelected: (v) async {
                               if (v == 'rename') {
                                 await widget.onRename(s);
@@ -4123,9 +5114,13 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
                                 ),
                               ),
                               const PopupMenuItem(
-                                  value: 'rename', child: Text('Rename')),
+                                value: 'rename',
+                                child: Text('Rename'),
+                              ),
                               const PopupMenuItem(
-                                  value: 'delete', child: Text('Delete')),
+                                value: 'delete',
+                                child: Text('Delete'),
+                              ),
                             ],
                           ),
                           onTap: () => widget.onSelect(s.id),
@@ -4140,8 +5135,9 @@ class _SessionsDrawerState extends State<_SessionsDrawer> {
   }
 
   static String _relTime(int millis) {
-    final diff =
-        DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(millis));
+    final diff = DateTime.now().difference(
+      DateTime.fromMillisecondsSinceEpoch(millis),
+    );
     if (diff.inMinutes < 1) return 'just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';
@@ -4157,6 +5153,7 @@ class _CanvasFieldsView extends StatefulWidget {
   final Map<String, dynamic> canvas;
   final Set<String> changedKeys;
   final void Function(String key, dynamic current) onEdit;
+
   /// Persona Creator: the session mode. When 'persona', the sheet shows
   /// only the persona fields (name / description / dialogue examples /
   /// tagline) and hides the character-only fields + the Advanced
@@ -4183,6 +5180,78 @@ class _CanvasFieldsViewState extends State<_CanvasFieldsView> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.mode == 'lorebook') {
+      final entriesRaw = widget
+          .canvas[_CharacterAssistantScreenState._canvasLorebookEntriesKey];
+      final entries = <LoreEntry>[];
+      if (entriesRaw is List) {
+        for (final item in entriesRaw) {
+          if (item is! Map) continue;
+          try {
+            entries.add(LoreEntry.fromJson(item.cast<String, dynamic>()));
+          } catch (_) {}
+        }
+      }
+      final name =
+          widget.canvas[_CharacterAssistantScreenState._canvasLorebookNameKey];
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        children: [
+          _CanvasField(
+            fieldKey: _CharacterAssistantScreenState._canvasLorebookNameKey,
+            label: 'Lorebook name',
+            value: name is String && name.trim().isNotEmpty
+                ? name
+                : 'New lorebook',
+            highlighted: widget.changedKeys.contains(
+              _CharacterAssistantScreenState._canvasLorebookNameKey,
+            ),
+            onEdit: () => widget.onEdit(
+              _CharacterAssistantScreenState._canvasLorebookNameKey,
+              name ?? 'New lorebook',
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(
+              'ENTRIES',
+              style: TextStyle(
+                color: EmberColors.primary,
+                fontWeight: FontWeight.w700,
+                fontSize: 11,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ),
+          if (entries.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: EmberColors.bgPanel,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: EmberColors.stroke),
+              ),
+              child: Text(
+                'No entries yet. Chat about the world, then type /entry when one is ready.',
+                style: TextStyle(color: EmberColors.textMid, fontSize: 13),
+              ),
+            )
+          else
+            for (var i = 0; i < entries.length; i++)
+              _LorebookEntryCanvasCard(
+                entry: entries[i],
+                index: i,
+                highlighted: widget.changedKeys.contains(
+                  _CharacterAssistantScreenState._canvasLorebookEntriesKey,
+                ),
+                onEdit: () => widget.onEdit(
+                  '${_CharacterAssistantScreenState._canvasLorebookEntriesKey}:$i',
+                  entries[i].toJson(),
+                ),
+              ),
+        ],
+      );
+    }
     // Persona Creator: a persona is just name + description + dialogue
     // examples + an optional tagline — render ONLY those, no scenario /
     // first_mes / tags / creator_notes, and no Advanced section. The
@@ -4264,9 +5333,7 @@ class _CanvasFieldsViewState extends State<_CanvasFieldsView> {
               child: Row(
                 children: [
                   Icon(
-                    _advancedExpanded
-                        ? Icons.expand_less
-                        : Icons.expand_more,
+                    _advancedExpanded ? Icons.expand_less : Icons.expand_more,
                     size: 18,
                     color: EmberColors.textMid,
                   ),
@@ -4386,7 +5453,8 @@ class _CanvasField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final empty = value == null ||
+    final empty =
+        value == null ||
         (value is String && value.trim().isEmpty) ||
         (value is List && value.isEmpty) ||
         (value is Map && value.isEmpty);
@@ -4455,7 +5523,8 @@ class _CanvasField extends StatelessWidget {
                 for (var i = 0; i < value.length; i++)
                   Padding(
                     padding: EdgeInsets.only(
-                        bottom: i == value.length - 1 ? 0 : 10),
+                      bottom: i == value.length - 1 ? 0 : 10,
+                    ),
                     child: Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
@@ -4469,8 +5538,7 @@ class _CanvasField extends StatelessWidget {
                           Text(
                             'GREETING ${i + 1}',
                             style: TextStyle(
-                              color: EmberColors.primary
-                                  .withValues(alpha: 0.8),
+                              color: EmberColors.primary.withValues(alpha: 0.8),
                               fontWeight: FontWeight.w700,
                               fontSize: 10,
                               letterSpacing: 1.1,
@@ -4499,16 +5567,22 @@ class _CanvasField extends StatelessWidget {
                 for (final v in value)
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: EmberColors.bgPanel,
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(color: EmberColors.stroke),
                     ),
-                    child: Text('$v',
-                        style: TextStyle(
-                            color: EmberColors.textMid, fontSize: 12)),
-                  )
+                    child: Text(
+                      '$v',
+                      style: TextStyle(
+                        color: EmberColors.textMid,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
               ],
             )
           else if (value is Map)
@@ -4535,6 +5609,187 @@ class _CanvasField extends StatelessWidget {
   }
 }
 
+class _LorebookEntryCanvasCard extends StatelessWidget {
+  final LoreEntry entry;
+  final int index;
+  final bool highlighted;
+  final VoidCallback onEdit;
+
+  const _LorebookEntryCanvasCard({
+    required this.entry,
+    required this.index,
+    required this.highlighted,
+    required this.onEdit,
+  });
+
+  String _logicLabel(LoreSelectiveLogic logic) {
+    switch (logic) {
+      case LoreSelectiveLogic.andAny:
+        return 'any secondary';
+      case LoreSelectiveLogic.andAll:
+        return 'all secondary';
+      case LoreSelectiveLogic.notAny:
+        return 'no secondary';
+      case LoreSelectiveLogic.notAll:
+        return 'not all secondary';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final title = entry.keys.isNotEmpty
+        ? entry.keys.first
+        : 'Entry ${index + 1}';
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 280),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: highlighted
+            ? const Color(0xFFE9A35A).withValues(alpha: 0.10)
+            : EmberColors.bgPanel,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: highlighted
+              ? const Color(0xFFE9A35A).withValues(alpha: 0.45)
+              : EmberColors.stroke,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: EmberColors.textHigh,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (entry.constant)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: Icon(
+                    Icons.push_pin_outlined,
+                    size: 14,
+                    color: EmberColors.primary,
+                  ),
+                ),
+              InkWell(
+                onTap: onEdit,
+                customBorder: const CircleBorder(),
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(
+                    Icons.edit_outlined,
+                    size: 14,
+                    color: EmberColors.textMid,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final key in entry.keys.take(8))
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: EmberColors.bgDeep,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: EmberColors.stroke),
+                  ),
+                  child: Text(
+                    key,
+                    style: TextStyle(color: EmberColors.textMid, fontSize: 11),
+                  ),
+                ),
+            ],
+          ),
+          if (entry.secondaryKeys.isNotEmpty ||
+              entry.order != 0 ||
+              entry.useProbability ||
+              entry.caseSensitive != null ||
+              entry.matchWholeWords != null) ...[
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                if (entry.secondaryKeys.isNotEmpty)
+                  _LoreMetaPill(
+                    text:
+                        '${_logicLabel(entry.selectiveLogic)}: ${entry.secondaryKeys.take(4).join(', ')}',
+                  ),
+                if (entry.order != 0)
+                  _LoreMetaPill(text: 'order ${entry.order}'),
+                if (entry.useProbability)
+                  _LoreMetaPill(text: 'chance ${entry.probability}%'),
+                if (entry.caseSensitive != null)
+                  _LoreMetaPill(
+                    text: entry.caseSensitive!
+                        ? 'case sensitive'
+                        : 'case insensitive',
+                  ),
+                if (entry.matchWholeWords != null)
+                  _LoreMetaPill(
+                    text: entry.matchWholeWords!
+                        ? 'whole words'
+                        : 'substring match',
+                  ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          SelectableText(
+            entry.content.isEmpty ? 'No content yet.' : entry.content,
+            style: TextStyle(
+              color: entry.content.isEmpty
+                  ? EmberColors.textDim
+                  : EmberColors.textHigh,
+              fontSize: 13,
+              height: 1.45,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoreMetaPill extends StatelessWidget {
+  final String text;
+  const _LoreMetaPill({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: EmberColors.primary.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: EmberColors.primary.withValues(alpha: 0.25)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(color: EmberColors.textMid, fontSize: 11),
+      ),
+    );
+  }
+}
+
 // =============================================================================
 // Wave CV: mode-choice row — two big buttons rendered inline under the
 // opening greeting. Picks character or scenario architect for this
@@ -4544,9 +5799,11 @@ class _CanvasField extends StatelessWidget {
 class _ModeChoiceRow extends StatelessWidget {
   final VoidCallback onPickCharacter;
   final VoidCallback onPickScenario;
+  final VoidCallback onPickLorebook;
   const _ModeChoiceRow({
     required this.onPickCharacter,
     required this.onPickScenario,
+    required this.onPickLorebook,
   });
 
   @override
@@ -4561,8 +5818,7 @@ class _ModeChoiceRow extends StatelessWidget {
             icon: const Icon(Icons.person_outline, size: 18),
             label: const Text('Build a character'),
             style: ElevatedButton.styleFrom(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             ),
             onPressed: onPickCharacter,
           ),
@@ -4570,10 +5826,17 @@ class _ModeChoiceRow extends StatelessWidget {
             icon: const Icon(Icons.menu_book_outlined, size: 18),
             label: const Text('Build a scenario'),
             style: OutlinedButton.styleFrom(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             ),
             onPressed: onPickScenario,
+          ),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.library_books_outlined, size: 18),
+            label: const Text('Build a lorebook'),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            ),
+            onPressed: onPickLorebook,
           ),
         ],
       ),
@@ -4647,6 +5910,7 @@ class _InputBar extends StatelessWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
   final bool generating;
+
   /// Wave CV: when true the entire input is disabled with a "pick a
   /// flow above" placeholder. Used at the start of a fresh session
   /// before the user has chosen character vs scenario.
@@ -4692,123 +5956,128 @@ class _InputBar extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-            // Single `+` button — popup with named attach options. Mirrors
-            // the ChatGPT mobile pattern.
-            PopupMenuButton<String>(
-              tooltip: 'Attach',
-              icon: Icon(Icons.add_circle_outline,
-                  color: EmberColors.textMid, size: 26),
-              enabled: !generating && !modeLocked,
-              onSelected: (v) {
-                switch (v) {
-                  case 'image':
-                    onAttachImage();
-                    break;
-                  case 'card':
-                    onAttachCard();
-                    break;
-                  case 'doc':
-                    onAttachDocument();
-                    break;
-                }
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(
-                  value: 'image',
-                  child: Row(
-                    children: [
-                      Icon(Icons.image_outlined, size: 18),
-                      SizedBox(width: 10),
-                      Text('Attach image'),
-                    ],
+                // Single `+` button — popup with named attach options. Mirrors
+                // the ChatGPT mobile pattern.
+                PopupMenuButton<String>(
+                  tooltip: 'Attach',
+                  icon: Icon(
+                    Icons.add_circle_outline,
+                    color: EmberColors.textMid,
+                    size: 26,
+                  ),
+                  enabled: !generating && !modeLocked,
+                  onSelected: (v) {
+                    switch (v) {
+                      case 'image':
+                        onAttachImage();
+                        break;
+                      case 'card':
+                        onAttachCard();
+                        break;
+                      case 'doc':
+                        onAttachDocument();
+                        break;
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: 'image',
+                      child: Row(
+                        children: [
+                          Icon(Icons.image_outlined, size: 18),
+                          SizedBox(width: 10),
+                          Text('Attach image'),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'card',
+                      child: Row(
+                        children: [
+                          Icon(Icons.badge_outlined, size: 18),
+                          SizedBox(width: 10),
+                          Text('Attach character card'),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'doc',
+                      child: Row(
+                        children: [
+                          Icon(Icons.description_outlined, size: 18),
+                          SizedBox(width: 10),
+                          Text('Attach document'),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                Expanded(
+                  // Wave CY.18.113: desktop Enter-to-send, mirroring the
+                  // chat input (Wave CY.18.52). On Windows/Linux/macOS a
+                  // bare Enter sends; Shift+Enter still inserts a newline
+                  // (CallbackShortcuts only catches the no-modifier
+                  // SingleActivator). On Android/mobile the bindings map is
+                  // empty, so Enter inserts a newline as expected and the
+                  // send button is the only way to commit.
+                  child: CallbackShortcuts(
+                    bindings: _isDesktop
+                        ? <ShortcutActivator, VoidCallback>{
+                            const SingleActivator(
+                              LogicalKeyboardKey.enter,
+                            ): () {
+                              // No-op mid-stream (stop button owns that),
+                              // while the input is locked (pick-a-flow), or
+                              // on empty input.
+                              if (generating) return;
+                              if (modeLocked) return;
+                              if (controller.text.trim().isEmpty) return;
+                              onSend();
+                            },
+                          }
+                        : const <ShortcutActivator, VoidCallback>{},
+                    child: TextField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      enabled: !modeLocked,
+                      minLines: 1,
+                      maxLines: 6,
+                      textInputAction: TextInputAction.newline,
+                      decoration: InputDecoration(
+                        hintText: modeLocked
+                            ? 'Choose a flow above to begin…'
+                            : 'Reply to the assistant…',
+                        isDense: true,
+                      ),
+                    ),
                   ),
                 ),
-                PopupMenuItem(
-                  value: 'card',
-                  child: Row(
-                    children: [
-                      Icon(Icons.badge_outlined, size: 18),
-                      SizedBox(width: 10),
-                      Text('Attach character card'),
-                    ],
+                const SizedBox(width: 6),
+                if (generating)
+                  // Stop button (replaces send) while a stream is alive —
+                  // tap aborts the request, partial reply stays in the
+                  // bubble. Without this the user has no way to cancel a
+                  // generation that's clearly going off the rails.
+                  IconButton.filled(
+                    onPressed: onStop,
+                    style: IconButton.styleFrom(
+                      backgroundColor: EmberColors.danger,
+                    ),
+                    icon: const Icon(Icons.stop, color: Colors.white),
+                    tooltip: 'Stop generating',
+                  )
+                else
+                  IconButton.filled(
+                    onPressed: modeLocked ? null : onSend,
+                    style: IconButton.styleFrom(
+                      backgroundColor: modeLocked
+                          ? EmberColors.stroke
+                          : EmberColors.primary,
+                    ),
+                    icon: const Icon(Icons.arrow_upward, color: Colors.white),
                   ),
-                ),
-                PopupMenuItem(
-                  value: 'doc',
-                  child: Row(
-                    children: [
-                      Icon(Icons.description_outlined, size: 18),
-                      SizedBox(width: 10),
-                      Text('Attach document'),
-                    ],
-                  ),
-                ),
               ],
             ),
-            Expanded(
-              // Wave CY.18.113: desktop Enter-to-send, mirroring the
-              // chat input (Wave CY.18.52). On Windows/Linux/macOS a
-              // bare Enter sends; Shift+Enter still inserts a newline
-              // (CallbackShortcuts only catches the no-modifier
-              // SingleActivator). On Android/mobile the bindings map is
-              // empty, so Enter inserts a newline as expected and the
-              // send button is the only way to commit.
-              child: CallbackShortcuts(
-                bindings: _isDesktop
-                    ? <ShortcutActivator, VoidCallback>{
-                        const SingleActivator(LogicalKeyboardKey.enter): () {
-                          // No-op mid-stream (stop button owns that),
-                          // while the input is locked (pick-a-flow), or
-                          // on empty input.
-                          if (generating) return;
-                          if (modeLocked) return;
-                          if (controller.text.trim().isEmpty) return;
-                          onSend();
-                        },
-                      }
-                    : const <ShortcutActivator, VoidCallback>{},
-                child: TextField(
-                  controller: controller,
-                  focusNode: focusNode,
-                  enabled: !modeLocked,
-                  minLines: 1,
-                  maxLines: 6,
-                  textInputAction: TextInputAction.newline,
-                  decoration: InputDecoration(
-                    hintText: modeLocked
-                        ? 'Choose a flow above to begin…'
-                        : 'Reply to the assistant…',
-                    isDense: true,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            if (generating)
-              // Stop button (replaces send) while a stream is alive —
-              // tap aborts the request, partial reply stays in the
-              // bubble. Without this the user has no way to cancel a
-              // generation that's clearly going off the rails.
-              IconButton.filled(
-                onPressed: onStop,
-                style: IconButton.styleFrom(
-                  backgroundColor: EmberColors.danger,
-                ),
-                icon: const Icon(Icons.stop, color: Colors.white),
-                tooltip: 'Stop generating',
-              )
-            else
-              IconButton.filled(
-                onPressed: modeLocked ? null : onSend,
-                style: IconButton.styleFrom(
-                  backgroundColor: modeLocked
-                      ? EmberColors.stroke
-                      : EmberColors.primary,
-                ),
-                icon: const Icon(Icons.arrow_upward, color: Colors.white),
-              ),
-          ],
-        ),
           ],
         ),
       ),
@@ -4836,9 +6105,11 @@ class _MessageBodyState extends State<_MessageBody> {
   /// null = follow the global Chat Settings toggle (widget.hideReasoning).
   /// true / false = per-message override the user set with the link.
   bool? _override;
+
   /// Wave CH: Pyre runtime trail (added by _formatContinuationTrail) is
   /// noisy diagnostic info — collapsed by default, user taps to expand.
   bool _trailExpanded = false;
+
   /// Wave CH: API error details (raw body wrapped in
   /// `<<PYRE_ERR_DETAILS>>`) collapsed by default behind the friendly
   /// summary.
@@ -4864,8 +6135,7 @@ class _MessageBodyState extends State<_MessageBody> {
     final rawText = widget.message.content;
     final hasText = rawText.trim().isNotEmpty;
     if (!hasAttachments && !hasText) {
-      return Text('…',
-          style: TextStyle(color: EmberColors.textDim));
+      return Text('…', style: TextStyle(color: EmberColors.textDim));
     }
     final hideReasoning = _override ?? widget.hideReasoning;
     final hasReasoning = ChatText.containsReasoning(rawText);
@@ -4886,11 +6156,7 @@ class _MessageBodyState extends State<_MessageBody> {
     final errMatch = _errDetailsRegex.firstMatch(mainBody);
     if (errMatch != null) {
       errDetails = errMatch.group(1)!.trim();
-      mainBody = mainBody.replaceRange(
-        errMatch.start,
-        errMatch.end,
-        '',
-      ).trim();
+      mainBody = mainBody.replaceRange(errMatch.start, errMatch.end, '').trim();
     }
 
     return Column(
@@ -4900,7 +6166,9 @@ class _MessageBodyState extends State<_MessageBody> {
         if (hasAttachments)
           Padding(
             padding: EdgeInsets.only(bottom: hasText ? 8 : 0),
-            child: _AttachmentBubbleRow(attachments: widget.message.attachments),
+            child: _AttachmentBubbleRow(
+              attachments: widget.message.attachments,
+            ),
           ),
         if (trail.isNotEmpty)
           _CollapsibleNoteBlock(
@@ -4939,13 +6207,12 @@ class _MessageBodyState extends State<_MessageBody> {
                   ),
                   const SizedBox(width: 2),
                   Text(
-                    hideReasoning
-                        ? 'Show reasoning'
-                        : 'Hide reasoning',
+                    hideReasoning ? 'Show reasoning' : 'Hide reasoning',
                     style: TextStyle(
-                        color: EmberColors.textMid,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500),
+                      color: EmberColors.textMid,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ],
               ),
@@ -5044,8 +6311,7 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
   final Map<CreatorAttachment, Uint8List> _decoded = {};
 
   Uint8List _bytesFor(CreatorAttachment a) {
-    return _decoded[a] ??=
-        base64Decode(a.imageDataUrl!.split(',').last);
+    return _decoded[a] ??= base64Decode(a.imageDataUrl!.split(',').last);
   }
 
   @override
@@ -5053,7 +6319,9 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
     // Images render as a row of inline thumbnails; card / doc as a
     // compact icon + filename row so the user always knows what was
     // attached without dumping the JSON / doc text into the bubble.
-    final hasExtracted = widget.attachments.any((a) => a.extracted.trim().isNotEmpty);
+    final hasExtracted = widget.attachments.any(
+      (a) => a.extracted.trim().isNotEmpty,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -5080,8 +6348,10 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
                         width: 160,
                         height: 160,
                         color: EmberColors.bgDeep,
-                        child: Icon(Icons.broken_image_outlined,
-                            color: EmberColors.textDim),
+                        child: Icon(
+                          Icons.broken_image_outlined,
+                          color: EmberColors.textDim,
+                        ),
                       ),
                     ),
                   ),
@@ -5089,7 +6359,9 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
               else
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 6),
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: EmberColors.bgDeep,
                     borderRadius: BorderRadius.circular(10),
@@ -5133,9 +6405,7 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    _expanded
-                        ? Icons.expand_less
-                        : Icons.expand_more,
+                    _expanded ? Icons.expand_less : Icons.expand_more,
                     size: 14,
                     color: EmberColors.textMid,
                   ),
@@ -5144,8 +6414,7 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
                     _expanded
                         ? 'Hide attachment details'
                         : 'Show attachment details',
-                    style: TextStyle(
-                        color: EmberColors.textMid, fontSize: 11),
+                    style: TextStyle(color: EmberColors.textMid, fontSize: 11),
                   ),
                 ],
               ),
@@ -5170,10 +6439,11 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
                     Text(
                       widget.attachments[i].filename,
                       style: TextStyle(
-                          color: EmberColors.primary,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.6),
+                        color: EmberColors.primary,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.6,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     SelectableText(
@@ -5197,29 +6467,33 @@ class _AttachmentBubbleRowState extends State<_AttachmentBubbleRow> {
 
   void _openImageViewer(BuildContext context, CreatorAttachment a) {
     if (a.imageDataUrl == null) return;
-    Navigator.of(context).push(MaterialPageRoute(
-      fullscreenDialog: true,
-      builder: (_) => Scaffold(
-        backgroundColor: Colors.black,
-        appBar: AppBar(
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => Scaffold(
           backgroundColor: Colors.black,
-          iconTheme: const IconThemeData(color: Colors.white),
-          title: Text(a.filename,
-              style: const TextStyle(color: Colors.white, fontSize: 14)),
-        ),
-        body: InteractiveViewer(
-          minScale: 0.5,
-          maxScale: 5,
-          child: Center(
-            child: Image.memory(
-              _bytesFor(a),
-              fit: BoxFit.contain,
-              gaplessPlayback: true,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            iconTheme: const IconThemeData(color: Colors.white),
+            title: Text(
+              a.filename,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
+          ),
+          body: InteractiveViewer(
+            minScale: 0.5,
+            maxScale: 5,
+            child: Center(
+              child: Image.memory(
+                _bytesFor(a),
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+              ),
             ),
           ),
         ),
       ),
-    ));
+    );
   }
 }
 
@@ -5276,9 +6550,7 @@ class _PendingChipState extends State<_PendingChip> {
         color: EmberColors.bgDeep,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: item.error != null
-              ? EmberColors.danger
-              : EmberColors.stroke,
+          color: item.error != null ? EmberColors.danger : EmberColors.stroke,
         ),
       ),
       child: Stack(
@@ -5296,15 +6568,15 @@ class _PendingChipState extends State<_PendingChip> {
                   fit: BoxFit.cover,
                   gaplessPlayback: true,
                   errorBuilder: (_, _, _) => Icon(
-                      Icons.broken_image_outlined,
-                      color: EmberColors.textDim),
+                    Icons.broken_image_outlined,
+                    color: EmberColors.textDim,
+                  ),
                 ),
               ),
             )
           else
             Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -5323,7 +6595,9 @@ class _PendingChipState extends State<_PendingChip> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                          color: EmberColors.textHigh, fontSize: 12),
+                        color: EmberColors.textHigh,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
                 ],
@@ -5343,7 +6617,8 @@ class _PendingChipState extends State<_PendingChip> {
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
                         valueColor: AlwaysStoppedAnimation<Color>(
-                            EmberColors.primary),
+                          EmberColors.primary,
+                        ),
                       ),
                     ),
                   ),
@@ -5357,17 +6632,19 @@ class _PendingChipState extends State<_PendingChip> {
               left: 4,
               bottom: 4,
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 4, vertical: 1),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                 decoration: BoxDecoration(
                   color: EmberColors.danger,
                   borderRadius: BorderRadius.circular(4),
                 ),
-                child: const Text('!',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700)),
+                child: const Text(
+                  '!',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
             ),
           // X to remove. Sits OUTSIDE the chip's stroke so the tap
@@ -5377,16 +6654,17 @@ class _PendingChipState extends State<_PendingChip> {
             top: -6,
             child: Material(
               color: EmberColors.bgPanel,
-              shape: CircleBorder(
-                side: BorderSide(color: EmberColors.stroke),
-              ),
+              shape: CircleBorder(side: BorderSide(color: EmberColors.stroke)),
               child: InkWell(
                 customBorder: const CircleBorder(),
                 onTap: widget.onRemove,
                 child: Padding(
                   padding: EdgeInsets.all(2),
-                  child: Icon(Icons.close,
-                      size: 12, color: EmberColors.textMid),
+                  child: Icon(
+                    Icons.close,
+                    size: 12,
+                    color: EmberColors.textMid,
+                  ),
                 ),
               ),
             ),
@@ -5417,8 +6695,8 @@ class _SessionSizeBanner extends StatelessWidget {
   final List<CreatorMessage> messages;
   const _SessionSizeBanner({required this.messages});
 
-  static const int _softThreshold = 60 * 1000;   // chars (~15k tokens)
-  static const int _hardThreshold = 120 * 1000;  // chars (~30k tokens)
+  static const int _softThreshold = 60 * 1000; // chars (~15k tokens)
+  static const int _hardThreshold = 120 * 1000; // chars (~30k tokens)
 
   @override
   Widget build(BuildContext context) {
@@ -5438,12 +6716,14 @@ class _SessionSizeBanner extends StatelessWidget {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        color: (hard ? EmberColors.danger : Color(0xFFE9A35A))
-            .withValues(alpha: 0.12),
+        color: (hard ? EmberColors.danger : Color(0xFFE9A35A)).withValues(
+          alpha: 0.12,
+        ),
         border: Border(
           top: BorderSide(
-            color: (hard ? EmberColors.danger : Color(0xFFE9A35A))
-                .withValues(alpha: 0.35),
+            color: (hard ? EmberColors.danger : Color(0xFFE9A35A)).withValues(
+              alpha: 0.35,
+            ),
           ),
         ),
       ),
@@ -5462,9 +6742,7 @@ class _SessionSizeBanner extends StatelessWidget {
                   ? 'Session ~$tokenLabel tokens — many models will reject this. Save the card and start a new session.'
                   : 'Session ~$tokenLabel tokens — approaching common context limits. Consider saving + starting fresh.',
               style: TextStyle(
-                color: hard
-                    ? EmberColors.danger
-                    : EmberColors.textHigh,
+                color: hard ? EmberColors.danger : EmberColors.textHigh,
                 fontSize: 11,
                 height: 1.3,
               ),
@@ -5485,6 +6763,7 @@ class _SessionSizeBanner extends StatelessWidget {
 class _SheetStatusPill extends StatelessWidget {
   final Map<String, dynamic> canvas;
   final VoidCallback onTap;
+
   /// Wave CY.18.200: active creator session, used to show a mode badge.
   final CreatorSession? session;
   const _SheetStatusPill({
@@ -5509,8 +6788,7 @@ class _SheetStatusPill extends StatelessWidget {
     // a persona canvas against the 8 character fields showed a misleading
     // "4/8". Persona sessions count against the persona field list.
     final tracked = _pillTrackedFields(session);
-    final filled =
-        tracked.where((k) => _isPillFilled(canvas[k])).length;
+    final filled = tracked.where((k) => _isPillFilled(canvas[k])).length;
     final total = tracked.length;
     final tagsRaw = canvas['tags'];
     final tagsCount = (tagsRaw is List) ? tagsRaw.length : 0;
@@ -5526,9 +6804,7 @@ class _SheetStatusPill extends StatelessWidget {
         onTap: onTap,
         child: Container(
           decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(color: EmberColors.stroke),
-            ),
+            border: Border(bottom: BorderSide(color: EmberColors.stroke)),
           ),
           padding: const EdgeInsets.fromLTRB(16, 8, 12, 8),
           child: Row(
@@ -5574,9 +6850,13 @@ class _SheetStatusPill extends StatelessWidget {
                           const SizedBox(width: 6),
                           Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 2),
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
                             decoration: BoxDecoration(
-                              color: EmberColors.primary.withValues(alpha: 0.13),
+                              color: EmberColors.primary.withValues(
+                                alpha: 0.13,
+                              ),
                               borderRadius: BorderRadius.circular(5),
                             ),
                             child: Text(
@@ -5595,27 +6875,26 @@ class _SheetStatusPill extends StatelessWidget {
                     // count so the user can see card weight as they
                     // build it. Empty cards skip the suffix entirely
                     // to avoid a stray " · ~0 tokens" line.
-                    Builder(builder: (_) {
-                      final tokenLabel =
-                          formatTokenCount(approxTokensForCanvas(canvas));
-                      return Text(
-                        '$filled/$total fields'
-                        '${tagsCount > 0 ? ' · $tagsCount tags' : ''}'
-                        '${tokenLabel != null ? ' · $tokenLabel' : ''}',
-                        style: TextStyle(
-                          color: EmberColors.textDim,
-                          fontSize: 11,
-                        ),
-                      );
-                    }),
+                    Builder(
+                      builder: (_) {
+                        final tokenLabel = formatTokenCount(
+                          approxTokensForCanvas(canvas),
+                        );
+                        return Text(
+                          '$filled/$total fields'
+                          '${tagsCount > 0 ? ' · $tagsCount tags' : ''}'
+                          '${tokenLabel != null ? ' · $tokenLabel' : ''}',
+                          style: TextStyle(
+                            color: EmberColors.textDim,
+                            fontSize: 11,
+                          ),
+                        );
+                      },
+                    ),
                   ],
                 ),
               ),
-              Icon(
-                Icons.chevron_right,
-                size: 18,
-                color: EmberColors.textDim,
-              ),
+              Icon(Icons.chevron_right, size: 18, color: EmberColors.textDim),
             ],
           ),
         ),
@@ -5661,12 +6940,18 @@ class _SheetStatusPill extends StatelessWidget {
     'mes_example',
   ];
 
+  static const _lorebookTrackedFields = <String>[
+    _CharacterAssistantScreenState._canvasLorebookNameKey,
+    _CharacterAssistantScreenState._canvasLorebookEntriesKey,
+  ];
+
   /// Picks the field set the pill counts against, based on the session mode.
   /// Persona sessions (create or "Edit persona") use the smaller persona
   /// schema; everything else (character / scenario / edit-card) uses the
   /// full character field set. Static + null-tolerant so it can be unit
   /// tested without a State instance.
   static List<String> _pillTrackedFields(CreatorSession? session) {
+    if (session?.mode == 'lorebook') return _lorebookTrackedFields;
     final isPersona =
         session?.mode == 'persona' || session?.editingPersonaId != null;
     return isPersona ? _personaTrackedFields : _trackedFields;
@@ -5690,10 +6975,12 @@ enum _SaveMode { overwrite, copy }
 
 class _SaveCardSheet extends StatefulWidget {
   final Map<String, dynamic> canvas;
+
   /// Wave CV.16: in edit mode the existing character's avatar (as a
   /// `data:image/...;base64,...` URL) is prefilled so the user isn't
   /// asked to re-pick. Null on create flow.
   final String? existingAvatarDataUrl;
+
   /// Persona Creator: when true the sheet shows ONE "Save persona"
   /// button (no start-chat / PNG-export / library actions, no PNG
   /// helper text) and the action passed to [onSubmit] is always
@@ -5710,7 +6997,8 @@ class _SaveCardSheet extends StatefulWidget {
     required Uint8List? avatarPng,
     required _SaveAction action,
     required List<String> lorebookIds,
-  }) onSubmit;
+  })
+  onSubmit;
 
   const _SaveCardSheet({
     required this.canvas,
@@ -5738,8 +7026,7 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
   /// Lorebook bindings chosen in this sheet. Seeded from
   /// [widget.initialLorebookIds] (existing card on edit; empty on a fresh
   /// build) and the single source of truth handed to the commit path.
-  late List<String> _lorebookIds =
-      List<String>.from(widget.initialLorebookIds);
+  late List<String> _lorebookIds = List<String>.from(widget.initialLorebookIds);
 
   @override
   void initState() {
@@ -5750,7 +7037,9 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
       if (comma > 0) {
         try {
           _existingAvatarBytes = base64Decode(url.substring(comma + 1));
-        } catch (_) {/* leave null */}
+        } catch (_) {
+          /* leave null */
+        }
       }
     }
   }
@@ -5795,7 +7084,10 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
       // and PNG export both have the image without the user having
       // to re-pick.
       await widget.onSubmit(
-          avatarPng: _previewBytes, action: action, lorebookIds: _lorebookIds);
+        avatarPng: _previewBytes,
+        action: action,
+        lorebookIds: _lorebookIds,
+      );
       // Wave CV.16: the library / startChat actions handle navigation
       // themselves (popping sheet + assistant screen). Only attempt
       // the sheet pop if we're still mounted AND the route is still
@@ -5873,8 +7165,11 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                       ),
                       child: _previewBytes == null
                           ? Center(
-                              child: Icon(Icons.add_a_photo_outlined,
-                                  color: EmberColors.textMid, size: 26),
+                              child: Icon(
+                                Icons.add_a_photo_outlined,
+                                color: EmberColors.textMid,
+                                size: 26,
+                              ),
                             )
                           : null,
                     ),
@@ -5887,8 +7182,8 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                         Text(
                           name.isEmpty
                               ? (widget.personaMode
-                                  ? 'Untitled persona'
-                                  : 'Untitled character')
+                                    ? 'Untitled persona'
+                                    : 'Untitled character')
                               : name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -5910,7 +7205,9 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                         TextButton.icon(
                           style: TextButton.styleFrom(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 0),
+                              horizontal: 6,
+                              vertical: 0,
+                            ),
                             minimumSize: const Size(0, 28),
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
@@ -5943,20 +7240,19 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
             // manual editor). Shown only when lorebooks exist; seeded with the
             // card's current bindings on edit. Hidden when there's nothing to
             // bind to keep the sheet uncluttered.
-            if (context.watch<AppStore>().lorebooks.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                child: LorebookBindingSection(
-                  selectedIds: _lorebookIds,
-                  label: widget.personaMode
-                      ? 'Persona lorebooks'
-                      : 'Linked lorebooks',
-                  sublabel:
-                      'Bind a world so it travels with this ${widget.personaMode ? 'persona' : 'card'} '
-                      '(optional — you can change this later in the editor).',
-                  onChanged: (ids) => setState(() => _lorebookIds = ids),
-                ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+              child: LorebookBindingSection(
+                selectedIds: _lorebookIds,
+                label: widget.personaMode
+                    ? 'Persona lorebooks'
+                    : 'Linked lorebooks',
+                sublabel:
+                    'Bind a world so it travels with this ${widget.personaMode ? 'persona' : 'card'} '
+                    '(optional — you can change this later in the editor).',
+                onChanged: (ids) => setState(() => _lorebookIds = ids),
               ),
+            ),
             Divider(color: EmberColors.stroke, height: 1),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
@@ -6003,13 +7299,14 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton.icon(
-                            icon: const Icon(Icons.chat_bubble_outline,
-                                size: 16),
+                            icon: const Icon(
+                              Icons.chat_bubble_outline,
+                              size: 16,
+                            ),
                             label: const Text('Save & start chat'),
                             onPressed: _saving
                                 ? null
-                                : () =>
-                                    _submit(action: _SaveAction.startChat),
+                                : () => _submit(action: _SaveAction.startChat),
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -6017,21 +7314,24 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                           width: double.infinity,
                           child: OutlinedButton.icon(
                             icon: const Icon(Icons.ios_share, size: 16),
-                            label: Text(!_hasAvatarForExport
-                                ? 'Save & export PNG (pick image first)'
-                                : 'Save & export PNG'),
+                            label: Text(
+                              !_hasAvatarForExport
+                                  ? 'Save & export PNG (pick image first)'
+                                  : 'Save & export PNG',
+                            ),
                             onPressed: (_saving || !_hasAvatarForExport)
                                 ? null
-                                : () =>
-                                    _submit(action: _SaveAction.exportPng),
+                                : () => _submit(action: _SaveAction.exportPng),
                           ),
                         ),
                         const SizedBox(height: 8),
                         SizedBox(
                           width: double.infinity,
                           child: TextButton.icon(
-                            icon: const Icon(Icons.library_add_outlined,
-                                size: 16),
+                            icon: const Icon(
+                              Icons.library_add_outlined,
+                              size: 16,
+                            ),
                             // Wave CQ: was "Save & open editor" — replaced
                             // because landing in the editor IMMEDIATELY
                             // after finishing the card via Creator is

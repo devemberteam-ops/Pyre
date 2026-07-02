@@ -12,7 +12,11 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/models/models.dart';
 import 'package:pyre/screens/lorebook_creator_screen.dart'
-    show extractEntryDraftFromReply;
+    show
+        extractEntryDraftFromReply,
+        extractEntryDraftsFromReply,
+        lorebookCreatorDisplayText,
+        stripLorebookStreamArtifacts;
 import 'package:pyre/services/lorebook_architect_prompts.dart'
     show hasBuildEntryMarker, stripBuildEntryMarker;
 
@@ -21,7 +25,8 @@ void main() {
 
   group('extractEntryDraftFromReply', () {
     test('standard reply with marker + JSON → populated draft', () {
-      const reply = 'Committing the entry now.\n'
+      const reply =
+          'Committing the entry now.\n'
           '[[BUILD_ENTRY]]\n'
           '{"keys":["Thalorim","City of Thalorim","the city"],'
           '"content":"Thalorim is a port city of 80 000 souls, built on salt '
@@ -104,13 +109,39 @@ void main() {
       expect(draft, isNotNull);
       expect(draft!.entry.keys, contains('Maela Vorne'));
     });
+
+    test('multi-entry wrapper extracts every draft', () {
+      const reply =
+          'Done.\n[[BUILD_ENTRY]]\n'
+          '{"entries":[{"keys":["Nemeia"],"content":"Nemeia is a sacred crossroads.",'
+          '"constant":false,"comment":"Place: Nemeia"},'
+          '{"keys":["minor gods"],"content":"Minor gods intervene through signs.",'
+          '"constant":false,"comment":"Rule: Minor Gods"},'
+          '{"keys":["satyrs"],"content":"Satyrs are disruptive but rarely malicious.",'
+          '"constant":false,"comment":"Creature: Satyrs"}]}';
+
+      final drafts = extractEntryDraftsFromReply(reply);
+      expect(drafts.length, 3);
+      expect(drafts.map((d) => d.entry.keys.single), [
+        'Nemeia',
+        'minor gods',
+        'satyrs',
+      ]);
+      expect(drafts.map((d) => d.comment), [
+        'Place: Nemeia',
+        'Rule: Minor Gods',
+        'Creature: Satyrs',
+      ]);
+      expect(extractEntryDraftFromReply(reply)!.entry.keys, ['Nemeia']);
+    });
   });
 
   // ── stripBuildEntryMarker (used by the screen's display path) ─────────────
 
   group('stripBuildEntryMarker for display', () {
     test('marker stripped, prose kept', () {
-      const raw = 'Entry ready.\n[[BUILD_ENTRY]]\n{"keys":["K"],"content":"C","constant":false}';
+      const raw =
+          'Entry ready.\n[[BUILD_ENTRY]]\n{"keys":["K"],"content":"C","constant":false}';
       final display = stripBuildEntryMarker(raw);
       expect(display.contains('[[BUILD_ENTRY]]'), isFalse);
       expect(display.contains('Entry ready.'), isTrue);
@@ -127,34 +158,60 @@ void main() {
   // We exercise the data-model layer directly (no UI / AppStore needed):
   //   extractEntryDraftFromReply → build edited LoreEntry → append to Lorebook.
 
-  group('save-append to lorebook', () {
-    test('appending a draft entry to an existing book increments entry count', () {
-      final book = Lorebook(
-        id: 'lore-1',
-        name: 'Test Book',
+  group('stream artifact cleanup', () {
+    test('finish sentinel is stripped from live display text', () {
+      const raw =
+          'What should the first entry cover?<<__PYRE_FINISH__:stop__>>';
+      expect(
+        lorebookCreatorDisplayText(raw),
+        'What should the first entry cover?',
       );
-      expect(book.entries, isEmpty);
-
-      const reply =
-          '[[BUILD_ENTRY]]\n'
-          '{"keys":["Harbor","Thalorim Harbor"],'
-          '"content":"The harbor of Thalorim.",'
-          '"constant":false,'
-          '"comment":"Location: Harbor"}';
-
-      final draft = extractEntryDraftFromReply(reply)!;
-      // Simulate user-edited keys / content via controller read-back.
-      final entry = LoreEntry(
-        id: draft.entry.id,
-        keys: draft.entry.keys,
-        content: draft.entry.content,
-        constant: draft.entry.constant,
-      );
-      book.entries.add(entry);
-
-      expect(book.entries.length, 1);
-      expect(book.entries.first.keys, contains('Harbor'));
     });
+
+    test('dropped-frame sentinel is stripped before parsing/display', () {
+      const raw = 'Entry ready.<<__PYRE_DROPPED__:2:FormatException__>>';
+      expect(stripLorebookStreamArtifacts(raw), 'Entry ready.');
+    });
+
+    test('extractEntryDraftFromReply tolerates finish sentinel after JSON', () {
+      const raw =
+          '[[BUILD_ENTRY]]\n'
+          '{"keys":["Harbor"],"content":"Harbor lore.","constant":false}'
+          '<<__PYRE_FINISH__:stop__>>';
+      final draft = extractEntryDraftFromReply(raw);
+      expect(draft, isNotNull);
+      expect(draft!.entry.keys, ['Harbor']);
+    });
+  });
+
+  group('save-append to lorebook', () {
+    test(
+      'appending a draft entry to an existing book increments entry count',
+      () {
+        final book = Lorebook(id: 'lore-1', name: 'Test Book');
+        expect(book.entries, isEmpty);
+
+        const reply =
+            '[[BUILD_ENTRY]]\n'
+            '{"keys":["Harbor","Thalorim Harbor"],'
+            '"content":"The harbor of Thalorim.",'
+            '"constant":false,'
+            '"comment":"Location: Harbor"}';
+
+        final draft = extractEntryDraftFromReply(reply)!;
+        // Simulate user-edited keys / content via controller read-back.
+        final entry = LoreEntry(
+          id: draft.entry.id,
+          keys: draft.entry.keys,
+          content: draft.entry.content,
+          constant: draft.entry.constant,
+        );
+        book.entries.add(entry);
+
+        expect(book.entries.length, 1);
+        expect(book.entries.first.keys, contains('Harbor'));
+      },
+    );
 
     test('two saves produce two distinct entries', () {
       final book = Lorebook(id: 'lore-2', name: 'Book 2');
@@ -168,12 +225,14 @@ void main() {
 
       for (final reply in [reply1, reply2]) {
         final draft = extractEntryDraftFromReply(reply)!;
-        book.entries.add(LoreEntry(
-          id: draft.entry.id,
-          keys: draft.entry.keys,
-          content: draft.entry.content,
-          constant: draft.entry.constant,
-        ));
+        book.entries.add(
+          LoreEntry(
+            id: draft.entry.id,
+            keys: draft.entry.keys,
+            content: draft.entry.content,
+            constant: draft.entry.constant,
+          ),
+        );
       }
 
       expect(book.entries.length, 2);
@@ -182,15 +241,18 @@ void main() {
       expect(book.entries[1].constant, isTrue);
     });
 
-    test('entries get unique ids across two extractEntryDraftFromReply calls', () {
-      const reply =
-          '[[BUILD_ENTRY]]\n'
-          '{"keys":["X"],"content":"Xeno lore.","constant":false}';
-      final d1 = extractEntryDraftFromReply(reply)!;
-      final d2 = extractEntryDraftFromReply(reply)!;
-      // entryJsonToLoreEntry always assigns a fresh id via newId.
-      expect(d1.entry.id, isNot(d2.entry.id));
-    });
+    test(
+      'entries get unique ids across two extractEntryDraftFromReply calls',
+      () {
+        const reply =
+            '[[BUILD_ENTRY]]\n'
+            '{"keys":["X"],"content":"Xeno lore.","constant":false}';
+        final d1 = extractEntryDraftFromReply(reply)!;
+        final d2 = extractEntryDraftFromReply(reply)!;
+        // entryJsonToLoreEntry always assigns a fresh id via newId.
+        expect(d1.entry.id, isNot(d2.entry.id));
+      },
+    );
   });
 
   // ── hasBuildEntryMarker (used by the stream onDone gate) ──────────────────

@@ -27,6 +27,13 @@ void main() {
       );
     });
 
+    test('lorebook mode → "Build a lorebook"', () {
+      expect(
+        creatorModeLabel(mode: 'lorebook', editingPersonaId: null),
+        'Build a lorebook',
+      );
+    });
+
     test('persona mode + editingPersonaId set → "Edit persona"', () {
       expect(
         creatorModeLabel(mode: 'persona', editingPersonaId: 'persona-abc'),
@@ -49,10 +56,7 @@ void main() {
     });
 
     test('null mode → null (no badge)', () {
-      expect(
-        creatorModeLabel(mode: null, editingPersonaId: null),
-        isNull,
-      );
+      expect(creatorModeLabel(mode: null, editingPersonaId: null), isNull);
     });
 
     test('unknown mode string → null (no badge)', () {

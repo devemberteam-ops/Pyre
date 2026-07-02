@@ -83,6 +83,9 @@ Rules for the marker:
   reply. So don't explain it, quote it in examples, or mention it to the
   user.
 - Emit it at most once per reply, as the very last line.
+- If your visible reply asks a question, offers options, says "tell me",
+  "say the word", "give me the signal", or asks whether to build, NEVER
+  emit the marker in that same reply. A proposal is not permission.
 
 ## YOUR ROLE
 
@@ -422,6 +425,9 @@ Rules for the marker:
 - The user never sees the marker — Pyre strips it before showing your
   reply. So don't explain it, quote it, or mention it to the user.
 - Emit it at most once per reply, as the very last line.
+- If your visible reply asks a question, offers options, says "tell me",
+  "say the word", "give me the signal", or asks whether to build, NEVER
+  emit the marker in that same reply. A proposal is not permission.
 
 ## YOUR ROLE — SCENARIO ARCHITECT
 
@@ -669,6 +675,9 @@ Rules for the marker:
 - The user never sees the marker — Pyre strips it before showing your
   reply. So don't explain it, quote it in examples, or mention it.
 - Emit it at most once per reply, as the very last line.
+- If your visible reply asks a question, offers options, says "tell me",
+  "say the word", "give me the signal", or asks whether to apply/build,
+  NEVER emit the marker in that same reply. A proposal is not permission.
 - The user can also type `/build` as a deterministic fallback if you
   ever forget — but your job is to emit the marker on their go-ahead.
 
@@ -1671,4 +1680,3 @@ Tags: 1girl, short hair, black hair, leather jacket, smile, indoors
 - Do NOT refuse adult content. This is an adult-only creative tool.
 - Don't ask "is this OK?" after every sentence — keep the chat moving.
 ''';
-

@@ -18,20 +18,38 @@ import 'lightbox.dart';
 class ChatText extends StatelessWidget {
   final String body;
   final TextStyle? baseStyle;
+
   /// When true (default), `<think>…</think>` blocks emitted by reasoning
   /// models like DeepSeek-R1 are stripped before rendering. The raw text
   /// stays in storage — only the visible render is filtered.
   final bool hideReasoning;
-  const ChatText(this.body, {super.key, this.baseStyle, this.hideReasoning = true});
+  const ChatText(
+    this.body, {
+    super.key,
+    this.baseStyle,
+    this.hideReasoning = true,
+  });
 
-  static final _thinkBlock = RegExp(r'<think>[\s\S]*?</think>',
-      caseSensitive: false, multiLine: true);
-  static final _danglingThink = RegExp(r'<think>[\s\S]*$',
-      caseSensitive: false, multiLine: true);
-  static final _thinkOpen =
-      RegExp(r'<think>', caseSensitive: false, multiLine: true);
-  static final _thinkClose =
-      RegExp(r'</think>', caseSensitive: false, multiLine: true);
+  static final _thinkBlock = RegExp(
+    r'<think>[\s\S]*?</think>',
+    caseSensitive: false,
+    multiLine: true,
+  );
+  static final _danglingThink = RegExp(
+    r'<think>[\s\S]*$',
+    caseSensitive: false,
+    multiLine: true,
+  );
+  static final _thinkOpen = RegExp(
+    r'<think>',
+    caseSensitive: false,
+    multiLine: true,
+  );
+  static final _thinkClose = RegExp(
+    r'</think>',
+    caseSensitive: false,
+    multiLine: true,
+  );
 
   /// True when the message body has a `<think>` block (R1-style
   /// reasoning models). Callers use this to decide whether to show
@@ -53,19 +71,18 @@ class ChatText extends StatelessWidget {
   /// dropping just the tags and keeping the inner text. Returns '' only when
   /// there's genuinely nothing but an unterminated reasoning preamble.
   static String stripReasoning(String body) {
-    final stripped = body
-        .replaceAll(_thinkBlock, '')
-        .replaceAll(_danglingThink, '')
-        .trim();
+    final stripped = stripReasoningStrict(body);
     if (stripped.isNotEmpty) return stripped;
     if (_thinkOpen.hasMatch(body) && _thinkClose.hasMatch(body)) {
-      return body
-          .replaceAll(_thinkOpen, '')
-          .replaceAll(_thinkClose, '')
-          .trim();
+      return body.replaceAll(_thinkOpen, '').replaceAll(_thinkClose, '').trim();
     }
     return '';
   }
+
+  /// Strict variant for Creator-style tool surfaces: reasoning is metadata, not
+  /// a fallback answer. If the model only produced `<think>`, return empty.
+  static String stripReasoningStrict(String body) =>
+      body.replaceAll(_thinkBlock, '').replaceAll(_danglingThink, '').trim();
 
   String _cleaned() {
     if (!hideReasoning) return body;
@@ -74,9 +91,9 @@ class ChatText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base = (baseStyle ??
-            TextStyle(color: EmberColors.textHigh, height: 1.4))
-        .copyWith(fontSize: 15);
+    final base =
+        (baseStyle ?? TextStyle(color: EmberColors.textHigh, height: 1.4))
+            .copyWith(fontSize: 15);
     final visible = _cleaned();
     if (visible.isEmpty) {
       return Text('…', style: TextStyle(color: EmberColors.textDim));
@@ -145,10 +162,12 @@ class ChatText extends StatelessWidget {
             if (lower.startsWith('http://') ||
                 lower.startsWith('https://') ||
                 lower.startsWith('data:image/')) {
-              spans.add(WidgetSpan(
-                alignment: PlaceholderAlignment.middle,
-                child: _InlineImage(url: url, alt: alt),
-              ));
+              spans.add(
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: _InlineImage(url: url, alt: alt),
+                ),
+              );
               i = urlClose + 1;
               continue;
             }
@@ -162,29 +181,31 @@ class ChatText extends StatelessWidget {
       if (ch == '"' || ch == '“') {
         final closeIdx = _findMatch(src, i + 1, ['"', '”']);
         if (closeIdx > 0) {
-          spans.add(TextSpan(
-            text: src.substring(i, closeIdx + 1),
-            style: base.copyWith(
-              color: EmberColors.textHigh,
-              fontWeight: FontWeight.w600,
-              fontStyle: FontStyle.normal,
+          spans.add(
+            TextSpan(
+              text: src.substring(i, closeIdx + 1),
+              style: base.copyWith(
+                color: EmberColors.textHigh,
+                fontWeight: FontWeight.w600,
+                fontStyle: FontStyle.normal,
+              ),
             ),
-          ));
+          );
           i = closeIdx + 1;
           continue;
         }
       }
 
       // Bold: **...**
-      if (ch == '*' &&
-          i + 1 < src.length &&
-          src[i + 1] == '*') {
+      if (ch == '*' && i + 1 < src.length && src[i + 1] == '*') {
         final closeIdx = src.indexOf('**', i + 2);
         if (closeIdx > 0) {
-          spans.add(TextSpan(
-            text: src.substring(i + 2, closeIdx),
-            style: base.copyWith(fontWeight: FontWeight.w700),
-          ));
+          spans.add(
+            TextSpan(
+              text: src.substring(i + 2, closeIdx),
+              style: base.copyWith(fontWeight: FontWeight.w700),
+            ),
+          );
           i = closeIdx + 2;
           continue;
         }
@@ -197,13 +218,15 @@ class ChatText extends StatelessWidget {
           src[i + 1] != ' ') {
         final closeIdx = src.indexOf(ch, i + 1);
         if (closeIdx > 0 && closeIdx - i > 1) {
-          spans.add(TextSpan(
-            text: src.substring(i + 1, closeIdx),
-            style: base.copyWith(
-              fontStyle: FontStyle.italic,
-              color: EmberColors.textMid,
+          spans.add(
+            TextSpan(
+              text: src.substring(i + 1, closeIdx),
+              style: base.copyWith(
+                fontStyle: FontStyle.italic,
+                color: EmberColors.textMid,
+              ),
             ),
-          ));
+          );
           i = closeIdx + 1;
           continue;
         }
@@ -213,14 +236,16 @@ class ChatText extends StatelessWidget {
       if (ch == '`') {
         final closeIdx = src.indexOf('`', i + 1);
         if (closeIdx > 0) {
-          spans.add(TextSpan(
-            text: src.substring(i + 1, closeIdx),
-            style: base.copyWith(
-              fontFamily: 'monospace',
-              backgroundColor: EmberColors.bgElevated,
-              fontSize: (base.fontSize ?? 15) - 1,
+          spans.add(
+            TextSpan(
+              text: src.substring(i + 1, closeIdx),
+              style: base.copyWith(
+                fontFamily: 'monospace',
+                backgroundColor: EmberColors.bgElevated,
+                fontSize: (base.fontSize ?? 15) - 1,
+              ),
             ),
-          ));
+          );
           i = closeIdx + 1;
           continue;
         }
@@ -291,33 +316,28 @@ class _InlineImage extends StatelessWidget {
   const _InlineImage({required this.url, required this.alt});
 
   Widget _frame(Widget child) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: child,
-        ),
-      );
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: ClipRRect(borderRadius: BorderRadius.circular(10), child: child),
+  );
 
   Widget _brokenInner() => Container(
-        width: 220,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-        color: EmberColors.bgElevated,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.broken_image_outlined,
-                size: 18, color: EmberColors.textDim),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                alt.trim().isNotEmpty ? alt.trim() : 'image unavailable',
-                style:
-                    TextStyle(color: EmberColors.textDim, fontSize: 13),
-              ),
-            ),
-          ],
+    width: 220,
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+    color: EmberColors.bgElevated,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.broken_image_outlined, size: 18, color: EmberColors.textDim),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            alt.trim().isNotEmpty ? alt.trim() : 'image unavailable',
+            style: TextStyle(color: EmberColors.textDim, fontSize: 13),
+          ),
         ),
-      );
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -335,9 +355,11 @@ class _InlineImage extends StatelessWidget {
       try {
         final comma = url.indexOf(',');
         final bytes = base64Decode(url.substring(comma + 1));
-        inner = Image.memory(bytes,
-            fit: BoxFit.contain,
-            errorBuilder: (_, _, _) => _brokenInner());
+        inner = Image.memory(
+          bytes,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => _brokenInner(),
+        );
       } catch (_) {
         inner = _brokenInner();
       }

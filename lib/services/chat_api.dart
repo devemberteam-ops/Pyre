@@ -15,7 +15,8 @@ import 'dart:convert';
 // web target is actually enabled. For now, desktop + mobile only.
 import 'dart:io' show SocketException;
 
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show debugPrint, kIsWeb, visibleForTesting;
 import 'package:http/http.dart' as http;
 
 import '../models/models.dart';
@@ -28,9 +29,13 @@ import 'streaming_http_client.dart';
 
 typedef ChatRole = String; // 'system' | 'user' | 'assistant'
 
+@visibleForTesting
+http.Client Function()? debugHttpClientFactory;
+
 class ChatTurn {
   final ChatRole role;
   final String content;
+
   /// Optional image data URLs (`data:image/<fmt>;base64,...`). When
   /// present, the message is serialised in OpenAI's multimodal
   /// content-array form so vision-capable models can see the image.
@@ -49,10 +54,53 @@ class ChatTurn {
       'content': [
         if (content.isNotEmpty) {'type': 'text', 'text': content},
         for (final url in images)
-          {'type': 'image_url', 'image_url': {'url': url}},
+          {
+            'type': 'image_url',
+            'image_url': {'url': url},
+          },
       ],
     };
   }
+}
+
+/// Wire format for browser -> LAN host chat proxy messages.
+///
+/// This mirrors [ChatTurn.toJson] so web/PWA keeps multimodal turns intact
+/// instead of flattening them to text before they reach the paired host.
+Map<String, dynamic> lanProxyMessageJson(ChatTurn turn) => turn.toJson();
+
+/// Decode one browser-proxied chat message back into [ChatTurn].
+///
+/// Accepts both the legacy string-content shape and OpenAI's multimodal
+/// content-array shape emitted by [ChatTurn.toJson].
+ChatTurn chatTurnFromLanProxyJson(Map raw) {
+  final role = (raw['role'] as String?) ?? 'user';
+  final content = raw['content'];
+  if (content is String) return ChatTurn(role, content);
+  if (content is List) {
+    final text = StringBuffer();
+    final images = <String>[];
+    for (final block in content) {
+      if (block is! Map) continue;
+      if (block['type'] == 'text') {
+        final t = block['text'];
+        if (t is String && t.isNotEmpty) {
+          if (text.isNotEmpty) text.write('\n\n');
+          text.write(t);
+        }
+      } else if (block['type'] == 'image_url') {
+        final img = block['image_url'];
+        final url = img is Map ? img['url'] : null;
+        if (url is String && url.isNotEmpty) images.add(url);
+      }
+    }
+    return ChatTurn(
+      role,
+      text.toString(),
+      imageDataUrls: images.isEmpty ? null : images,
+    );
+  }
+  return ChatTurn(role, '');
 }
 
 /// Wave CY.18.267 (Pyre 1.1): adapt [ChatTurn]s through the SillyTavern-style
@@ -104,14 +152,17 @@ enum ChatApiErrorKind {
   /// No connection at all — DNS lookup failed, no route to host, etc.
   /// User should check wifi/data, then retry.
   offline,
+
   /// Connection established but the server didn't respond in time, OR
   /// the stream stalled mid-flight. Likely a flaky network or an
   /// overloaded provider. Retry usually fixes it.
   timeout,
+
   /// Server responded with a 4xx / 5xx, or returned a malformed body.
   /// User probably has a misconfigured provider (wrong URL, bad
   /// API key, model name doesn't exist).
   server,
+
   /// Anything we couldn't classify — fallback bucket. Treated like
   /// `server` in the UI but worth a separate slot for diagnostics.
   other,
@@ -120,6 +171,7 @@ enum ChatApiErrorKind {
 class ChatApiError implements Exception {
   final int? statusCode;
   final String message;
+
   /// Wave CY.18.45: see [ChatApiErrorKind].
   final ChatApiErrorKind kind;
   ChatApiError(
@@ -132,17 +184,17 @@ class ChatApiError implements Exception {
   /// refused". Used by the network-error wrappers around the http
   /// calls.
   factory ChatApiError.offline([String? message]) => ChatApiError(
-        message ??
-            'You appear to be offline. Check your connection and try '
-                'again.',
-        kind: ChatApiErrorKind.offline,
-      );
+    message ??
+        'You appear to be offline. Check your connection and try '
+            'again.',
+    kind: ChatApiErrorKind.offline,
+  );
 
   /// Convenience factory for "server didn't respond in time".
   factory ChatApiError.timeout([String? message]) => ChatApiError(
-        message ?? 'The request timed out. The server may be busy.',
-        kind: ChatApiErrorKind.timeout,
-      );
+    message ?? 'The request timed out. The server may be busy.',
+    kind: ChatApiErrorKind.timeout,
+  );
 
   @override
   String toString() => 'ChatApiError($statusCode): $message';
@@ -302,8 +354,10 @@ Map<String, dynamic> buildRequestBody({
   // Wave CY.18.267: reshape the assembled message array to this provider's
   // configured format right before serialising. `none` (default) returns the
   // same list reference, so the body stays byte-identical for existing users.
-  final processed =
-      applyPromptPostProcessing(messages, provider.promptPostProcessing);
+  final processed = applyPromptPostProcessing(
+    messages,
+    provider.promptPostProcessing,
+  );
   final body = <String, dynamic>{
     // Per-provider extra params come FIRST so Pyre-managed fields
     // (model, messages, stream, sampling) win on any conflict. The
@@ -341,16 +395,14 @@ Map<String, dynamic> buildRequestBody({
 /// Parse a `data:<media>;base64,<data>` URL into an Anthropic image block.
 /// Returns null when [dataUrl] isn't a base64 data URL.
 Map<String, dynamic>? anthropicImageBlock(String dataUrl) {
-  final m =
-      RegExp(r'^data:([^;]+);base64,(.*)$', dotAll: true).firstMatch(dataUrl);
+  final m = RegExp(
+    r'^data:([^;]+);base64,(.*)$',
+    dotAll: true,
+  ).firstMatch(dataUrl);
   if (m == null) return null;
   return {
     'type': 'image',
-    'source': {
-      'type': 'base64',
-      'media_type': m.group(1),
-      'data': m.group(2),
-    },
+    'source': {'type': 'base64', 'media_type': m.group(1), 'data': m.group(2)},
   };
 }
 
@@ -431,12 +483,12 @@ Map<String, dynamic> buildAnthropicBody({
         final a = prev is List
             ? List<dynamic>.from(prev)
             : <dynamic>[
-                {'type': 'text', 'text': prev}
+                {'type': 'text', 'text': prev},
               ];
         final b = content is List
             ? content
             : <dynamic>[
-                {'type': 'text', 'text': content}
+                {'type': 'text', 'text': content},
               ];
         msgs.last['content'] = [...a, ...b];
       }
@@ -565,7 +617,7 @@ Stream<String> _streamAnthropic({
     stop: stop,
     extraParams: provider.extraParams.isEmpty ? null : provider.extraParams,
   );
-  final client = http.Client();
+  final client = debugHttpClientFactory?.call() ?? http.Client();
   try {
     // Build a fresh POST for the current `body`. Called twice at most: once
     // normally, and once on a param-error retry with the minimal-safe body.
@@ -586,13 +638,16 @@ Stream<String> _streamAnthropic({
     // Send and classify network-level errors.
     Future<http.StreamedResponse> send() async {
       try {
-        return await client.send(buildReq()).timeout(
-          provider.kind == ProviderKind.localhost
-              ? _kLocalConnectTimeout
-              : const Duration(seconds: 25),
-          onTimeout: () => throw ChatApiError.timeout(
-              'Timed out connecting to the Anthropic provider.'),
-        );
+        return await client
+            .send(buildReq())
+            .timeout(
+              provider.kind == ProviderKind.localhost
+                  ? _kLocalConnectTimeout
+                  : const Duration(seconds: 25),
+              onTimeout: () => throw ChatApiError.timeout(
+                'Timed out connecting to the Anthropic provider.',
+              ),
+            );
       } catch (e) {
         throw _classifyNetworkError(e);
       }
@@ -638,15 +693,18 @@ Stream<String> _streamAnthropic({
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .timeout(
-      provider.kind == ProviderKind.localhost
-          ? _kLocalStreamStallTimeout
-          : const Duration(seconds: 45),
-      onTimeout: (sink) {
-        sink.addError(ChatApiError(
-            'Stream stalled — no data from the Anthropic provider for a while.'));
-        sink.close();
-      },
-    );
+          provider.kind == ProviderKind.localhost
+              ? _kLocalStreamStallTimeout
+              : const Duration(seconds: 45),
+          onTimeout: (sink) {
+            sink.addError(
+              ChatApiError(
+                'Stream stalled — no data from the Anthropic provider for a while.',
+              ),
+            );
+            sink.close();
+          },
+        );
     await for (final line in lines) {
       if (line.isEmpty) continue;
       // Anthropic SSE interleaves `event:` and `data:` lines; we only need data.
@@ -798,9 +856,10 @@ Stream<String> streamChatCompletion({
   // LLM directly (CORS + no SecureKeys would mean exposing API keys in
   // JS). Instead we POST to `/llm/stream` on the paired server, which
   // makes the upstream call with ITS own SecureKeys-stored API key and
-  // streams the tokens back as SSE. Text-only path — vision attachments
-  // and reasoning don't round-trip cleanly through the proxy yet (Wave
-  // 72+ follow-up). Native builds skip this entirely.
+  // streams the tokens back as SSE. The proxy preserves OpenAI-style
+  // multimodal image blocks and reasoning deltas, while native provider
+  // management/fallback/model browsing remain native-only. Native builds
+  // skip this entirely.
   if (kIsWeb && LanClient.instance.isPaired) {
     yield* _streamViaLanProxy(
       provider: provider,
@@ -855,21 +914,23 @@ Stream<String> streamChatCompletion({
     if (!shouldLog || logDone) return;
     logDone = true;
     try {
-      LlmDebugLog.instance.record(LlmCallRecord(
-        ts: DateTime.now().millisecondsSinceEpoch,
-        feature: debugTag,
-        provider: provider.name,
-        model: provider.model,
-        messages: (body['messages'] as List?) ?? const <dynamic>[],
-        sampling: <String, dynamic>{
-          for (final e in body.entries)
-            if (e.key != 'messages') e.key: e.value,
-        },
-        response: logBuf?.toString() ?? '',
-        finishReason: logFinishReason,
-        durationMs: logSw?.elapsedMilliseconds ?? 0,
-        parseOutcome: parseOutcome,
-      ));
+      LlmDebugLog.instance.record(
+        LlmCallRecord(
+          ts: DateTime.now().millisecondsSinceEpoch,
+          feature: debugTag,
+          provider: provider.name,
+          model: provider.model,
+          messages: (body['messages'] as List?) ?? const <dynamic>[],
+          sampling: <String, dynamic>{
+            for (final e in body.entries)
+              if (e.key != 'messages') e.key: e.value,
+          },
+          response: logBuf?.toString() ?? '',
+          finishReason: logFinishReason,
+          durationMs: logSw?.elapsedMilliseconds ?? 0,
+          parseOutcome: parseOutcome,
+        ),
+      );
     } catch (_) {
       // Never let diagnostics break a generation.
     }
@@ -890,7 +951,7 @@ Stream<String> streamChatCompletion({
     return r;
   }
 
-  final client = http.Client();
+  final client = debugHttpClientFactory?.call() ?? http.Client();
   try {
     // Wave CY.18.6: explicit timeouts so a silent stall surfaces as a
     // real error instead of leaving the chat bubble stuck on
@@ -919,14 +980,17 @@ Stream<String> streamChatCompletion({
         // Wave CY.18.120: local servers get a much longer connect window
         // because a cold model can JIT-load for minutes before sending any
         // response headers; hosted providers keep the tight 25s window.
-        return await client.send(r).timeout(
-          provider.kind == ProviderKind.localhost
-              ? _kLocalConnectTimeout
-              : const Duration(seconds: 25),
-          onTimeout: () => throw ChatApiError.timeout(
-              'Timed out connecting to the provider. For local servers a '
-              'model may still be loading; check the server and try again.'),
-        );
+        return await client
+            .send(r)
+            .timeout(
+              provider.kind == ProviderKind.localhost
+                  ? _kLocalConnectTimeout
+                  : const Duration(seconds: 25),
+              onTimeout: () => throw ChatApiError.timeout(
+                'Timed out connecting to the provider. For local servers a '
+                'model may still be loading; check the server and try again.',
+              ),
+            );
       } catch (e) {
         throw _classifyNetworkError(e);
       }
@@ -974,8 +1038,7 @@ Stream<String> streamChatCompletion({
     // to one-shot parsing so the caller still gets the response.
     // We only switch to JSON when the type is EXPLICITLY application/
     // json — missing / generic types still try SSE first.
-    final contentType =
-        (resp.headers['content-type'] ?? '').toLowerCase();
+    final contentType = (resp.headers['content-type'] ?? '').toLowerCase();
     final isJson = contentType.contains('application/json');
     if (isJson) {
       // NOTE: named `jsonBody`, not `body`, to avoid shadowing the outer
@@ -990,14 +1053,15 @@ Stream<String> streamChatCompletion({
       // window (a cold model can be slow to produce the full body); cloud
       // keeps the tight 45s.
       final jsonBody = await resp.stream.bytesToString().timeout(
-            provider.kind == ProviderKind.localhost
-                ? _kLocalStreamStallTimeout
-                : const Duration(seconds: 45),
-            onTimeout: () => throw ChatApiError.timeout(
-                'The provider returned a non-streamed response but stopped '
-                'sending data before the body finished. The connection is '
-                'open but the model has stopped responding.'),
-          );
+        provider.kind == ProviderKind.localhost
+            ? _kLocalStreamStallTimeout
+            : const Duration(seconds: 45),
+        onTimeout: () => throw ChatApiError.timeout(
+          'The provider returned a non-streamed response but stopped '
+          'sending data before the body finished. The connection is '
+          'open but the model has stopped responding.',
+        ),
+      );
       try {
         final obj = jsonDecode(jsonBody);
         final choices = obj['choices'];
@@ -1018,13 +1082,14 @@ Stream<String> streamChatCompletion({
             // OpenRouter→DeepSeek V4 Pro setup (Wave BS trail proved
             // the buffer reached `_streamArchitectTurn` empty — the
             // reasoning was already lost upstream of that point).
-            final reasoning = (msg['reasoning_content'] is String &&
+            final reasoning =
+                (msg['reasoning_content'] is String &&
                     (msg['reasoning_content'] as String).isNotEmpty)
                 ? msg['reasoning_content'] as String
                 : (msg['reasoning'] is String &&
-                        (msg['reasoning'] as String).isNotEmpty)
-                    ? msg['reasoning'] as String
-                    : null;
+                      (msg['reasoning'] as String).isNotEmpty)
+                ? msg['reasoning'] as String
+                : null;
             if (reasoning != null) {
               logBuf?.write('<think>$reasoning</think>');
               yield '<think>$reasoning</think>';
@@ -1046,7 +1111,8 @@ Stream<String> streamChatCompletion({
         }
       } catch (e) {
         throw ChatApiError(
-            'Non-SSE response and JSON parse failed: $e\n\nBody:\n${scrubProviderBody(jsonBody, apiKey: provider.apiKey)}');
+          'Non-SSE response and JSON parse failed: $e\n\nBody:\n${scrubProviderBody(jsonBody, apiKey: provider.apiKey)}',
+        );
       }
       return;
     }
@@ -1081,16 +1147,19 @@ Stream<String> streamChatCompletion({
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .timeout(
-      provider.kind == ProviderKind.localhost
-          ? _kLocalStreamStallTimeout
-          : const Duration(seconds: 45),
-      onTimeout: (sink) {
-        sink.addError(ChatApiError(
-            'Stream stalled — no data from the server for a while. '
-            'The connection is open but the model has stopped responding.'));
-        sink.close();
-      },
-    );
+          provider.kind == ProviderKind.localhost
+              ? _kLocalStreamStallTimeout
+              : const Duration(seconds: 45),
+          onTimeout: (sink) {
+            sink.addError(
+              ChatApiError(
+                'Stream stalled — no data from the server for a while. '
+                'The connection is open but the model has stopped responding.',
+              ),
+            );
+            sink.close();
+          },
+        );
     var openedThink = false;
     // Wave BY: capture finish_reason as it arrives — last non-null
     // value wins. The OpenAI spec puts it on the final SSE delta
@@ -1138,8 +1207,8 @@ Stream<String> streamChatCompletion({
             final reasoning = (rcRaw is String && rcRaw.isNotEmpty)
                 ? rcRaw
                 : (rRaw is String && rRaw.isNotEmpty)
-                    ? rRaw
-                    : extractReasoningDetailsText(delta['reasoning_details']);
+                ? rRaw
+                : extractReasoningDetailsText(delta['reasoning_details']);
             if (reasoning != null) {
               if (!openedThink) {
                 logBuf?.write('<think>');
@@ -1224,8 +1293,9 @@ const String pyreFinishSentinelClose = '__>>';
 /// strip the sentinel before rendering, and by callers that want to
 /// read the captured reason.
 final RegExp pyreFinishSentinelRegex = RegExp(
-    r'<<__PYRE_FINISH__:([a-z_]+)__>>',
-    caseSensitive: false);
+  r'<<__PYRE_FINISH__:([a-z_]+)__>>',
+  caseSensitive: false,
+);
 
 /// Wave CY.18.42: dropped-frame sentinel. Emitted at end-of-stream
 /// when one or more SSE frames couldn't be parsed. Format:
@@ -1238,8 +1308,9 @@ const String pyreDroppedFramesSentinelClose = '__>>';
 /// Matches the dropped-frames sentinel. Capture 1 is count, capture 2
 /// is the runtime type of the last drop error.
 final RegExp pyreDroppedFramesRegex = RegExp(
-    r'<<__PYRE_DROPPED__:(\d+):([A-Za-z_][A-Za-z0-9_]*)__>>',
-    caseSensitive: false);
+  r'<<__PYRE_DROPPED__:(\d+):([A-Za-z_][A-Za-z0-9_]*)__>>',
+  caseSensitive: false,
+);
 
 /// One-shot (non-streamed) completion. Returns the full assistant text.
 /// [stop] mirrors the streaming variant — see [streamChatCompletion].
@@ -1286,8 +1357,10 @@ Future<String> completeChat({
   // Wave CY.18.267: same reshape as the streaming path (buildRequestBody), so
   // the one-shot transport honours the provider's format too. `none` (default)
   // is a no-op → byte-identical body.
-  final processed =
-      applyPromptPostProcessing(messages, provider.promptPostProcessing);
+  final processed = applyPromptPostProcessing(
+    messages,
+    provider.promptPostProcessing,
+  );
   // Mega-audit 2026-06-04: `reqBody` is non-final so the universal param-error
   // retry below can swap in the minimal-safe body; the diagnostics closure
   // captures it by reference and logs whichever body actually ran.
@@ -1310,25 +1383,28 @@ Future<String> completeChat({
   }) {
     if (!shouldLog) return;
     try {
-      LlmDebugLog.instance.record(LlmCallRecord(
-        ts: DateTime.now().millisecondsSinceEpoch,
-        feature: debugTag,
-        provider: provider.name,
-        model: provider.model,
-        messages: (reqBody['messages'] as List?) ?? const <dynamic>[],
-        sampling: <String, dynamic>{
-          for (final e in reqBody.entries)
-            if (e.key != 'messages') e.key: e.value,
-        },
-        response: response,
-        finishReason: finishReason,
-        durationMs: logSw?.elapsedMilliseconds ?? 0,
-        parseOutcome: parseOutcome,
-      ));
+      LlmDebugLog.instance.record(
+        LlmCallRecord(
+          ts: DateTime.now().millisecondsSinceEpoch,
+          feature: debugTag,
+          provider: provider.name,
+          model: provider.model,
+          messages: (reqBody['messages'] as List?) ?? const <dynamic>[],
+          sampling: <String, dynamic>{
+            for (final e in reqBody.entries)
+              if (e.key != 'messages') e.key: e.value,
+          },
+          response: response,
+          finishReason: finishReason,
+          durationMs: logSw?.elapsedMilliseconds ?? 0,
+          parseOutcome: parseOutcome,
+        ),
+      );
     } catch (_) {
       // Never let diagnostics break a generation.
     }
   }
+
   // Wave CY.18.6: hard timeout on the one-shot completion. Used by
   // the long-term memory summariser (fire-and-forget after each
   // message). 75s covers a slow reasoning model writing a 2-3
@@ -1342,7 +1418,8 @@ Future<String> completeChat({
   // instead of a clean "looks like the device is offline" entry.
   // POST the current `reqBody`. Called twice at most: normally, then once
   // more on a param-error retry with the minimal-safe body.
-  Future<http.Response> post() => http.post(
+  Future<http.Response> post() => http
+      .post(
         url,
         headers: {
           'Content-Type': 'application/json',
@@ -1351,15 +1428,17 @@ Future<String> completeChat({
           ..._sanitiseHeaders(provider.headers),
         },
         body: jsonEncode(reqBody),
-      ).timeout(
+      )
+      .timeout(
         // Wave CY.18.120: local servers get a 5-minute one-shot window for a
         // cold model load; hosted providers keep the original 75s.
         provider.kind == ProviderKind.localhost
             ? _kLocalCompleteTimeout
             : const Duration(seconds: 75),
         onTimeout: () => throw ChatApiError.timeout(
-            'Request timed out. The model never produced a response (a local '
-            'server may still be loading the model).'),
+          'Request timed out. The model never produced a response (a local '
+          'server may still be loading the model).',
+        ),
       );
 
   http.Response resp;
@@ -1390,15 +1469,14 @@ Future<String> completeChat({
         throw classified;
       }
       if (resp.statusCode >= 400) {
-        emitDebugRecord(
-            response: '', parseOutcome: 'http ${resp.statusCode}');
+        emitDebugRecord(response: '', parseOutcome: 'http ${resp.statusCode}');
         throw ChatApiError(
-            scrubProviderBody(resp.body, apiKey: provider.apiKey),
-            statusCode: resp.statusCode);
+          scrubProviderBody(resp.body, apiKey: provider.apiKey),
+          statusCode: resp.statusCode,
+        );
       }
     } else {
-      emitDebugRecord(
-          response: '', parseOutcome: 'http ${resp.statusCode}');
+      emitDebugRecord(response: '', parseOutcome: 'http ${resp.statusCode}');
       throw ChatApiError(scrubbed, statusCode: resp.statusCode);
     }
   }
@@ -1481,9 +1559,11 @@ Future<String> completeChatStreamed({
   if (rawSink != null) {
     // Strip only the Pyre sentinels — keep `<think>` so the build can scan the
     // reasoning channel for a JSON object the model put there.
-    rawSink.write(raw
-        .replaceAll(pyreFinishSentinelRegex, '')
-        .replaceAll(pyreDroppedFramesRegex, ''));
+    rawSink.write(
+      raw
+          .replaceAll(pyreFinishSentinelRegex, '')
+          .replaceAll(pyreDroppedFramesRegex, ''),
+    );
   }
   final stripped = stripStreamArtifacts(raw);
   // Wave CY.18.270: visible content wins; only when it's empty AND the caller
@@ -1499,9 +1579,11 @@ Future<String> completeChatStreamed({
 /// Strip Pyre's internal streaming sentinels (finish-reason, dropped-frame)
 /// and any `<think>…</think>` reasoning from accumulated stream text,
 /// leaving just the model's prose. Pure + testable.
-String stripStreamArtifacts(String raw) => _stripThinkBlocks(raw
-    .replaceAll(pyreFinishSentinelRegex, '')
-    .replaceAll(pyreDroppedFramesRegex, ''));
+String stripStreamArtifacts(String raw) => _stripThinkBlocks(
+  raw
+      .replaceAll(pyreFinishSentinelRegex, '')
+      .replaceAll(pyreDroppedFramesRegex, ''),
+);
 
 /// Wave CY.18.270: recover the REASONING-channel text from an accumulated
 /// stream when the visible/stripped content came back empty. The streaming
@@ -1519,11 +1601,9 @@ String stripStreamArtifacts(String raw) => _stripThinkBlocks(raw
 /// sentinels removed, any nested tags stripped, trimmed), or null when there
 /// is no usable reasoning text. Pure + testable.
 String? recoverReasoningFromRaw(String raw) {
-  final cleaned =
-      raw.replaceAll(pyreFinishSentinelRegex, '').replaceAll(
-            pyreDroppedFramesRegex,
-            '',
-          );
+  final cleaned = raw
+      .replaceAll(pyreFinishSentinelRegex, '')
+      .replaceAll(pyreDroppedFramesRegex, '');
   final match = _completionThinkBlock.firstMatch(cleaned);
   if (match == null) return null;
   // Inner text of `<think>…</think>` with any nested tags stripped.
@@ -1539,10 +1619,16 @@ String? recoverReasoningFromRaw(String raw) {
 // Regexes for the one-shot completion text extraction. Mirror
 // ChatText.stripReasoning (widgets/chat_text.dart) but live here so the
 // service layer doesn't import Flutter material. Kept in sync deliberately.
-final RegExp _completionThinkBlock =
-    RegExp(r'<think>[\s\S]*?</think>', caseSensitive: false, multiLine: true);
-final RegExp _completionDanglingThink =
-    RegExp(r'<think>[\s\S]*$', caseSensitive: false, multiLine: true);
+final RegExp _completionThinkBlock = RegExp(
+  r'<think>[\s\S]*?</think>',
+  caseSensitive: false,
+  multiLine: true,
+);
+final RegExp _completionDanglingThink = RegExp(
+  r'<think>[\s\S]*$',
+  caseSensitive: false,
+  multiLine: true,
+);
 
 /// Strip every complete `<think>…</think>` block plus a dangling open tail
 /// from a one-shot completion. Pure; mirrors ChatText.stripReasoning.
@@ -1578,13 +1664,14 @@ String extractCompletionMessageText(Map msg) {
   }
   // Reasoning-only fallback. Same field precedence as the streaming branch:
   // prefer `reasoning_content`, then `reasoning`.
-  final reasoning = (msg['reasoning_content'] is String &&
+  final reasoning =
+      (msg['reasoning_content'] is String &&
           (msg['reasoning_content'] as String).trim().isNotEmpty)
       ? msg['reasoning_content'] as String
       : (msg['reasoning'] is String &&
-              (msg['reasoning'] as String).trim().isNotEmpty)
-          ? msg['reasoning'] as String
-          : '';
+            (msg['reasoning'] as String).trim().isNotEmpty)
+      ? msg['reasoning'] as String
+      : '';
   return _stripThinkBlocks(reasoning);
 }
 
@@ -1608,10 +1695,14 @@ Future<void> warmUpProvider(ApiProvider provider) async {
   // attacker-chosen internal address with no user action. The explicit
   // localhost kind (LM Studio/Ollama) is exempt: reaching a local/LAN
   // server is its entire purpose.
-  if (!isProviderHostAllowed(provider.baseUrl,
-      isLocalhostKind: provider.kind == ProviderKind.localhost)) {
-    debugPrint('warmUpProvider(${provider.name}) skipped: '
-        'non-localhost provider points at a private/internal host');
+  if (!isProviderHostAllowed(
+    provider.baseUrl,
+    isLocalhostKind: provider.kind == ProviderKind.localhost,
+  )) {
+    debugPrint(
+      'warmUpProvider(${provider.name}) skipped: '
+      'non-localhost provider points at a private/internal host',
+    );
     return;
   }
   try {
@@ -1702,8 +1793,7 @@ Stream<String> _streamViaLanProxy({
   final baseUrl = lan.baseUrl;
   final bearer = lan.bearerToken;
   if (baseUrl == null || bearer == null) {
-    throw ChatApiError(
-        'LAN client not paired — open More > Connect to LAN.');
+    throw ChatApiError('LAN client not paired — open More > Connect to LAN.');
   }
   final body = jsonEncode({
     // 1.1.2: deliberately DON'T send a providerId. The web client's local
@@ -1712,9 +1802,7 @@ Stream<String> _streamViaLanProxy({
     // Omitting it makes the host proxy with its OWN active provider, which is
     // also exactly the budget-drain guard the host wants (a paired device can
     // only ever use the host's active provider, never pick an expensive one).
-    'messages': messages
-        .map((m) => {'role': m.role, 'content': m.content})
-        .toList(),
+    'messages': messages.map(lanProxyMessageJson).toList(),
     if (stop != null && stop.isNotEmpty) 'stop': stop,
   });
   final req = http.Request('POST', Uri.parse('$baseUrl/llm/stream'));
@@ -1734,23 +1822,26 @@ Stream<String> _streamViaLanProxy({
     // server can JIT-load weights for minutes before the desktop forwards
     // any bytes — a hard 25s would abort the proxy mid-load. Cloud-backed
     // providers keep the tight 25s window.
-    final resp = await httpClient.send(req).timeout(
-      provider.kind == ProviderKind.localhost
-          ? _kLocalConnectTimeout
-          : const Duration(seconds: 25),
-      onTimeout: () {
-        throw ChatApiError(
-            'LAN proxy timeout - is the PC server still running?');
-      },
-    );
+    final resp = await httpClient
+        .send(req)
+        .timeout(
+          provider.kind == ProviderKind.localhost
+              ? _kLocalConnectTimeout
+              : const Duration(seconds: 25),
+          onTimeout: () {
+            throw ChatApiError(
+              'LAN proxy timeout - is the PC server still running?',
+            );
+          },
+        );
     if (resp.statusCode == 401) {
       throw ChatApiError(
-          'LAN bearer revoked - re-pair from More > Connect to LAN.');
+        'LAN bearer revoked - re-pair from More > Connect to LAN.',
+      );
     }
     if (resp.statusCode != 200) {
       final errBody = await resp.stream.bytesToString();
-      throw ChatApiError(
-          'LAN proxy HTTP ${resp.statusCode}: $errBody');
+      throw ChatApiError('LAN proxy HTTP ${resp.statusCode}: $errBody');
     }
     // SSE buffering. Events are separated by blank line; within each
     // event a `data:` line carries the chunk. `event: error` signals
@@ -1765,11 +1856,19 @@ Stream<String> _streamViaLanProxy({
         ? _kLocalStreamStallTimeout
         : const Duration(seconds: 45);
     await for (final chunk
-        in resp.stream.transform(utf8.decoder).timeout(stall, onTimeout: (sink) {
-      sink.addError(ChatApiError(
-          'LAN proxy stalled - no data from the PC server. It may have lost '
-          'its upstream connection.'));
-    })) {
+        in resp.stream
+            .transform(utf8.decoder)
+            .timeout(
+              stall,
+              onTimeout: (sink) {
+                sink.addError(
+                  ChatApiError(
+                    'LAN proxy stalled - no data from the PC server. It may have lost '
+                    'its upstream connection.',
+                  ),
+                );
+              },
+            )) {
       buf.write(chunk);
       while (true) {
         final s = buf.toString();
