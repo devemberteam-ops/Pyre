@@ -4904,35 +4904,87 @@ class _MessageBubbleState extends State<_MessageBubble> {
         onSecondaryTap: widget.onLongPress,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 24),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: EmberColors.bgElevated,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: EmberColors.stroke),
-            ),
-            // The "Edit text" action flips edit mode for system bubbles.
-            child: widget.isEditing
-                ? _InlineMessageEditor(
-                    initialText: m.text,
-                    onCommit: widget.onCommitEdit ?? (_) {},
-                    onCancel: widget.onCancelEdit ?? () {},
-                  )
-                : Text(
-                    // Wave CY.18.157: system bubbles also substitute
-                    // {{user}}/{{char}} at display time.
-                    _fillNamePlaceholders(
-                      m.text,
-                      charName: widget.character?.name,
-                      personaName: widget.persona?.name,
-                    ),
-                    style: TextStyle(
-                      color: EmberColors.textMid,
-                      fontStyle: FontStyle.italic,
-                      fontSize: 13,
-                    ),
-                    textAlign: TextAlign.center,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: EmberColors.bgElevated,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: EmberColors.stroke),
+                ),
+                // The "Edit text" action flips edit mode for aux bubbles.
+                child: widget.isEditing
+                    ? _InlineMessageEditor(
+                        initialText: m.text,
+                        onCommit: widget.onCommitEdit ?? (_) {},
+                        onCancel: widget.onCancelEdit ?? () {},
+                      )
+                    : Text(
+                        // Wave CY.18.157: aux bubbles also substitute
+                        // {{user}}/{{char}} at display time.
+                        _fillNamePlaceholders(
+                          m.text,
+                          charName: widget.character?.name,
+                          personaName: widget.persona?.name,
+                        ),
+                        style: TextStyle(
+                          color: EmberColors.textMid,
+                          fontStyle: FontStyle.italic,
+                          fontSize: 13,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+              ),
+              // 2026-07 (owner): branched aux notes (OOC) get the same
+              // variant NAVIGATION regular messages have — a compact
+              // centred `< n/N >` row, always visible when there is more
+              // than one variant (no tap-to-flash dance on the small note).
+              // Branching itself stays in the long-press menu.
+              if (m.variants.length > 1 && widget.onSelectVariant != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _LateralChip(
+                        icon: Icons.chevron_left,
+                        onPressed: m.selectedVariant > 0
+                            ? () {
+                                if (_isMobileForHaptics) {
+                                  HapticFeedback.selectionClick();
+                                }
+                                widget
+                                    .onSelectVariant!(m.selectedVariant - 1);
+                              }
+                            : null,
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: Text(
+                          '${m.selectedVariant + 1}/${m.variants.length}',
+                          style: TextStyle(
+                              color: EmberColors.textMid, fontSize: 10),
+                        ),
+                      ),
+                      _LateralChip(
+                        icon: Icons.chevron_right,
+                        onPressed: m.selectedVariant < m.variants.length - 1
+                            ? () {
+                                if (_isMobileForHaptics) {
+                                  HapticFeedback.selectionClick();
+                                }
+                                widget
+                                    .onSelectVariant!(m.selectedVariant + 1);
+                              }
+                            : null,
+                      ),
+                    ],
                   ),
+                ),
+            ],
           ),
         ),
       );
