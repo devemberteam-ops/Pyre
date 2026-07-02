@@ -1386,7 +1386,17 @@ class _ChatScreenState extends State<ChatScreen> {
         // null = NO_CHANGE (normal) OR an error. Only surface a SnackBar when the
         // error log actually has an entry this session, once, to avoid spamming
         // on normal no-change cycles. (Mirrors the Wave 160 memory SnackBar.)
-        if (!_liveSheetFailureShown && mounted && lsheet.LiveSheetErrors.log.isNotEmpty) {
+        //
+        // LS-2 (service-level lock): when generateLiveSheetUpdate returned null
+        // because a MANUAL update/seed (from LiveSheetScreen) is already in
+        // flight for this chat, the lock is still held and LiveSheetErrors has
+        // NO new entry for this call — so the failure toast would be
+        // misleading. Skip it; the manual path's own UI already covers the
+        // user-facing feedback (mirrors the memory.dart C1 skip above).
+        if (!_liveSheetFailureShown &&
+            mounted &&
+            !lsheet.isLiveSheetInFlight(chat.id) &&
+            lsheet.LiveSheetErrors.log.isNotEmpty) {
           _liveSheetFailureShown = true;
           final reason = lsheet.LiveSheetErrors.log.first
               .replaceFirst(RegExp(r'^generateLiveSheetUpdate failed: '), '');

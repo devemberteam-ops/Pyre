@@ -159,6 +159,21 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
       return;
     }
 
+    // LS-2: the service-level lock in live_sheet.dart is the source of truth
+    // for "already running" (it also catches a concurrent background
+    // auto-update from chat_screen.dart, which this screen's own `_updating`
+    // latch can't see). Bail with a clear message instead of launching a
+    // call that generateLiveSheetUpdate would immediately no-op.
+    if (lsheet.isLiveSheetInFlight(chat.id)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text(
+                'A Live Sheet update is already in progress — try again in a moment.')),
+      );
+      return;
+    }
+
     // Wave CY.18.245: branch on whether there are new messages since the
     // active snapshot's anchor. The common confusing case — enabling Live
     // Sheet mid-chat — anchors the snapshot at the latest message, so there
@@ -180,8 +195,15 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
           lsheet.appendLiveSheetSnapshot(chat, snap);
           store.touchChat(chat); // F1: snapshot update syncs
         } else {
+          // LS-2: distinguish "a concurrent call grabbed the lock first" (rare
+          // race between this check and the await above) from a genuine
+          // no-op cycle, so the user isn't told "no changes" when the real
+          // reason is a collision with another in-flight update.
+          final msg = lsheet.isLiveSheetInFlight(chat.id)
+              ? 'A Live Sheet update is already in progress — try again in a moment.'
+              : 'No significant changes detected.';
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No significant changes detected.')),
+            SnackBar(content: Text(msg)),
           );
         }
       } finally {
@@ -301,8 +323,14 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
         }
         store.touchChat(chat); // F1: seeded entity sections sync
       } else {
+        // LS-2: a null return can mean the service-level lock was already
+        // held (a concurrent auto/manual update or another seed for this
+        // chat) rather than a genuine LLM failure — say so when detectable.
+        final msg = lsheet.isLiveSheetInFlight(chat.id)
+            ? 'A Live Sheet update is already in progress — try again in a moment.'
+            : 'Could not generate sheet data.';
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not generate sheet data.')),
+          SnackBar(content: Text(msg)),
         );
       }
     } finally {

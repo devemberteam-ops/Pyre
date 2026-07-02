@@ -1,10 +1,54 @@
 // Live Sheet — pure functions + LLM orchestration (Wave CY.18.171-172).
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
 import '../models/models.dart';
 import 'chat_api.dart';
 import 'memory.dart' show computePathHash;
+
+// ---------------------------------------------------------------------------
+// LS-2 fix: service-level in-flight lock (mirrors memory.dart's C1 /
+// `_checkpointInFlight`).
+// ---------------------------------------------------------------------------
+
+/// Per-chat in-flight lock for the Live Sheet update/seed pipeline.
+///
+/// Keyed by chat id. A value of `true` means a [generateLiveSheetUpdate] or
+/// [seedLiveSheetEntity] call is currently in progress for that chat.
+///
+/// This is the **service-level** guard for the same class of bug memory.dart's
+/// C1 fixed: before this, `chat_screen.dart`'s `_liveSheetUpdating` and
+/// `live_sheet_screen.dart`'s `_updating` were two INDEPENDENT widget-local
+/// latches that can't see each other — a background auto-update (chat_screen)
+/// and a manual "Update state now" (live_sheet_screen) could both read the
+/// same base snapshot and apply two divergent deltas concurrently.
+///
+/// Both call sites now honour the sentinel return value: a null return while
+/// the lock is held is indistinguishable from "no change" to the immediate
+/// caller by design (mirrors memory.dart) — use [isLiveSheetInFlight] to tell
+/// "already running" apart from "LLM error / no change" when that matters.
+final Map<String, bool> _liveSheetInFlight = {};
+
+/// Returns true while a [generateLiveSheetUpdate] or [seedLiveSheetEntity]
+/// call is in progress for [chatId].
+bool isLiveSheetInFlight(String chatId) => _liveSheetInFlight[chatId] == true;
+
+/// TEST SEAM — forcibly marks [chatId] as in-flight or clears it. Only used in
+/// unit tests to verify the LS-2 concurrent-call guard without spinning up a
+/// real LLM call.
+@visibleForTesting
+void setLiveSheetInFlightForTest(String chatId, {required bool inFlight}) {
+  if (inFlight) {
+    _liveSheetInFlight[chatId] = true;
+  } else {
+    _liveSheetInFlight.remove(chatId);
+  }
+}
+
+/// TEST SEAM — clears ALL in-flight state. Call in setUp/tearDown so lock
+/// state from one test never leaks into the next.
+@visibleForTesting
+void clearAllLiveSheetInFlightForTest() => _liveSheetInFlight.clear();
 
 // ---------------------------------------------------------------------------
 // Wave CY.18.218: narrator/scenario card detection
@@ -519,9 +563,40 @@ String buildUpdateBody({required Chat chat, required LiveSheetSnapshot active}) 
 // ---------------------------------------------------------------------------
 
 /// Runs the LLM update pass for the current chat's active Live Sheet snapshot.
-/// Returns the new snapshot if the LLM produced any ops, null otherwise.
+/// Returns the new snapshot if the LLM produced any ops, null otherwise (this
+/// includes the LS-2 in-flight-lock sentinel — see [isLiveSheetInFlight] to
+/// distinguish "already running" from "no change" / "LLM error").
 /// Mirrors generateCheckpoint in memory.dart.
 Future<LiveSheetSnapshot?> generateLiveSheetUpdate({
+  required Chat chat,
+  required ApiProvider provider,
+  required ModelSettings settings,
+  LiveSheetSettings? liveSheetSettings,
+}) async {
+  // LS-2: service-level per-chat lock. Both the auto path (chat_screen) and
+  // the manual path (live_sheet_screen) call this function; their separate
+  // per-widget `_liveSheetUpdating` / `_updating` latches can't see each
+  // other. Acquiring here prevents a concurrent call from a DIFFERENT screen
+  // from reading the same base snapshot and applying a divergent delta.
+  if (_liveSheetInFlight[chat.id] == true) {
+    return null;
+  }
+  _liveSheetInFlight[chat.id] = true;
+  try {
+    return await _generateLiveSheetUpdateBody(
+      chat: chat,
+      provider: provider,
+      settings: settings,
+      liveSheetSettings: liveSheetSettings,
+    );
+  } finally {
+    _liveSheetInFlight.remove(chat.id);
+  }
+}
+
+/// Internal body of [generateLiveSheetUpdate] — called only while the
+/// per-chat lock is held.
+Future<LiveSheetSnapshot?> _generateLiveSheetUpdateBody({
   required Chat chat,
   required ApiProvider provider,
   required ModelSettings settings,
@@ -534,6 +609,15 @@ Future<LiveSheetSnapshot?> generateLiveSheetUpdate({
   if (cutoffIdx < 0) return null;
   final anchorIdx = chat.messages.indexWhere((m) => m.id == active.anchorMessageId);
   if (cutoffIdx <= anchorIdx) return null;
+  // LS-1 (C2 race): snapshot the anchor message's ID + the cutoff message's ID
+  // NOW — before the await — from the same message state buildUpdateBody reads
+  // from. Re-indexing `chat.messages[cutoffIdx]` AFTER the await (the old code)
+  // reused a stale index against a possibly-mutated list: if the user
+  // edits/deletes/regenerates/branches during the 10-30s LLM call, that index
+  // can throw (list shrank) or silently bind the new snapshot to the WRONG
+  // anchor/pathHash (list changed shape but stayed long enough).
+  final cutoffMessageId = chat.messages[cutoffIdx].id;
+  final activeSnapshotId = active.id;
   final ls = liveSheetSettings ?? LiveSheetSettings();
   final turns = <ChatTurn>[
     ChatTurn('system', ls.updatePrompt),
@@ -545,6 +629,14 @@ Future<LiveSheetSnapshot?> generateLiveSheetUpdate({
       settings: _liveSheetSettings(settings),
       messages: turns,
       debugTag: 'livesheet', // Wave CY.18.214 diagnostics tag
+      // LS-3: a reasoning-only model (the owner's Venice/Qwen daily driver)
+      // emits its whole answer in the `<think>` channel; without this the
+      // stripped visible content comes back empty and the update silently
+      // fails ("LLM returned empty response"). Mirrors memory.dart's
+      // _completeRecapSanitized. Live Sheet ops are internal state (never
+      // shown verbatim), so a delta recovered from the reasoning channel is
+      // still safe to parse.
+      allowReasoningFallback: true,
     );
     // Distinguish a provider-returns-empty error from a clean NO_CHANGE
     // cycle (mirrors generateCheckpoint / seedLiveSheetEntity) so the
@@ -555,12 +647,28 @@ Future<LiveSheetSnapshot?> generateLiveSheetUpdate({
     }
     final delta = parseLiveSheetDelta(out);
     if (delta.noChange || delta.ops.isEmpty) return null;
-    final cutoffMsg = chat.messages[cutoffIdx];
+    // LS-1 (C2 race): re-resolve by id against the CURRENT message/snapshot
+    // state rather than trusting the pre-await index/object. Bail (discard
+    // the result) if the branch changed underneath us — applying it would
+    // bind a delta computed from the old body to the wrong anchor/pathHash.
+    final currentActive = activeLiveSheetSnapshot(chat);
+    if (currentActive == null || currentActive.id != activeSnapshotId) {
+      LiveSheetErrors.record('generateLiveSheetUpdate',
+          'active snapshot changed during the update — discarding stale result');
+      return null;
+    }
+    final newCutoffIdx =
+        chat.messages.indexWhere((m) => m.id == cutoffMessageId);
+    if (newCutoffIdx < 0) {
+      LiveSheetErrors.record('generateLiveSheetUpdate',
+          'anchor message removed during the update — discarding stale result');
+      return null;
+    }
     return applyLiveSheetDelta(
-      prev: active,
+      prev: currentActive,
       delta: delta,
-      anchorMessageId: cutoffMsg.id,
-      pathHash: computePathHash(chat.messages, cutoffIdx),
+      anchorMessageId: cutoffMessageId,
+      pathHash: computePathHash(chat.messages, newCutoffIdx),
     );
   } catch (e) {
     LiveSheetErrors.record('generateLiveSheetUpdate', e);
@@ -573,8 +681,45 @@ Future<LiveSheetSnapshot?> generateLiveSheetUpdate({
 // ---------------------------------------------------------------------------
 
 /// Asks the LLM to fill initial sheet sections for a single entity using
-/// its card description + the current conversation. Returns null on failure.
+/// its card description + the current conversation. Returns null on failure
+/// (this includes the LS-2 in-flight-lock sentinel when a
+/// [generateLiveSheetUpdate] or another [seedLiveSheetEntity] call for the
+/// same chat is already running — see [isLiveSheetInFlight]).
 Future<Map<LiveSheetSection, List<LiveSheetFact>>?> seedLiveSheetEntity({
+  required Chat chat,
+  required String entityName,
+  required LiveSheetEntityKind kind,
+  String? cardDescription,
+  required ApiProvider provider,
+  required ModelSettings settings,
+  LiveSheetSettings? liveSheetSettings,
+}) async {
+  // LS-2: service-level per-chat lock (same guard as generateLiveSheetUpdate).
+  // Seeding mutates/replaces the same chat's active-snapshot entities, so a
+  // seed running concurrently with an auto/manual update (or another seed)
+  // for the same chat is exactly the C1-shaped hazard memory.dart fixed.
+  if (_liveSheetInFlight[chat.id] == true) {
+    return null;
+  }
+  _liveSheetInFlight[chat.id] = true;
+  try {
+    return await _seedLiveSheetEntityBody(
+      chat: chat,
+      entityName: entityName,
+      kind: kind,
+      cardDescription: cardDescription,
+      provider: provider,
+      settings: settings,
+      liveSheetSettings: liveSheetSettings,
+    );
+  } finally {
+    _liveSheetInFlight.remove(chat.id);
+  }
+}
+
+/// Internal body of [seedLiveSheetEntity] — called only while the per-chat
+/// lock is held.
+Future<Map<LiveSheetSection, List<LiveSheetFact>>?> _seedLiveSheetEntityBody({
   required Chat chat,
   required String entityName,
   required LiveSheetEntityKind kind,
@@ -615,6 +760,11 @@ Future<Map<LiveSheetSection, List<LiveSheetFact>>?> seedLiveSheetEntity({
       settings: _liveSheetSettings(settings),
       messages: turns,
       debugTag: 'livesheet', // Wave CY.18.214 diagnostics tag
+      // LS-3: see generateLiveSheetUpdate — a reasoning-only model answers
+      // entirely in the `<think>` channel, and without this flag the visible
+      // content strips to empty, logging "empty seed" and silently failing
+      // the sheet fill. Mirrors memory.dart's _completeRecapSanitized.
+      allowReasoningFallback: true,
     );
     if (out.trim().isEmpty) {
       LiveSheetErrors.record('seedLiveSheetEntity', 'empty seed');

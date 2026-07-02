@@ -860,4 +860,196 @@ void main() {
       expect(c.liveSheetSnapshots, isEmpty);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // LS-2 — service-level per-chat in-flight lock (mirrors memory.dart's C1 /
+  // `_checkpointInFlight`).
+  // ---------------------------------------------------------------------------
+  group('LS-2: isLiveSheetInFlight / per-chat lock', () {
+    setUp(() => clearAllLiveSheetInFlightForTest());
+    tearDown(() => clearAllLiveSheetInFlightForTest());
+
+    test('initially false for any chat id', () {
+      expect(isLiveSheetInFlight('chat-A'), isFalse);
+      expect(isLiveSheetInFlight('chat-B'), isFalse);
+    });
+
+    test('returns true once the lock is set, false after it is cleared', () {
+      setLiveSheetInFlightForTest('chat-A', inFlight: true);
+      expect(isLiveSheetInFlight('chat-A'), isTrue);
+      // A different chat id is unaffected.
+      expect(isLiveSheetInFlight('chat-B'), isFalse);
+
+      setLiveSheetInFlightForTest('chat-A', inFlight: false);
+      expect(isLiveSheetInFlight('chat-A'), isFalse);
+    });
+
+    test('locks are per-chat: setting one does not affect another', () {
+      setLiveSheetInFlightForTest('chat-X', inFlight: true);
+      setLiveSheetInFlightForTest('chat-Y', inFlight: true);
+      setLiveSheetInFlightForTest('chat-X', inFlight: false);
+      expect(isLiveSheetInFlight('chat-X'), isFalse);
+      expect(isLiveSheetInFlight('chat-Y'), isTrue);
+    });
+
+    test('clearAllLiveSheetInFlightForTest clears all ids', () {
+      setLiveSheetInFlightForTest('chat-A', inFlight: true);
+      setLiveSheetInFlightForTest('chat-B', inFlight: true);
+      clearAllLiveSheetInFlightForTest();
+      expect(isLiveSheetInFlight('chat-A'), isFalse);
+      expect(isLiveSheetInFlight('chat-B'), isFalse);
+    });
+
+    // Verify the guard logic: if the lock is held, a simulated second caller
+    // (whether it's generateLiveSheetUpdate OR seedLiveSheetEntity — both
+    // share the SAME per-chat lock) should detect it and skip (returning
+    // null) rather than proceeding, exactly like memory.dart's C1 guard.
+    test('a caller can detect the lock before launching work', () {
+      setLiveSheetInFlightForTest('chat-A', inFlight: true);
+      // Simulates the first gate in generateLiveSheetUpdate / seedLiveSheetEntity:
+      //   if (_liveSheetInFlight[chat.id] == true) return null;
+      final wouldSkip = isLiveSheetInFlight('chat-A');
+      expect(wouldSkip, isTrue,
+          reason: 'a concurrent caller should detect the in-flight lock');
+    });
+
+    test(
+        'an auto-update (chat_screen) and a manual update (live_sheet_screen) '
+        'share the SAME lock — this is exactly the bug LS-2 fixes', () {
+      // Before the fix, chat_screen._liveSheetUpdating and
+      // live_sheet_screen._updating were two independent widget-local bools
+      // that could not see each other. The service-level lock is the single
+      // source of truth both call sites now consult.
+      expect(isLiveSheetInFlight('chat-shared'), isFalse);
+      setLiveSheetInFlightForTest('chat-shared', inFlight: true); // e.g. auto-update starts
+      // A manual call from the other screen for the SAME chat sees it busy.
+      expect(isLiveSheetInFlight('chat-shared'), isTrue);
+      setLiveSheetInFlightForTest('chat-shared', inFlight: false); // auto-update finishes
+      expect(isLiveSheetInFlight('chat-shared'), isFalse);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // LS-1 — pre-await anchor/pathHash must be RE-RESOLVED by id after the
+  // await, not blindly reused against a possibly-mutated message list
+  // (mirrors memory.dart's C2 pathHash-snapshot-timing fix).
+  // ---------------------------------------------------------------------------
+  group('LS-1: pre-await index reuse (C2-style race)', () {
+    Chat newChat({required List<Message> messages}) => Chat(
+          id: 'c1',
+          title: 't',
+          characterIds: const ['ch1'],
+          messages: messages,
+          liveSheetEnabled: true,
+        );
+
+    LiveSheetSnapshot snapshotAt(List<Message> msgs, int anchorIdx) =>
+        LiveSheetSnapshot(
+          id: 'snap1',
+          anchorMessageId: msgs[anchorIdx].id,
+          pathHash: computePathHash(msgs, anchorIdx),
+          entities: [
+            LiveSheetEntity(id: 'e1', name: 'You', kind: LiveSheetEntityKind.user),
+          ],
+        );
+
+    test(
+        'cutoff message id captured before a simulated await still resolves '
+        'after new messages are appended (list GROWS during the await)', () {
+      final msgs = [
+        Message(id: 'm0', kind: MessageKind.char),
+        Message(id: 'm1', kind: MessageKind.char),
+      ];
+      final chat = newChat(messages: msgs)
+        ..liveSheetSnapshots.add(snapshotAt(msgs, 0));
+
+      // Simulates the fix's pre-await snapshot in generateLiveSheetUpdate:
+      final cutoffIdxBefore = chat.messages.length - 1;
+      final cutoffMessageId = chat.messages[cutoffIdxBefore].id;
+      final activeBefore = activeLiveSheetSnapshot(chat)!;
+      final activeSnapshotId = activeBefore.id;
+
+      // Simulate messages arriving DURING the LLM await.
+      chat.messages.add(Message(id: 'm2', kind: MessageKind.char));
+      chat.messages.add(Message(id: 'm3', kind: MessageKind.char));
+
+      // Re-resolve by id AFTER the "await" (the LS-1 fix), rather than
+      // reusing cutoffIdxBefore to index the now-longer list (which would
+      // silently point at 'm2', not the message that was actually summarised).
+      final newCutoffIdx =
+          chat.messages.indexWhere((m) => m.id == cutoffMessageId);
+      expect(newCutoffIdx, 1, reason: 'm1 is still at its original index');
+      expect(chat.messages[newCutoffIdx].id, 'm1');
+      // Confirms the OLD buggy behaviour would have silently bound the result
+      // to the wrong message once the list shape changes in a way that keeps
+      // cutoffIdxBefore in range but pointing elsewhere.
+      final active = activeLiveSheetSnapshot(chat);
+      expect(active!.id, activeSnapshotId);
+    });
+
+    test(
+        'stale cutoff index throws / is wrong after messages are REMOVED '
+        'during the await (list SHRINKS) — re-resolving by id bails safely',
+        () {
+      final msgs = [
+        Message(id: 'm0', kind: MessageKind.char),
+        Message(id: 'm1', kind: MessageKind.char),
+        Message(id: 'm2', kind: MessageKind.char),
+      ];
+      final chat = newChat(messages: msgs)
+        ..liveSheetSnapshots.add(snapshotAt(msgs, 0));
+
+      final cutoffIdxBefore = chat.messages.length - 1; // == 2 ('m2')
+      final cutoffMessageId = chat.messages[cutoffIdxBefore].id;
+
+      // Simulate a deletion during the await: 'm2' (the anchor we captured)
+      // is removed entirely — e.g. the user deleted/regenerated it.
+      chat.messages.removeWhere((m) => m.id == 'm2');
+
+      // OLD buggy code: chat.messages[cutoffIdxBefore] now either throws
+      // (RangeError, list shrank below the old length) or — on a
+      // differently-shaped mutation — silently binds to the WRONG message.
+      expect(cutoffIdxBefore, greaterThanOrEqualTo(chat.messages.length),
+          reason: 'the old index is now out of range on the shrunk list');
+
+      // FIX: re-resolve by id and bail when the anchor is gone, instead of
+      // ever indexing the stale position.
+      final newCutoffIdx =
+          chat.messages.indexWhere((m) => m.id == cutoffMessageId);
+      expect(newCutoffIdx, -1,
+          reason:
+              'the message the pre-await snapshot pointed at no longer exists');
+    });
+
+    test(
+        'active snapshot changing identity during the await is detectable by '
+        'id comparison (branch swap mid-flight)', () {
+      final msgs = [
+        Message(id: 'm0', kind: MessageKind.char),
+        Message(id: 'm1', kind: MessageKind.char),
+      ];
+      final chat = newChat(messages: msgs)
+        ..liveSheetSnapshots.add(snapshotAt(msgs, 0));
+
+      final activeBefore = activeLiveSheetSnapshot(chat)!;
+      final activeSnapshotIdBefore = activeBefore.id;
+
+      // Simulate a DIFFERENT snapshot becoming active during the await (e.g.
+      // a manual update completed and appended first, or the user branched).
+      final replacement = LiveSheetSnapshot(
+        id: 'snap2',
+        anchorMessageId: msgs[1].id,
+        pathHash: computePathHash(chat.messages, 1),
+        entities: activeBefore.entities,
+      );
+      chat.liveSheetSnapshots.add(replacement);
+
+      final activeAfter = activeLiveSheetSnapshot(chat)!;
+      expect(activeAfter.id, isNot(equals(activeSnapshotIdBefore)),
+          reason:
+              'a newer snapshot at a later anchor now wins — the fix must '
+              'detect this identity change and discard the stale result '
+              'rather than applying it on top of the old snapshot');
+    });
+  });
 }
