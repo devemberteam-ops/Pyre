@@ -3122,6 +3122,13 @@ class _ChatScreenState extends State<ChatScreen> {
     // a char-side continuation. We deliberately do not honour
     // continueNudgePrompt for the user case — those preset prompts
     // assume a char speaker.
+    // Party scene continuation: the tip is a Narrator-voiced scene message
+    // (characterId == null) covering the whole party. The default char nudge
+    // below resumes in the PRIMARY character's voice, collapsing the scene —
+    // so use the narrator-aware nudge that keeps voicing everyone.
+    final isPartyScene = chat.partyMode &&
+        chat.characterIds.length > 1 &&
+        last.characterId == null;
     final String nudge;
     if (isUserExtend) {
       final persona = _chatPersona(store, chat);
@@ -3135,6 +3142,17 @@ class _ChatScreenState extends State<ChatScreen> {
           'voice. Match cadence, tense, and formatting. Reply with the '
           'continuation only — no preamble, no quotes wrapping the whole '
           'output, no narrator framing.]';
+    } else if (isPartyScene) {
+      final persona = _chatPersona(store, chat);
+      final memberNames = [
+        for (final id in chat.characterIds)
+          (chat.characterSnapshots[id] ?? store.characterById(id))?.name ?? '',
+      ];
+      nudge = buildPartyContinueNudge(
+        tail: tail,
+        memberNames: memberNames,
+        userName: persona?.name ?? 'the user',
+      );
     } else {
       nudge = (preset?.continueNudgePrompt?.trim().isNotEmpty ?? false)
           ? preset!.continueNudgePrompt!
@@ -3278,7 +3296,18 @@ class _ChatScreenState extends State<ChatScreen> {
     final isGuided = outline != null || perspective != null;
     final provider =
         isGuided ? store.guideProvider : store.impersonateProvider;
-    if (provider == null) return;
+    if (provider == null) {
+      // Was a SILENT return — the tap looked like a no-op. Match the main
+      // send path's toast so the user knows why nothing happened. (Guide /
+      // impersonate providers both fall back to the chat provider, so a null
+      // here means no provider is configured at all.)
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No provider configured. Open "More → API Connections".'),
+        ),
+      );
+      return;
+    }
     // Wave CX: honour chat.personaId (not the global default).
     final persona = _chatPersona(store, chat);
     final personaName = persona?.name ?? 'the user';
@@ -3378,6 +3407,21 @@ class _ChatScreenState extends State<ChatScreen> {
                   .replaceAll(pyreFinishSentinelRegex, '')
                   .replaceAll(pyreDroppedFramesRegex, ''))
               .trimRight();
+          // Reasoning-only fallback: a thinking model can put its ENTIRE
+          // output inside <think>…</think>, so after the strip `cleaned` is
+          // empty even though the stream produced tokens. Left unhandled the
+          // input box just goes blank and the action looks broken. Tell the
+          // user instead of silently clearing.
+          final streamedSomething = _streamBuffer.trim().isNotEmpty;
+          if (cleaned.isEmpty && streamedSomething) {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text(
+                    'The model replied with only reasoning — nothing to '
+                    'insert. Try again, or lower its reasoning effort.'),
+              ),
+            );
+          }
           if (cleaned != _inputCtl.text) {
             _inputCtl.text = cleaned;
             _inputCtl.selection = TextSelection.collapsed(

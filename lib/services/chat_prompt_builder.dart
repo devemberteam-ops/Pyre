@@ -331,6 +331,34 @@ String buildJointPartyBlock({
   return buf.toString();
 }
 
+/// Continue nudge for a party-mode SCENE message (a `MessageKind.char` turn
+/// with `characterId == null`, voiced by the Narrator over the whole party).
+///
+/// The plain char continue nudge tells the model to resume in the PRIMARY
+/// character's voice — wrong for a scene that voices everyone, which would
+/// collapse the multi-character scene into a single voice. This preserves the
+/// same narrator framing [buildJointPartyBlock] establishes, so a Continue
+/// extends the group scene instead. [tail] is the quoted literal ending (so
+/// the model extends rather than restarts); [memberNames] is the party roster
+/// (blank/empty entries tolerated); [userName] is never spoken for.
+String buildPartyContinueNudge({
+  required String tail,
+  required List<String> memberNames,
+  required String userName,
+}) {
+  final roster = memberNames.where((n) => n.trim().isNotEmpty).join(', ');
+  final who = roster.isEmpty ? 'the characters in the scene' : roster;
+  return '(Continue the group scene EXACTLY from where it stops. These are '
+      'the literal final words — do NOT rewrite them, do NOT repeat them, do '
+      'NOT regenerate from scratch:\n\n'
+      '"""\n$tail\n"""\n\n'
+      'Pick up with the very next word, still narrating the scene. Keep '
+      'voicing $who in their own distinct manner, prefixing each beat with '
+      "the character's name — do NOT collapse into a single character's "
+      'voice. Preserve tense and formatting. Never speak, act, or decide for '
+      '$userName. Output only the continuation, no preamble.)';
+}
+
 ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   final chat = inputs.chat;
   final character = inputs.character;

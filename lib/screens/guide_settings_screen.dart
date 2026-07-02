@@ -106,10 +106,13 @@ class _GuideSettingsScreenState extends State<GuideSettingsScreen> {
                     'Because it\'s never saved, its effect doesn\'t carry over '
                     'to later turns on its own.'),
               ]),
-              HowItWorksSection('Coming soon', [
+              HowItWorksSection('Where to find them', [
                 HowItWorksBlock.paragraph(
-                    'The in-chat Guide buttons arrive in the next update. '
-                    'These settings configure them ahead of time.'),
+                    'With Guide enabled below, the actions live in the chat: '
+                    'long-press a reply to **steer the next reply** or '
+                    '**regenerate with a guide**, and use **Guide my message** '
+                    'from the input bar to draft your own next message. These '
+                    'settings tune how they behave.'),
               ]),
             ],
           ),

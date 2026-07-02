@@ -439,4 +439,45 @@ void main() {
       expect(sys, contains('Output ONLY the opening message'));
     });
   });
+
+  // C (#129): Continuing a party SCENE message (characterId == null, voiced by
+  // the Narrator over the whole party) must keep the narrator framing. The
+  // plain char continue nudge resumes in the PRIMARY character's voice, which
+  // collapses a multi-character scene into one voice.
+  group('buildPartyContinueNudge', () {
+    test('quotes the literal tail so the model extends, not restarts', () {
+      final nudge = buildPartyContinueNudge(
+        tail: '…and the door creaked open.',
+        memberNames: ['Aria', 'Bran'],
+        userName: 'Kai',
+      );
+      expect(nudge, contains('…and the door creaked open.'));
+      expect(nudge, contains('EXACTLY from where it stops'));
+    });
+
+    test('keeps narrator framing: voice all members, do not collapse to one',
+        () {
+      final nudge = buildPartyContinueNudge(
+        tail: 'x',
+        memberNames: ['Aria', 'Bran', 'Cyra'],
+        userName: 'Kai',
+      );
+      // names the roster and forbids single-character collapse
+      expect(nudge, contains('Aria, Bran, Cyra'));
+      expect(nudge.toLowerCase(), contains('single character'));
+      // never speak for the user persona
+      expect(nudge, contains('Kai'));
+    });
+
+    test('degrades gracefully when member names are missing/blank', () {
+      final nudge = buildPartyContinueNudge(
+        tail: 'x',
+        memberNames: ['', '  '],
+        userName: 'Kai',
+      );
+      expect(nudge, contains('the characters in the scene'));
+      // no dangling empty roster like "voicing  in their"
+      expect(nudge, isNot(contains('voicing  ')));
+    });
+  });
 }
