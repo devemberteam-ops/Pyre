@@ -19,6 +19,33 @@ import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
 import 'st_bulk_import_flow.dart';
 
+// Wave CY.18.169: selective backup. Each category can be toggled out of the
+// export. The matching IMPORT is a MERGE — only categories present in the
+// file are replaced, so a partial backup restores just its categories
+// without nuking the rest.
+//
+// Kept top-level (not on the State) so [buildExportBlob] and
+// [buildSafetyBackupBlob] can share the exact same category set without a
+// widget instance — same rationale as [writeBackupSettingsCategory].
+const String _catCharacters = 'characters';
+const String _catPersonas = 'personas';
+const String _catChats = 'chats';
+const String _catLorebooks = 'lorebooks';
+const String _catPresets = 'presets';
+const String _catProviders = 'providers';
+const String _catSettings = 'settings';
+const String _catCreatorSessions = 'creatorSessions';
+const Set<String> _allCategories = {
+  _catCharacters,
+  _catPersonas,
+  _catChats,
+  _catLorebooks,
+  _catPresets,
+  _catProviders,
+  _catSettings,
+  _catCreatorSessions,
+};
+
 class BackupRestoreScreen extends StatefulWidget {
   const BackupRestoreScreen({super.key});
 
@@ -27,29 +54,6 @@ class BackupRestoreScreen extends StatefulWidget {
 }
 
 class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
-  // Wave CY.18.169: selective backup. Each category can be toggled out of
-  // the export. The matching IMPORT is a MERGE — only categories present
-  // in the file are replaced, so a partial backup restores just its
-  // categories without nuking the rest.
-  static const String _catCharacters = 'characters';
-  static const String _catPersonas = 'personas';
-  static const String _catChats = 'chats';
-  static const String _catLorebooks = 'lorebooks';
-  static const String _catPresets = 'presets';
-  static const String _catProviders = 'providers';
-  static const String _catSettings = 'settings';
-  static const String _catCreatorSessions = 'creatorSessions';
-  static const Set<String> _allCategories = {
-    _catCharacters,
-    _catPersonas,
-    _catChats,
-    _catLorebooks,
-    _catPresets,
-    _catProviders,
-    _catSettings,
-    _catCreatorSessions,
-  };
-
   /// What the next export will include. Everything EXCEPT Connections is on
   /// by default; Connections (API providers) is OPT-IN because including it
   /// writes your API keys in PLAIN TEXT — there is no separate "include keys"
@@ -298,10 +302,15 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     // the auto-file shouldn't carry plaintext keys; you re-enter them after
     // restore). Abort the whole reset if this fails: never wipe without a
     // net.
+    //
+    // F2 fix (SEVERE): must embed attachment BYTES like the normal export
+    // paths (see buildSafetyBackupBlob) — factoryReset wipes every
+    // attachment file right after, so a refs-only backup restores blank
+    // avatars/gallery/backgrounds.
     String? backupPath;
     try {
-      final json = const JsonEncoder.withIndent('  ').convert(
-          _exportBlob(store, include: _allCategories, includeApiKeys: false));
+      final blob = await buildSafetyBackupBlob(store);
+      final json = const JsonEncoder.withIndent('  ').convert(blob);
       final ts = DateTime.now()
           .toIso8601String()
           .replaceAll(':', '-')
@@ -450,67 +459,17 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
   /// [includeApiKeys] is false (or providers aren't included) the bearer
   /// tokens are stripped so the file is safe to share. A partial blob
   /// imports as a MERGE (see [_applyImport]).
+  ///
+  /// Thin delegate to the top-level [buildExportBlob] (single source of
+  /// truth — kept top-level so the safety-backup path in
+  /// [buildSafetyBackupBlob] can share it instead of re-implementing the
+  /// blob shape and silently drifting when a category is added here).
   Map<String, dynamic> _exportBlob(
     AppStore s, {
     required Set<String> include,
     required bool includeApiKeys,
-  }) {
-    final keysIncluded = includeApiKeys && include.contains(_catProviders);
-    final blob = <String, dynamic>{
-      // Wave CY.18.45: stamp the schema version into every backup so a
-      // future Pyre can detect "older/newer than me" and migrate (or warn).
-      'schemaVersion': AppStore.schemaVersion,
-      'exportedAt': DateTime.now().toIso8601String(),
-      'exportedFrom': 'emberchat-flutter',
-      'containsApiKeys': keysIncluded,
-    };
-    if (include.contains(_catProviders)) {
-      blob['providers'] = s.providers
-          .map((p) => p.toJson(includeApiKey: includeApiKeys))
-          .toList();
-      blob['activeProviderId'] = s.activeProviderId;
-      blob['creatorProviderId'] = s.creatorProviderId;
-      blob['visionProviderId'] = s.visionProviderId;
-      blob['impersonateProviderId'] = s.impersonateProviderId;
-      blob['guideProviderId'] = s.guideProviderId;
-    }
-    if (include.contains(_catCharacters)) {
-      blob['characters'] = s.characters.map((c) => c.toJson()).toList();
-    }
-    if (include.contains(_catPersonas)) {
-      blob['personas'] = s.personas.map((p) => p.toJson()).toList();
-      blob['activePersonaId'] = s.activePersonaId;
-    }
-    if (include.contains(_catChats)) {
-      blob['chats'] = s.chats.map((c) => c.toJson()).toList();
-    }
-    if (include.contains(_catLorebooks)) {
-      blob['lorebooks'] = s.lorebooks.map((l) => l.toJson()).toList();
-    }
-    if (include.contains(_catPresets)) {
-      blob['presets'] = s.presets.map((p) => p.toJson()).toList();
-      blob['activePresetId'] = s.activePresetId;
-      // Wave CY.18.107: forkable Creator architect prompts ride with presets.
-      blob['creatorPresets'] =
-          s.creatorPresets.map((p) => p.toJson()).toList();
-      blob['activeCreatorPresetId'] = s.activeCreatorPresetId;
-    }
-    if (include.contains(_catSettings)) {
-      blob['modelSettings'] = s.modelSettings.toJson();
-      blob['chatSettings'] = s.chatSettings.toJson();
-      blob['memorySettings'] = s.memorySettings.toJson();
-      blob['uiPrefs'] = s.uiPrefs.toJson();
-      // F3: regex rules, folders, the three settings singletons the old
-      // branch dropped, and the botbooru profile — see the helper docs.
-      writeBackupSettingsCategory(s, blob);
-    }
-    if (include.contains(_catCreatorSessions)) {
-      blob['creatorSessions'] =
-          s.creatorSessions.map((cs) => cs.toJson()).toList();
-      blob['activeCreatorSessionId'] = s.activeCreatorSessionId;
-    }
-    return blob;
-  }
+  }) =>
+      buildExportBlob(s, include: include, includeApiKeys: includeApiKeys);
 
   Future<bool> _confirmKeyExport() async {
     if (!_include.contains(_catProviders)) return true;
@@ -1028,23 +987,11 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     }
 
     // Migrate any API keys carried in the backup into OS-secure storage,
-    // then strip them from the in-memory ApiProvider so they're not in the
-    // next persist's JSON blob.
-    //
-    // Wave CY.18.255 (audit FIX 5b): only write keys when [importKeys] is
-    // true (the caller got explicit user confirmation). When false, we
-    // DON'T overwrite the user's saved keys — we just clear the plaintext
-    // keys the backup carried out of the in-memory providers so they don't
-    // linger in the next persist; runtime falls back to whatever's already
-    // in SecureKeys for matching provider ids.
-    for (final p in s.providers) {
-      if (p.apiKey.isNotEmpty) {
-        if (importKeys) {
-          await SecureKeys.write(p.id, p.apiKey);
-        }
-        p.apiKey = '';
-      }
-    }
+    // then reconcile the in-memory ApiProvider so it neither leaks the
+    // backup's plaintext key into the next persist NOR (F1 fix) leaves the
+    // live session keyless on "Keep mine". See
+    // [reconcileImportedProviderKeys] for the full rationale.
+    await reconcileImportedProviderKeys(s.providers, importKeys: importKeys);
 
     // Always re-seed the canonical locked default AFTER applying — this
     // prevents a malicious backup from substituting our system prompt by
@@ -1327,6 +1274,144 @@ Future<void> embedBackupAttachments(Map<String, dynamic> blob) async {
     out[hash] = base64Encode(bytes);
   }
   if (out.isNotEmpty) blob['attachments'] = out;
+}
+
+/// Build the export blob. Only the categories in [include] are written;
+/// each category's "active…" pointer rides along with it. When
+/// [includeApiKeys] is false (or providers aren't included) the bearer
+/// tokens are stripped so the file is safe to share. A partial blob imports
+/// as a MERGE (see `_applyImport`).
+///
+/// Kept top-level (not on the State, same rationale as
+/// [writeBackupSettingsCategory]) so it's the SINGLE source of truth for the
+/// export shape — both the 3 normal export call sites (via the State's
+/// `_exportBlob` thin delegate) and [buildSafetyBackupBlob] share this exact
+/// function, so a category added here can never silently drift out of one
+/// of the call sites.
+Map<String, dynamic> buildExportBlob(
+  AppStore s, {
+  required Set<String> include,
+  required bool includeApiKeys,
+}) {
+  final keysIncluded = includeApiKeys && include.contains(_catProviders);
+  final blob = <String, dynamic>{
+    // Wave CY.18.45: stamp the schema version into every backup so a
+    // future Pyre can detect "older/newer than me" and migrate (or warn).
+    'schemaVersion': AppStore.schemaVersion,
+    'exportedAt': DateTime.now().toIso8601String(),
+    'exportedFrom': 'emberchat-flutter',
+    'containsApiKeys': keysIncluded,
+  };
+  if (include.contains(_catProviders)) {
+    blob['providers'] = s.providers
+        .map((p) => p.toJson(includeApiKey: includeApiKeys))
+        .toList();
+    blob['activeProviderId'] = s.activeProviderId;
+    blob['creatorProviderId'] = s.creatorProviderId;
+    blob['visionProviderId'] = s.visionProviderId;
+    blob['impersonateProviderId'] = s.impersonateProviderId;
+    blob['guideProviderId'] = s.guideProviderId;
+  }
+  if (include.contains(_catCharacters)) {
+    blob['characters'] = s.characters.map((c) => c.toJson()).toList();
+  }
+  if (include.contains(_catPersonas)) {
+    blob['personas'] = s.personas.map((p) => p.toJson()).toList();
+    blob['activePersonaId'] = s.activePersonaId;
+  }
+  if (include.contains(_catChats)) {
+    blob['chats'] = s.chats.map((c) => c.toJson()).toList();
+  }
+  if (include.contains(_catLorebooks)) {
+    blob['lorebooks'] = s.lorebooks.map((l) => l.toJson()).toList();
+  }
+  if (include.contains(_catPresets)) {
+    blob['presets'] = s.presets.map((p) => p.toJson()).toList();
+    blob['activePresetId'] = s.activePresetId;
+    // Wave CY.18.107: forkable Creator architect prompts ride with presets.
+    blob['creatorPresets'] = s.creatorPresets.map((p) => p.toJson()).toList();
+    blob['activeCreatorPresetId'] = s.activeCreatorPresetId;
+  }
+  if (include.contains(_catSettings)) {
+    blob['modelSettings'] = s.modelSettings.toJson();
+    blob['chatSettings'] = s.chatSettings.toJson();
+    blob['memorySettings'] = s.memorySettings.toJson();
+    blob['uiPrefs'] = s.uiPrefs.toJson();
+    // F3: regex rules, folders, the three settings singletons the old
+    // branch dropped, and the botbooru profile — see the helper docs.
+    writeBackupSettingsCategory(s, blob);
+  }
+  if (include.contains(_catCreatorSessions)) {
+    blob['creatorSessions'] =
+        s.creatorSessions.map((cs) => cs.toJson()).toList();
+    blob['activeCreatorSessionId'] = s.activeCreatorSessionId;
+  }
+  return blob;
+}
+
+/// F2 fix (SEVERE): the pre-factory-reset SAFETY backup — the only net for
+/// the app's most destructive action — used to be built via `_exportBlob`
+/// alone, which writes `pyre://attachment/<hash>` REFERENCES only. Since
+/// `factoryReset` wipes every attachment file right after, restoring that
+/// safety backup resolved every avatar / gallery / background ref to
+/// nothing: blank images across the board.
+///
+/// Kept top-level (not on the State, same rationale as
+/// [writeBackupSettingsCategory]) so it's unit-testable without pumping a
+/// widget. Delegates to [buildExportBlob] (all categories, no keys) — same
+/// blob shape as the 3 normal export call sites, no re-implementation to
+/// drift — then embeds attachment bytes before returning, exactly like the
+/// normal export paths already do.
+Future<Map<String, dynamic>> buildSafetyBackupBlob(AppStore store) async {
+  final blob = buildExportBlob(store,
+      include: _allCategories, includeApiKeys: false);
+  await embedBackupAttachments(blob); // B-1 parity: pack avatars/gallery/bg.
+  return blob;
+}
+
+/// F1 fix (SEVERE): reconcile each imported [providers]' `apiKey` against
+/// SecureKeys so the in-memory field never carries plaintext into the next
+/// persist AND — the actual bug — "Keep mine" restores never leave the live
+/// session keyless.
+///
+/// - `importKeys == true` (explicit user confirmation): any non-empty
+///   backup key is written into SecureKeys, THEN the in-memory field is
+///   blanked (persist-hygiene). Unchanged from the pre-fix behaviour — not
+///   in scope for F1.
+/// - `importKeys == false` ("Keep mine"): the backup's key is NEVER written
+///   to SecureKeys. Instead, the in-memory field is re-hydrated by reading
+///   the pre-existing SecureKeys value back — mirroring exactly what
+///   `AppStore.load()` does for every provider on a fresh app start (see
+///   the `for (final p in providers)` hydration loop there). This branch
+///   now runs unconditionally (even when the backup carried an empty key),
+///   because a keep-mine restore should always leave the session usable
+///   regardless of what the backup happened to contain.
+///
+/// Persist-hygiene note: the re-hydrated plaintext key is safe to hold only
+/// in memory because `AppStore`'s main-state persist calls
+/// `provider.toJson()` with its default `includeApiKey: false` — the exact
+/// same post-condition `load()` already relies on. This function reproduces
+/// that post-condition; it does not change what gets persisted.
+///
+/// Kept top-level (not on the State) so it's unit-testable without pumping
+/// a widget — same rationale as [writeBackupSettingsCategory].
+Future<void> reconcileImportedProviderKeys(
+  List<ApiProvider> providers, {
+  required bool importKeys,
+}) async {
+  for (final p in providers) {
+    if (importKeys) {
+      if (p.apiKey.isNotEmpty) {
+        await SecureKeys.write(p.id, p.apiKey);
+      }
+      p.apiKey = '';
+    } else {
+      // Keep-mine: never touch SecureKeys with the backup's key. Always
+      // re-hydrate from whatever's already saved for this provider id —
+      // same as load(). Absent => '' (matches SecureKeys.read's contract).
+      p.apiKey = await SecureKeys.read(p.id);
+    }
+  }
 }
 
 /// Recreate the `.bin` files for every entry in [raw]'s `attachments` map so
