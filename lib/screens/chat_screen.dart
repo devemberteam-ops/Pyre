@@ -3806,14 +3806,19 @@ class _ChatScreenState extends State<ChatScreen> {
       {String? scenarioForOoc}) async {
     final store = context.read<AppStore>();
 
-    // Wave CY.11 / CY.18.269: the scenario rides as an OOC turn so
-    // `_buildTurns` re-sends it as `[OOC]: ...` every turn (it stays canon
-    // instead of evaporating after the opener). BUT it must be BRANCH-SCOPED:
-    // it belongs to the greeting variant this Fill-In creates. Inserting it at
-    // index 0 (the old behaviour) put it BEFORE the branch point, so switching
-    // to an alternate greeting left it behind — it leaked across every branch.
-    // Built here, inserted AFTER the greeting once the variant exists, so it
-    // lives in that variant's downstream tail and selectVariant owns it.
+    // Wave CY.11: the scenario rides as an OOC turn so `_buildTurns` re-sends
+    // it as `[OOC]: ...` every turn (it stays canon instead of evaporating
+    // after the opener).
+    //
+    // 2026-07 (owner): the note now sits ABOVE the greeting ("assim que ele é
+    // criado, ele fica abaixo da primeira mensagem do char sendo que deveria
+    // ficar em cima") — scenario first, then the scene, both visually and in
+    // the replayed prompt. This deliberately REVERSES CY.18.269's
+    // branch-scoping (which parked it in the variant's downstream tail so it
+    // couldn't leak across greeting branches): the scenario is now CHAT-LEVEL
+    // canon — it applies to every greeting variant and stays until the next
+    // Fill-In REPLACES it (`_removeScenarioNotesAbove` below dedupes, so at
+    // most one scenario note ever sits above the greeting).
     final oocMsg = (scenarioForOoc != null && scenarioForOoc.trim().isNotEmpty)
         ? Message(
             id: newId('msg'),
@@ -3821,6 +3826,25 @@ class _ChatScreenState extends State<ChatScreen> {
             variants: ['Scenario: ${scenarioForOoc.trim()}'],
           )
         : null;
+
+    // Remove previous Fill-In scenario notes sitting above the greeting so a
+    // re-run replaces the old scenario instead of stacking a second note.
+    // Deliberately narrow: only OOC messages ABOVE the first char message
+    // whose text carries the Fill-In's own 'Scenario: ' prefix — a manual
+    // user OOC (any position, any text) is never touched.
+    void removeScenarioNotesAbove() {
+      final gi =
+          chat.messages.indexWhere((m) => m.kind == MessageKind.char);
+      if (gi <= 0) return;
+      final toRemove = <String>{
+        for (var i = 0; i < gi; i++)
+          if (chat.messages[i].kind == MessageKind.ooc &&
+              chat.messages[i].text.startsWith('Scenario: '))
+            chat.messages[i].id,
+      };
+      if (toRemove.isEmpty) return;
+      chat.messages.removeWhere((m) => toRemove.contains(m.id));
+    }
 
     // Party mode (2026-07, owner feedback): a greeting GENERATED in a party
     // chat is a party scene — it must render as one ("Narrator" header +
@@ -3845,11 +3869,13 @@ class _ChatScreenState extends State<ChatScreen> {
       store.addMessage(chat.id, m);
       firstId = m.id;
       vIdx = 0;
-      // Empty chat: place the OOC right after the freshly-added greeting.
+      // Place the scenario note ABOVE the freshly-added greeting (owner
+      // 2026-07 — scenario first, then the scene), replacing any older one.
       if (oocMsg != null) {
+        removeScenarioNotesAbove();
         final gi = chat.messages.indexWhere((x) => x.id == m.id);
         if (gi >= 0) {
-          chat.messages.insert(gi + 1, oocMsg);
+          chat.messages.insert(gi, oocMsg);
           store.touchChat(chat); // F1: OOC-message insert syncs
         }
       }
@@ -3875,12 +3901,17 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       vIdx = store.addVariant(chat.id, firstId);
       if (vIdx < 0) return;
-      // New empty variant is now selected → the OOC becomes its first
-      // downstream message, so selectVariant's downstreamByVariant snapshot
-      // owns it and switching greetings no longer leaks it across branches.
+      // Place the scenario note ABOVE the greeting (owner 2026-07 — chat-
+      // level canon, see the block comment above), replacing any previous
+      // Fill-In note so re-runs never stack. Index recomputed by id: the
+      // dedupe sweep may have shifted positions.
       if (oocMsg != null) {
-        chat.messages.insert(firstCharIdx + 1, oocMsg);
-        store.touchChat(chat); // F1: OOC-message insert syncs
+        removeScenarioNotesAbove();
+        final gi = chat.messages.indexWhere((x) => x.id == firstId);
+        if (gi >= 0) {
+          chat.messages.insert(gi, oocMsg);
+          store.touchChat(chat); // F1: OOC-message insert syncs
+        }
       }
     }
     _streamMessageId = firstId;
