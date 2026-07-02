@@ -216,6 +216,19 @@ List<MemoryCheckpoint> findValidCheckpoints(Chat chat) {
   return valid;
 }
 
+/// How many stored checkpoints are NOT valid for the chat's CURRENT branch —
+/// their anchor was re-rolled / edited / deleted so the pathHash no longer
+/// prefixes this branch, or the anchor index fell out of range. These are
+/// #8 "orphans": they are NOT lost — they live on the branch where they were
+/// taken and become valid again if you navigate back to it via the chat tree.
+///
+/// Reuses [findValidCheckpoints] as the single source of truth (its result is
+/// always a subset of `memoryCheckpoints`), so the orphan count can never
+/// drift from the validity predicate. Powers the Checkpoints-screen banner so
+/// an empty current-branch list never reads as "your summaries were deleted".
+int countOrphanedCheckpoints(Chat chat) =>
+    chat.memoryCheckpoints.length - findValidCheckpoints(chat).length;
+
 /// Whether the auto-summariser should fire for this chat right now.
 ///
 /// Honours [MemorySettings.autoEvery] when provided — a value of 0

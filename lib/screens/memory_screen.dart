@@ -387,7 +387,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
       );
     }
     final valid = ltm.findValidCheckpoints(chat);
-    final orphanedCount = chat.memoryCheckpoints.length - valid.length;
+    final orphanedCount = ltm.countOrphanedCheckpoints(chat);
 
     return Scaffold(
       appBar: AppBar(
@@ -461,22 +461,53 @@ class _MemoryScreenState extends State<MemoryScreen> {
                     height: 1.4),
               ),
             ),
+          // #8: persistent orphan notice — ALWAYS visible when checkpoints
+          // exist on OTHER branches (their anchor was re-rolled/edited/deleted
+          // so they don't apply to the current branch). Shown even when the
+          // current branch DOES have valid checkpoints, so the count is never
+          // hidden behind a non-empty list. Nothing is lost — navigating back
+          // to a branch via the chat tree makes its checkpoints valid again.
+          if (orphanedCount > 0)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              color: EmberColors.textMid.withValues(alpha: 0.10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.call_split,
+                      size: 15, color: EmberColors.textMid),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '$orphanedCount checkpoint${orphanedCount == 1 ? "" : "s"} '
+                      'live on other branches of this chat and aren\'t shown '
+                      'here. They\'re safe on disk — re-open the branch where '
+                      'they were taken (via the chat tree) to see them again.',
+                      style: TextStyle(
+                          color: EmberColors.textMid,
+                          fontSize: 11,
+                          height: 1.4),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: valid.isEmpty
                 ? Padding(
                     padding: const EdgeInsets.all(24),
                     child: EmptyState(
                       icon: Icons.psychology_outlined,
-                      title: 'No checkpoints yet',
-                      subtitle: orphanedCount > 0
-                          ? 'No checkpoints exist on this branch. '
-                              '$orphanedCount checkpoint${orphanedCount == 1 ? "" : "s"} '
-                              'from other branches stay on disk and will '
-                              'reappear if you navigate back to them via '
-                              'the chat tree.'
-                          : 'The auto-summariser writes a new checkpoint '
-                              'every 20 or so messages. You can also tap '
-                              '"Summarise now" below to force one.',
+                      // The orphan case is carried by the persistent banner
+                      // above; keep the empty state to the "how it works"
+                      // teaching message so the two never duplicate.
+                      title: orphanedCount > 0
+                          ? 'No checkpoints on this branch'
+                          : 'No checkpoints yet',
+                      subtitle: 'The auto-summariser writes a new checkpoint '
+                          'every 20 or so messages. You can also tap '
+                          '"Summarise now" below to force one.',
                     ),
                   )
                 : ListView.separated(

@@ -661,4 +661,115 @@ void main() {
               'equals what target.pathHash would have been — no regression');
     });
   });
+
+  // #8 orphan surfacing: a checkpoint whose anchor was re-rolled / edited /
+  // deleted stops being valid for the CURRENT branch, but it is NOT lost —
+  // it lives on the branch where it was taken. countOrphanedCheckpoints
+  // powers the "N checkpoints live on other branches" banner so the empty
+  // Checkpoints list never reads as "your summaries were deleted".
+  group('countOrphanedCheckpoints', () {
+    Message msg(String id, {int variant = 0}) => Message(
+          id: id,
+          kind: MessageKind.char,
+          variants: const ['a', 'b'],
+          selectedVariant: variant,
+        );
+
+    Chat chatWith(List<Message> msgs, List<MemoryCheckpoint> ckpts) => Chat(
+          id: 'c1',
+          characterIds: const ['char1'],
+          messages: msgs,
+          memoryCheckpoints: ckpts,
+        );
+
+    test('no checkpoints → 0 orphans', () {
+      expect(countOrphanedCheckpoints(chatWith([msg('a')], [])), 0);
+    });
+
+    test('all checkpoints valid on the current branch → 0 orphans', () {
+      final msgs = [msg('a'), msg('b'), msg('c')];
+      final chat = chatWith(msgs, [
+        MemoryCheckpoint(
+          id: 'mc1',
+          summary: 's',
+          anchorMessageIdx: 1,
+          pathHash: computePathHash(msgs, 1),
+        ),
+      ]);
+      expect(countOrphanedCheckpoints(chat), 0);
+      // sanity: it really is valid
+      expect(findValidCheckpoints(chat).length, 1);
+    });
+
+    test('checkpoint whose anchor was re-rolled (variant flip) → 1 orphan', () {
+      final msgs = [msg('a'), msg('b', variant: 0), msg('c')];
+      // Take the checkpoint against the ORIGINAL branch (b @ variant 0).
+      final ckpt = MemoryCheckpoint(
+        id: 'mc1',
+        summary: 's',
+        anchorMessageIdx: 1,
+        pathHash: computePathHash(msgs, 1),
+      );
+      // Now the user re-rolls message b → its selectedVariant changes → the
+      // branch diverges at/before the anchor, so the checkpoint no longer
+      // prefixes the current path.
+      msgs[1].selectedVariant = 1;
+      final chat = chatWith(msgs, [ckpt]);
+      expect(findValidCheckpoints(chat), isEmpty);
+      expect(countOrphanedCheckpoints(chat), 1);
+    });
+
+    test('checkpoint whose anchor fell out of range (messages deleted) → 1 '
+        'orphan', () {
+      final msgs = [msg('a'), msg('b'), msg('c')];
+      final ckpt = MemoryCheckpoint(
+        id: 'mc1',
+        summary: 's',
+        anchorMessageIdx: 2,
+        pathHash: computePathHash(msgs, 2),
+      );
+      // Delete the tail so the anchor index no longer exists.
+      msgs.removeRange(1, 3); // now only [a]
+      final chat = chatWith(msgs, [ckpt]);
+      expect(findValidCheckpoints(chat), isEmpty);
+      expect(countOrphanedCheckpoints(chat), 1);
+    });
+
+    test('mix of valid + orphaned → counts only the orphans', () {
+      final msgs = [msg('a'), msg('b', variant: 0), msg('c'), msg('d')];
+      // orphanCkpt is anchored at index 1 against the ORIGINAL branch.
+      final orphanCkpt = MemoryCheckpoint(
+        id: 'mc-orphan',
+        summary: 's',
+        anchorMessageIdx: 1,
+        pathHash: computePathHash(msgs, 1),
+      );
+      // Re-roll b → the branch diverges at index 1, orphaning orphanCkpt.
+      msgs[1].selectedVariant = 1;
+      // A checkpoint taken AFTER the flip (anchored at 3) is genuinely valid.
+      final validCkpt = MemoryCheckpoint(
+        id: 'mc-valid',
+        summary: 's',
+        anchorMessageIdx: 3,
+        pathHash: computePathHash(msgs, 3),
+      );
+      final chat = chatWith(msgs, [validCkpt, orphanCkpt]);
+      expect(findValidCheckpoints(chat).map((c) => c.id), ['mc-valid']);
+      expect(countOrphanedCheckpoints(chat), 1);
+    });
+
+    test('legacy empty-pathHash checkpoints are always valid → not orphaned',
+        () {
+      final msgs = [msg('a'), msg('b')];
+      final chat = chatWith(msgs, [
+        MemoryCheckpoint(
+          id: 'legacy',
+          summary: 's',
+          anchorMessageIdx: 1,
+          pathHash: '', // migration sentinel
+        ),
+      ]);
+      expect(countOrphanedCheckpoints(chat), 0);
+    });
+  });
 }
