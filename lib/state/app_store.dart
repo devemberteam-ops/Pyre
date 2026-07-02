@@ -1576,6 +1576,11 @@ class AppStore extends ChangeNotifier {
     // cancel it too to avoid a stray write during teardown.
     _coalescedNotifyTimer?.cancel();
     _coalescedNotifyTimer = null;
+    // Fix 3: same reasoning — this timer only ever touches a caller-owned
+    // ValueNotifier (never `notifyListeners()`), but drop it too so it can't
+    // fire into a notifier the caller has since disposed.
+    _coalescedStreamNotifyTimer?.cancel();
+    _coalescedStreamNotifyTimer = null;
     _persistTimer?.cancel();
     _persistTimer = null;
     super.dispose();
@@ -2729,11 +2734,31 @@ class AppStore extends ChangeNotifier {
   /// the stream STARTED, so chunks keep landing on the intended variant
   /// even if the user swipes `<`/`>` mid-stream (which would otherwise
   /// overwrite the variant they just navigated to).
+  ///
+  /// Fix 1 (2026-07 perf pass — whole-screen streaming jank): when
+  /// [streamingNotifier] is provided, the model write below stays perfectly
+  /// SYNCHRONOUS (unchanged — a navigate-away or a persist mid-stream always
+  /// sees the freshest text) and the 600ms persist debounce is scheduled
+  /// exactly as before, but the WIDE `notifyListeners()` fan-out (RootShell,
+  /// nav, every other bubble) is skipped entirely. Instead only the caller's
+  /// notifier is updated — the caller (ChatScreen) wraps just the ONE
+  /// streaming bubble's text in a `ValueListenableBuilder` on it, so a token
+  /// only repaints that one bubble.
+  ///
+  /// Fix 3: the notifier's `.value` assignment (which is what fires its
+  /// listeners / triggers the `ValueListenableBuilder` rebuild) is coalesced
+  /// to ~frame cadence via [_coalescedStreamNotifyTimer] — mirrors
+  /// `_bumpStreaming`'s existing `_coalescedNotifyTimer` window exactly, so a
+  /// burst of chunks within ~16ms collapses into one bubble repaint and a
+  /// trailing update is always scheduled so the final chunk paints. When
+  /// [streamingNotifier] is null, behavior is 100% unchanged (`_bumpStreaming`,
+  /// global notify, no coalescing change).
   void updateMessageText(
     String chatId,
     String messageId,
     String newText, {
     int? variantIndex,
+    ValueNotifier<String>? streamingNotifier,
   }) {
     final chat = _chatById(chatId);
     if (chat == null) return;
@@ -2755,11 +2780,49 @@ class AppStore extends ChangeNotifier {
     }
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
     chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    if (streamingNotifier != null) {
+      // Isolated path: schedule the SAME 600ms persist debounce as always,
+      // but skip the perf-cache invalidation (Fix 4 — char/persona/lorebook
+      // indices don't change mid-stream) and skip the global notify. The
+      // bubble reads its text from the notifier, not from a store rebuild.
+      _persistTimer?.cancel();
+      _persistTimer = Timer(_persistDebounce, _persist);
+      _pendingStreamText = newText;
+      _coalescedStreamNotifyTimer ??= Timer(_coalescedNotifyWindow, () {
+        _coalescedStreamNotifyTimer = null;
+        final text = _pendingStreamText;
+        if (text != null) streamingNotifier.value = text;
+      });
+      return;
+    }
     // (G) Coalesced notify: this is the per-token streaming write. The text
     // is already in the model above (read synchronously by the bubble); only
     // the rebuild fan-out is throttled to ~frame cadence. The 600ms persist
     // debounce + the stream-end `flushPersist()` are unchanged.
     _bumpStreaming();
+  }
+
+  // Fix 3 (2026-07 perf pass): coalescing state for the ISOLATED
+  // streaming-notifier path above — separate from `_coalescedNotifyTimer`
+  // (which coalesces the GLOBAL notify for the non-isolated path) since both
+  // can be relevant across retries/sibling call sites; sharing one timer
+  // would let one path's flush silently swallow the other's pending update.
+  Timer? _coalescedStreamNotifyTimer;
+  String? _pendingStreamText;
+
+  /// Force the pending coalesced streaming-notifier update to flush right
+  /// now. Call this at "the turn is settling" moments (stream onDone/error/
+  /// stop) so the final chunk is guaranteed to land on the notifier even if
+  /// the trailing ~16ms timer hasn't fired yet — mirrors `flushPersist`'s
+  /// same treatment of `_coalescedNotifyTimer`.
+  void flushStreamingNotifier(ValueNotifier<String> notifier) {
+    if (_coalescedStreamNotifyTimer != null) {
+      _coalescedStreamNotifyTimer!.cancel();
+      _coalescedStreamNotifyTimer = null;
+    }
+    final text = _pendingStreamText;
+    if (text != null) notifier.value = text;
+    _pendingStreamText = null;
   }
 
   /// Add a new (empty) variant to a message and make it the selected one.

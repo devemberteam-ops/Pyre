@@ -23,11 +23,31 @@ class ChatText extends StatelessWidget {
   /// models like DeepSeek-R1 are stripped before rendering. The raw text
   /// stays in storage — only the visible render is filtered.
   final bool hideReasoning;
+
+  /// Fix 2 (2026-07 perf pass): true while this bubble is the ACTIVE
+  /// streaming target. The body grows every coalesced notifier flush
+  /// (see `_ChatScreenState._streamingTextNotifier`), so every call is a
+  /// guaranteed cache MISS against the shared [_parseCache] — parsing it
+  /// there would (a) do nothing useful (never a hit) and (b) evict OTHER
+  /// bubbles' cached parses out of the bounded LRU-ish cache for no benefit.
+  /// Instead, a streaming body is parsed through a dedicated single-slot
+  /// cache ([_streamParseKey] / [_streamParseSpans]) that only remembers the
+  /// MOST RECENT streaming parse — still a full re-parse per call (the
+  /// tokenizer's mid-token state
+  /// isn't externalized, so a truly incremental resume isn't safe: a
+  /// dangling `"`/`*` at the tail can resolve differently once more text
+  /// arrives), but capped to at most once per caller rebuild. Combined with
+  /// the coalesced ~16ms streaming notifier upstream, that keeps the parse
+  /// rate at ~1/frame instead of once per raw SSE token (was O(N²) over a
+  /// long reply). Formatting is identical either way — this only changes
+  /// which cache the parse is memoized through.
+  final bool isStreaming;
   const ChatText(
     this.body, {
     super.key,
     this.baseStyle,
     this.hideReasoning = true,
+    this.isStreaming = false,
   });
 
   static final _thinkBlock = RegExp(
@@ -98,8 +118,11 @@ class ChatText extends StatelessWidget {
     if (visible.isEmpty) {
       return Text('…', style: TextStyle(color: EmberColors.textDim));
     }
+    final spans = isStreaming
+        ? _streamParseMemo(visible, base)
+        : _parseMemo(visible, base);
     return Text.rich(
-      TextSpan(children: _parseMemo(visible, base)),
+      TextSpan(children: spans),
       softWrap: true,
     );
   }
@@ -145,13 +168,49 @@ class ChatText extends StatelessWidget {
     return spans;
   }
 
+  // ── Streaming parse memo (Fix 2) ────────────────────────────────────────
+  //
+  // Single-slot cache dedicated to the currently-streaming bubble(s). It
+  // never shares `_parseCache` (every streaming call is a guaranteed miss
+  // there, so it would only evict OTHER bubbles' entries for nothing).
+  // Keyed the same way, but capped at ONE entry — a plain `==` short-circuit
+  // means an unchanged (src, base, palette) tuple across back-to-back
+  // rebuilds (e.g. two coalesced flushes landing the same text, or a sibling
+  // repaint that doesn't touch this bubble) reuses the last parse instead of
+  // re-tokenizing. Cleared whenever the key changes (bounded to size 1) and
+  // by [debugClearParseCache] between tests.
+  static _ParseKey? _streamParseKey;
+  static List<InlineSpan>? _streamParseSpans;
+
+  static List<InlineSpan> _streamParseMemo(String src, TextStyle base) {
+    final key = _ParseKey(
+      src,
+      base,
+      EmberColors.textHigh,
+      EmberColors.textMid,
+      EmberColors.bgElevated,
+    );
+    if (_streamParseKey == key && _streamParseSpans != null) {
+      return _streamParseSpans!;
+    }
+    final spans = _parse(src, base);
+    _streamParseKey = key;
+    _streamParseSpans = spans;
+    return spans;
+  }
+
   /// Test-only: number of distinct (text, style) parses currently memoized.
   @visibleForTesting
   static int get debugParseCacheSize => _parseCache.length;
 
-  /// Test-only: drop the parse memo.
+  /// Test-only: drop the parse memo (both the shared cache and the
+  /// single-slot streaming cache).
   @visibleForTesting
-  static void debugClearParseCache() => _parseCache.clear();
+  static void debugClearParseCache() {
+    _parseCache.clear();
+    _streamParseKey = null;
+    _streamParseSpans = null;
+  }
 
   static List<InlineSpan> _parse(String src, TextStyle base) {
     final spans = <InlineSpan>[];

@@ -4,7 +4,7 @@ import 'dart:io' show Platform;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, kIsWeb, TargetPlatform;
+    show defaultTargetPlatform, kIsWeb, TargetPlatform, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -57,6 +57,18 @@ bool get _isDesktop {
 }
 
 // kExplicitNoPersonaId is declared in models.dart (canonical location).
+
+/// Fix 1 perf-regression test seam (2026-07): message-id → build count for
+/// `_MessageBubbleState.build()`. Test-only signal that a non-streaming
+/// bubble's count stays flat while the isolated streaming bubble's climbs;
+/// production code never reads this. Call [debugResetBubbleBuildCounts]
+/// between test cases.
+@visibleForTesting
+final Map<String, int> debugBubbleBuildCounts = <String, int>{};
+
+/// Test-only: clear the per-message build-count seam above.
+@visibleForTesting
+void debugResetBubbleBuildCounts() => debugBubbleBuildCounts.clear();
 
 /// Kinds that render as the centred AUX NOTE (no user-side bubble, no avatar,
 /// no variant arrows) instead of a full chat bubble.
@@ -287,6 +299,52 @@ class _ChatScreenState extends State<ChatScreen> {
   String _streamBuffer = '';
   bool _generating = false;
   String? _streamMessageId;
+
+  // Fix 1 (2026-07 perf pass — whole-screen streaming jank): isolates the
+  // ACTIVE streaming bubble's per-token repaints from the rest of the tree.
+  // Lazily created the moment a generation starts (see `_streamingNotifier`),
+  // read by the one `_MessageBubble` whose `isStreaming` is true (via
+  // `ValueListenableBuilder`), and settled (one last flush, then disposed)
+  // once the turn ends — see `_settleStreamingNotifier`. `_streamMessageId`
+  // remains the single source of truth for WHICH bubble is streaming; this
+  // notifier only carries WHAT that bubble should currently render, so the
+  // two can never disagree about identity.
+  ValueNotifier<String>? _streamingTextNotifier;
+
+  /// The `AppStore` that owns the pending coalesced-flush timer for
+  /// [_streamingTextNotifier], cached at CREATION time (always inside a live
+  /// build/callback, so `context.read` is safe there). `dispose()` runs
+  /// AFTER this element may already be deactivated in the unmount cascade —
+  /// `context.read<AppStore>()` from inside `dispose()` throws ("looking up
+  /// a deactivated widget's ancestor is unsafe"), so this cached reference
+  /// is what lets teardown clean up the pending timer without touching
+  /// `context` at all.
+  AppStore? _streamingNotifierStore;
+
+  /// Lazily creates (or reuses) the notifier for the current streaming turn.
+  /// A context-recovery retry / smart-fallback retry re-enters the same
+  /// generation method for the SAME `assistantId` — reusing the existing
+  /// notifier (rather than tearing down and recreating one per attempt)
+  /// means the `ValueListenableBuilder` never remounts mid-turn.
+  ValueNotifier<String> _streamingNotifier() {
+    _streamingNotifierStore ??= context.read<AppStore>();
+    return _streamingTextNotifier ??= ValueNotifier<String>(_streamBuffer);
+  }
+
+  /// Settle the streaming turn: flush any pending coalesced update so the
+  /// final chunk is visible, then drop the notifier. Safe to call multiple
+  /// times / when no notifier exists. Called from every onDone / onError /
+  /// Stop / settle path so the bubble always ends up reading the plain
+  /// `message.text` again (via the next normal `notifyListeners()`) instead
+  /// of being stuck on a disposed notifier.
+  void _settleStreamingNotifier() {
+    final notifier = _streamingTextNotifier;
+    if (notifier == null) return;
+    _streamingNotifierStore?.flushStreamingNotifier(notifier);
+    _streamingNotifierStore = null;
+    _streamingTextNotifier = null;
+    notifier.dispose();
+  }
 
   /// H-1: this screen's own outstanding GenerationKeepAlive refs (light —
   /// the chat path never uses heavy). Bumped by [_keepAliveStart] and
@@ -520,6 +578,21 @@ class _ChatScreenState extends State<ChatScreen> {
       _keepAliveStop();
     }
     _streamSub?.cancel();
+    // Fix 1: navigating away mid-stream must not leave the store holding a
+    // pending coalesced-flush Timer that targets a notifier this screen is
+    // about to drop (it would later fire `.value =` on a disposed
+    // `ValueNotifier` and throw). Uses the STORE REFERENCE CACHED AT
+    // CREATION TIME (`_streamingNotifierStore`), never `context.read` —
+    // this element may already be deactivated by the time `dispose()` runs
+    // in the unmount cascade, and `context.read<AppStore>()` here throws
+    // ("looking up a deactivated widget's ancestor is unsafe").
+    final pendingNotifier = _streamingTextNotifier;
+    if (pendingNotifier != null) {
+      _streamingNotifierStore?.flushStreamingNotifier(pendingNotifier);
+      pendingNotifier.dispose();
+      _streamingTextNotifier = null;
+      _streamingNotifierStore = null;
+    }
     _scrollCtl.removeListener(_onScroll);
     _scrollCtl.dispose();
     _inputCtl.dispose();
@@ -1156,6 +1229,7 @@ class _ChatScreenState extends State<ChatScreen> {
             assistantId,
             _stripChatSentinels(_streamBuffer),
             variantIndex: pinnedVariant,
+            streamingNotifier: _streamingNotifier(),
           );
           _scrollToBottom();
         },
@@ -1176,6 +1250,13 @@ class _ChatScreenState extends State<ChatScreen> {
         onDone: () {
           _keepAliveStop();
           if (!mounted) return;
+          // Fix 1: the turn is settling — flush the last coalesced chunk to
+          // the notifier and drop it BEFORE the final `notifyListeners()`
+          // below (via `flushPersist`), so the bubble's very last frame is
+          // painted through the isolated path and every subsequent rebuild
+          // goes back to reading `message.text` directly (no dangling
+          // ValueListenableBuilder on a disposed notifier).
+          _settleStreamingNotifier();
           setState(() {
             _generating = false;
             _streamMessageId = null;
@@ -1316,6 +1397,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final hasNext = _fallbackIndex + 1 < _fallbackChain.length;
     final isApiError = error is ChatApiError;
     if (hasNext && isApiError && store.uiPrefs.askToSwitchOnFailure) {
+      // Fix 1: this turn's stream is done (either settling into the
+      // fallback card, which is a NEW UI branch, not a notifier reader, or
+      // about to fall through to `_finishWithError` below) — drop the
+      // notifier here so a subsequent `_retryWithNextCandidate` creates a
+      // fresh one for its own attempt instead of inheriting a stale value.
+      _settleStreamingNotifier();
       setState(() {
         _generating = false;
         _streamMessageId = null;
@@ -1910,6 +1997,11 @@ class _ChatScreenState extends State<ChatScreen> {
     // Safe to call even if start() was never reached.
     _keepAliveStop();
     if (!mounted) return;
+    // Fix 1: this is a terminal path for the current stream — settle the
+    // notifier before writing the partial text below via the normal
+    // (non-isolated) `store.updateMessageText`, so that write's global
+    // notify is what the bubble ultimately renders from.
+    _settleStreamingNotifier();
     // Wave CH+CI: parse the friendly error message out of ChatApiError
     // JSON bodies and surface it as a transient SnackBar instead of
     // polluting the in-progress message bubble. Previous behavior
@@ -2266,6 +2358,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _stop() {
     _streamSub?.cancel();
+    // Fix 1: user-initiated stop is always terminal for the current
+    // notifier — settle it before the emptiness check below reads the
+    // model text back out (the model write itself was always synchronous,
+    // so this doesn't change what text Stop sees/keeps).
+    _settleStreamingNotifier();
     _clearPendingFallback(); // audit C1
     // Wave CY.7: if the user tapped Stop BEFORE any tokens arrived,
     // the assistant message we pre-created is just dead UI (the
@@ -3082,6 +3179,7 @@ class _ChatScreenState extends State<ChatScreen> {
             last.id,
             _stripChatSentinels(_streamBuffer),
             variantIndex: pinnedVariant,
+            streamingNotifier: _streamingNotifier(),
           );
           _scrollToBottom();
         },
@@ -3092,6 +3190,7 @@ class _ChatScreenState extends State<ChatScreen> {
         onDone: () {
           _keepAliveStop(); // Wave BM
           if (!mounted) return;
+          _settleStreamingNotifier();
           setState(() {
             _generating = false;
             _streamMessageId = null;
@@ -3961,6 +4060,7 @@ class _ChatScreenState extends State<ChatScreen> {
             firstId,
             _stripChatSentinels(_streamBuffer),
             variantIndex: pinnedVariant,
+            streamingNotifier: _streamingNotifier(),
           );
           _scrollToBottom();
         },
@@ -3971,6 +4071,7 @@ class _ChatScreenState extends State<ChatScreen> {
         onDone: () {
           _keepAliveStop();
           if (!mounted) return;
+          _settleStreamingNotifier();
           setState(() {
             _generating = false;
             _streamMessageId = null;
@@ -4201,6 +4302,7 @@ class _ChatScreenState extends State<ChatScreen> {
             m.id,
             _stripChatSentinels(_streamBuffer),
             variantIndex: pinnedVariant,
+            streamingNotifier: _streamingNotifier(),
           );
           _scrollToBottom();
         },
@@ -4211,6 +4313,7 @@ class _ChatScreenState extends State<ChatScreen> {
         onDone: () {
           _keepAliveStop(); // Wave BM
           if (!mounted) return;
+          _settleStreamingNotifier();
           setState(() {
             _generating = false;
             _streamMessageId = null;
@@ -4495,6 +4598,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                     store.characterById(id)
                             ].whereType<Character>().toList(growable: false)
                           : const <Character>[];
+                      final isThisBubbleStreaming =
+                          _streamMessageId == m.id;
                       final bubble = _MessageBubble(
                         message: m,
                         character: speaker,
@@ -4502,7 +4607,14 @@ class _ChatScreenState extends State<ChatScreen> {
                         persona: persona,
                         regexRules: store.regexRules,
                         messageIndex: i,
-                        isStreaming: _streamMessageId == m.id,
+                        isStreaming: isThisBubbleStreaming,
+                        // Fix 1: only the ACTIVE streaming bubble gets the
+                        // isolation notifier — every other bubble's `null`
+                        // means its `_MessageBubbleState` renders `message.text`
+                        // directly, completely unaffected by streaming ticks.
+                        streamingText: isThisBubbleStreaming
+                            ? _streamingNotifier()
+                            : null,
                         showSpeakerName: chat.characterIds.length > 1,
                         isPartySceneMessage: isPartySceneMessage,
                         partyMembers: partyMembers,
@@ -4612,7 +4724,14 @@ class _ChatScreenState extends State<ChatScreen> {
                             );
                       return KeyedSubtree(
                         key: _keyFor(m.id),
-                        child: inner,
+                        // Fix 5 (2026-07 perf pass): give every list item
+                        // its own compositing layer. Without this, a height
+                        // change on the streaming bubble (text growing a
+                        // line) forces Skia to repaint the whole ListView
+                        // viewport's paint layer, including every sibling
+                        // bubble on screen, each token. `RepaintBoundary`
+                        // isolates that to just this item's layer.
+                        child: RepaintBoundary(child: inner),
                       );
                     },
                   );
@@ -4831,6 +4950,15 @@ class _MessageBubble extends StatefulWidget {
   // every chunk leaves the message looking "truncated" until the final
   // punctuation arrives).
   final bool isStreaming;
+
+  /// Fix 1 (2026-07 perf pass): non-null ONLY for the one bubble whose
+  /// [isStreaming] is true. When set, the bubble's `ChatText` is wrapped in
+  /// a `ValueListenableBuilder` reading THIS notifier instead of `message.
+  /// text` directly, so a streaming tick repaints only this bubble instead
+  /// of the whole list rebuilding via `context.watch<AppStore>()`. `null`
+  /// for every other bubble — those keep reading `message.text` exactly as
+  /// before, unaffected by streaming ticks.
+  final ValueNotifier<String>? streamingText;
   // Wave CY.16: inline edit / select modes driven by parent state.
   final bool isEditing;
   final bool isSelecting;
@@ -4869,6 +4997,7 @@ class _MessageBubble extends StatefulWidget {
     required this.regexRules,
     required this.messageIndex,
     this.isStreaming = false,
+    this.streamingText,
     this.showSpeakerName = false,
     this.isPartySceneMessage = false,
     this.partyMembers = const <Character>[],
@@ -4923,6 +5052,17 @@ class _MessageBubbleState extends State<_MessageBubble> {
   @override
   Widget build(BuildContext context) {
     final m = widget.message;
+    // Fix 1 perf-regression test seam ONLY: counts how many times THIS
+    // bubble's build() runs, keyed by message id, so a widget test can
+    // assert a non-streaming sibling's build count stays flat while the
+    // isolated streaming bubble's climbs — proving the isolation without
+    // reaching into private state. Zero runtime cost otherwise (a plain map
+    // increment).
+    debugBubbleBuildCounts.update(
+      m.id,
+      (n) => n + 1,
+      ifAbsent: () => 1,
+    );
     final isUser = m.kind == MessageKind.user;
     // Only system is truly read-only / aux (centred italic note, no controls).
     // OOC and Scene fall through to the full bubble path (Sub-task A).
@@ -5198,34 +5338,73 @@ class _MessageBubbleState extends State<_MessageBubble> {
                                   ),
                                 ),
                               ),
-                            ChatText(
-                              // Wave CY.15: substitute {{user}} / {{char}}
-                              // at display time. Cards (especially
-                              // first_mes / alternate_greetings) routinely
-                              // contain those placeholders and they need
-                              // to render as real names — same way they're
-                              // already filled in the system prompt via
-                              // _buildTurns.
-                              //
-                              // Pyre 1.1 (F4): non-destructive DISPLAY-stage
-                              // regex on top (after name-fill). Empty rules
-                              // list → identity, so the rendered text is
-                              // byte-identical when no rules exist.
-                              applyRegexRules(
-                                _fillNamePlaceholders(
-                                  m.text,
-                                  charName: widget.character?.name,
-                                  personaName: widget.persona?.name,
+                            // Fix 1 (2026-07 perf pass): when this bubble is
+                            // the active streaming target, `widget.
+                            // streamingText` isolates its per-token repaints
+                            // — only the `ValueListenableBuilder` below
+                            // rebuilds on each coalesced flush, not the rest
+                            // of this bubble (avatar, footer, controls) and
+                            // definitely not any OTHER bubble. Every
+                            // non-streaming bubble (the overwhelming
+                            // majority during a generation) takes the plain
+                            // `ChatText(m.text, ...)` branch, reading
+                            // `message.text` directly exactly as before.
+                            if (widget.streamingText != null)
+                              ValueListenableBuilder<String>(
+                                valueListenable: widget.streamingText!,
+                                builder: (context, liveText, _) => ChatText(
+                                  // Same display-stage pipeline as the
+                                  // non-streaming branch below — name-fill
+                                  // then regex — just fed from the live
+                                  // notifier value instead of `m.text` so
+                                  // formatting (italics/quotes/markdown)
+                                  // renders identically while streaming.
+                                  applyRegexRules(
+                                    _fillNamePlaceholders(
+                                      liveText,
+                                      charName: widget.character?.name,
+                                      personaName: widget.persona?.name,
+                                    ),
+                                    widget.regexRules,
+                                    stream: isUserSide
+                                        ? RegexStream.userInput
+                                        : RegexStream.aiOutput,
+                                    stage: RegexStage.display,
+                                  ),
+                                  hideReasoning: _reasoningOverride ??
+                                      chatSettings.hideReasoning,
+                                  isStreaming: true,
                                 ),
-                                widget.regexRules,
-                                stream: isUserSide
-                                    ? RegexStream.userInput
-                                    : RegexStream.aiOutput,
-                                stage: RegexStage.display,
+                              )
+                            else
+                              ChatText(
+                                // Wave CY.15: substitute {{user}} / {{char}}
+                                // at display time. Cards (especially
+                                // first_mes / alternate_greetings) routinely
+                                // contain those placeholders and they need
+                                // to render as real names — same way they're
+                                // already filled in the system prompt via
+                                // _buildTurns.
+                                //
+                                // Pyre 1.1 (F4): non-destructive DISPLAY-stage
+                                // regex on top (after name-fill). Empty rules
+                                // list → identity, so the rendered text is
+                                // byte-identical when no rules exist.
+                                applyRegexRules(
+                                  _fillNamePlaceholders(
+                                    m.text,
+                                    charName: widget.character?.name,
+                                    personaName: widget.persona?.name,
+                                  ),
+                                  widget.regexRules,
+                                  stream: isUserSide
+                                      ? RegexStream.userInput
+                                      : RegexStream.aiOutput,
+                                  stage: RegexStage.display,
+                                ),
+                                hideReasoning: _reasoningOverride ??
+                                    chatSettings.hideReasoning,
                               ),
-                              hideReasoning: _reasoningOverride ??
-                                  chatSettings.hideReasoning,
-                            ),
                           ],
                         ),
         ),
