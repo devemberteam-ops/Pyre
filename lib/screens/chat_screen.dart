@@ -3816,6 +3816,15 @@ class _ChatScreenState extends State<ChatScreen> {
           )
         : null;
 
+    // Party mode (2026-07, owner feedback): a greeting GENERATED in a party
+    // chat is a party scene — it must render as one ("Narrator" header +
+    // stacked member avatars), not as the primary character. So the greeting
+    // message carries `characterId: null`, same as every scene turn. Safe for
+    // the pre-existing card-written variant that shares this message: with
+    // party mode OFF a null-characterId group message falls back to the
+    // PRIMARY character's rendering (the long-standing edge-case path), which
+    // is exactly who it was attributed to before — nothing is lost either way.
+    final isPartyScene = chat.partyMode && chat.characterIds.length > 1;
     String firstId;
     int vIdx;
     final firstCharIdx = chat.messages
@@ -3825,7 +3834,7 @@ class _ChatScreenState extends State<ChatScreen> {
         id: newId('msg'),
         kind: MessageKind.char,
         variants: [''],
-        characterId: responderId,
+        characterId: isPartyScene ? null : responderId,
       );
       store.addMessage(chat.id, m);
       firstId = m.id;
@@ -3841,6 +3850,14 @@ class _ChatScreenState extends State<ChatScreen> {
     } else {
       final firstChar = chat.messages[firstCharIdx];
       firstId = firstChar.id;
+      // Party mode: the freshly-generated greeting variant is a party scene —
+      // drop the single-author pin so it renders as one (see the note above;
+      // the card-written variant sharing this message degrades gracefully:
+      // party OFF falls back to the primary character's rendering).
+      if (isPartyScene && firstChar.characterId != null) {
+        firstChar.characterId = null;
+        store.touchChat(chat); // attribution change must persist + sync
+      }
       // Hide any existing tail under the current variant so the new streaming
       // variant has a clean slate — same dance as regen. The OOC isn't inserted
       // yet, so the OLD variant's stashed tail never captures it.
