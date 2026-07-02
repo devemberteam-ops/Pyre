@@ -410,6 +410,13 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
         }
       } catch (_) {}
 
+      // Tier-1 H-1 (2026-07-02): hand the (just loaded-or-reset) push cursor to
+      // the store so its tombstone GC gates on "has this been pushed" even
+      // before this tick's own push completes — covers the fresh-pair edge
+      // where the persisted blob hasn't recorded a watermark yet. Idempotent:
+      // the setter no-ops when the value is unchanged.
+      store.setSyncedPushWatermark(_lastPushTime);
+
       // ---- 1. PULL ----
       final pullUri = Uri.parse(
           '${client.baseUrl}/pull?since=$_lastServerTime');
@@ -1325,6 +1332,9 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
           }
         } catch (_) {}
         _lastPushTime = newPushCursor;
+        // Tier-1 H-1: publish the freshly-advanced cursor so the store's
+        // tombstone GC won't reap a deletion we haven't confirmed pushed.
+        store.setSyncedPushWatermark(_lastPushTime);
       }
 
       _consecutiveFailures = 0;

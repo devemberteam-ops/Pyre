@@ -74,6 +74,21 @@ class AppStore extends ChangeNotifier {
   /// (ChatPromptInputs.learnedContextLimitTokens); nothing consults this map
   /// yet.
   Map<String, int> learnedContextLimits = {};
+  /// Tier-1 H-1 (2026-07-02): "push-before-reap" anchor for tombstone GC.
+  /// The last CLIENT-clock push cursor SyncEngine confirmed
+  /// (`SyncEngine._lastPushTime`), mirrored here so [_gcTombstones] — which
+  /// runs on every save, with no SyncEngine reference — can refuse to reap a
+  /// soft-delete / tombstone-log entry we HAVEN'T pushed yet (its peer would
+  /// otherwise resurrect the record on reconnect). Semantics:
+  ///   * `null`  => NO sync relationship (never paired, or torn down) => GC
+  ///     falls back to wall-clock reaping (unchanged for single-device users).
+  ///   * `N`     => sync active, pushed everything with `mtime <= N` => a
+  ///     tombstone is reapable only once `mtime <= N` (it's on the hub, so a
+  ///     reconnecting peer pulls the deletion instead of re-pushing its copy).
+  /// Persisted in the blob so it's available BEFORE the first post-load save
+  /// (SyncEngine may not have ticked yet); erring toward a LOWER/STALER value
+  /// is always safe — it reaps LESS, never resurrects.
+  int? syncedPushWatermark;
   /// Optional override: when non-null, the AI character builder uses
   /// this provider instead of [activeProviderId]. Useful when the user
   /// wants (a) an uncensored text model for chatting (DeepSeek, Soji),
@@ -577,6 +592,12 @@ class AppStore extends ChangeNotifier {
           (k, v) => MapEntry(k.toString(), (v as num?)?.toInt() ?? 0),
         );
       }
+      // Tier-1 H-1: push-before-reap watermark. Read EARLY (before any
+      // migration save below can trigger a load-time _gcTombstones) so the
+      // very first GC after a restart already sees the last-pushed cursor and
+      // can't wall-clock-reap an un-pushed tombstone. Absent => null => no
+      // sync relationship known yet (SyncEngine re-feeds it on init).
+      syncedPushWatermark = (raw['syncedPushWatermark'] as num?)?.toInt();
 
       // Hydrate API keys from OS-secure storage. We support a one-time
       // migration: if a provider blob still has a key in plain JSON (from
@@ -1134,17 +1155,39 @@ class AppStore extends ChangeNotifier {
   void _gcTombstones() {
     final cutoff =
         DateTime.now().millisecondsSinceEpoch - _tombstoneTtlMs;
-    characters.removeWhere((c) => c.deleted && c.mtime > 0 && c.mtime < cutoff);
-    personas.removeWhere((p) => p.deleted && p.mtime > 0 && p.mtime < cutoff);
-    chats.removeWhere((c) => c.deleted && c.mtime > 0 && c.mtime < cutoff);
+    // Tier-1 H-1 (2026-07-02) — PUSH-BEFORE-REAP. A tombstone is reapable only
+    // once we've CONFIRMED it was pushed, or there's no sync peer to protect.
+    // [syncedPushWatermark] is the last client-clock push cursor SyncEngine
+    // confirmed:
+    //   * null  => no sync relationship => reap purely by wall-clock (the old
+    //     behavior — a single-device user has no peer that could resurrect);
+    //   * N     => sync active, everything with `mtime <= N` is on the hub =>
+    //     reap only what's been pushed, so a device that deleted then went
+    //     offline 30+ days can't wall-clock-reap its OWN un-pushed tombstone
+    //     (which would let a peer LWW-apply the live record BACK on reconnect).
+    // Erring toward a lower/staler watermark is always safe: it reaps LESS.
+    final w = syncedPushWatermark;
+    bool pushed(int mtime) => w == null || mtime <= w;
+    characters.removeWhere(
+        (c) => c.deleted && c.mtime > 0 && c.mtime < cutoff && pushed(c.mtime));
+    personas.removeWhere(
+        (p) => p.deleted && p.mtime > 0 && p.mtime < cutoff && pushed(p.mtime));
+    chats.removeWhere(
+        (c) => c.deleted && c.mtime > 0 && c.mtime < cutoff && pushed(c.mtime));
     presets.removeWhere((p) =>
-        p.deleted && !p.locked && p.mtime > 0 && p.mtime < cutoff);
-    lorebooks.removeWhere((l) => l.deleted && l.mtime > 0 && l.mtime < cutoff);
+        p.deleted &&
+        !p.locked &&
+        p.mtime > 0 &&
+        p.mtime < cutoff &&
+        pushed(p.mtime));
+    lorebooks.removeWhere(
+        (l) => l.deleted && l.mtime > 0 && l.mtime < cutoff && pushed(l.mtime));
     // Wave CY.18.256: prune the synced tombstone LOG to the SAME 30-day
     // window. After 30 days a device that's been offline that long can't
     // sync cleanly anyway, so dropping the deletion record is safe and
-    // keeps the map from growing unbounded across deletes.
-    tombstones.removeWhere((_, mtime) => mtime < cutoff);
+    // keeps the map from growing unbounded across deletes. H-1: same
+    // push-before-reap gate — an un-pushed deletion record must survive.
+    tombstones.removeWhere((_, mtime) => mtime < cutoff && pushed(mtime));
   }
 
   /// Wave CY.18.256: record a deletion in the synced tombstone log. Called
@@ -1313,6 +1356,9 @@ class AppStore extends ChangeNotifier {
       // Slice D-2: learned context-limit cache (omit when empty).
       if (learnedContextLimits.isNotEmpty)
         'learnedContextLimits': learnedContextLimits,
+      // Tier-1 H-1: push-before-reap watermark (omit when null = no sync).
+      if (syncedPushWatermark != null)
+        'syncedPushWatermark': syncedPushWatermark,
       'characters': characters.map((c) => c.toJson()).toList(),
       'personas': personas.map((p) => p.toJson()).toList(),
       'activePersonaId': activePersonaId,
@@ -1431,6 +1477,12 @@ class AppStore extends ChangeNotifier {
   /// `factoryReset()` perform after reassigning collections wholesale.
   @visibleForTesting
   void debugInvalidatePerfCachesForTest() => _invalidateAllPerfCaches();
+
+  /// Tier-1 H-1 test seam: run the tombstone GC directly (it is otherwise
+  /// only reachable through the debounced persist path). Lets a unit test
+  /// assert the push-before-reap gate without pumping timers.
+  @visibleForTesting
+  void debugRunTombstoneGc() => _gcTombstones();
 
   // (H) Batch coalescing. While `_batchDepth > 0`, `_bump()` records that
   // state changed but defers the single notify + debounced persist until
@@ -1582,6 +1634,23 @@ class AppStore extends ChangeNotifier {
     final existing = learnedContextLimits[key];
     learnedContextLimits[key] =
         existing == null ? limitTokens : min(existing, limitTokens);
+    _bump();
+  }
+
+  /// Tier-1 H-1: SyncEngine feeds the confirmed push cursor here so
+  /// [_gcTombstones] can gate reaping on "has this been pushed". Pass `null`
+  /// when sync is not configured / torn down (GC then reaps by wall-clock).
+  /// No-op (no notify, no persist) when the value is unchanged, so the
+  /// every-30s sync poll doesn't churn a save. On a genuine advance it DOES
+  /// `_bump()` so the new cursor is durable BEFORE the next restart's
+  /// load-time GC — the value must survive the app being killed between the
+  /// push and the next real mutation, or that first post-restart GC could
+  /// wall-clock-reap an un-pushed tombstone. The cursor only advances when
+  /// there was dirty data to push, so a save was already imminent — the
+  /// added write is negligible.
+  void setSyncedPushWatermark(int? value) {
+    if (syncedPushWatermark == value) return;
+    syncedPushWatermark = value;
     _bump();
   }
 
