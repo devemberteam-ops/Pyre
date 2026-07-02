@@ -141,6 +141,28 @@ class ChatPromptInputs {
   /// deterministic probabilistic-lorebook golden pass a fixed value.
   final int? loreSeed;
 
+  /// Slice D-3 (2026-07-02): shrink the replayed HISTORY window to the last
+  /// [maxHistoryMessages] messages of the post-recap window (oldest dropped
+  /// first). null (the default) → the full post-recap window replays exactly
+  /// as before → byte-identical assembly. Non-null is only ever set by the
+  /// chat-screen reactive context-recovery loop, either as an initial
+  /// pre-trim (a known learned limit) or a retry after a real overflow 4xx.
+  /// The cut happens on the RAW windowed message list, BEFORE
+  /// `insertDepthTurns` and the in-flight-message skip, so depth anchoring
+  /// (which counts from the end of history) and the in-flight skip are never
+  /// corrupted by the trim. The floor (never below the last user turn) is
+  /// enforced here — NOT by `PlanSegment.droppable`, which is inert.
+  final int? maxHistoryMessages;
+
+  /// Slice D-3: the learned context-limit token count for this
+  /// provider+model (`AppStore.learnedContextLimits`), threaded through for
+  /// callers that want it alongside the build (e.g. diagnostics). The
+  /// PRE-TRIM DECISION itself is made by the caller (chat_screen's
+  /// `_buildTurns`), which converts a known limit into a concrete
+  /// [maxHistoryMessages] before constructing these inputs — this field does
+  /// not itself change assembly. Default null → no effect.
+  final int? learnedContextLimitTokens;
+
   const ChatPromptInputs({
     required this.chat,
     required this.character,
@@ -156,6 +178,8 @@ class ChatPromptInputs {
     this.guidePosition = GuideInjectionPosition.systemNoteAtEnd,
     this.includePostHistory = true,
     this.loreSeed,
+    this.maxHistoryMessages,
+    this.learnedContextLimitTokens,
   });
 }
 
@@ -553,8 +577,24 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
 
   // Replay only the post-recap window so we don't blow the context.
   final start = ltm.firstUncoveredIndex(chat);
-  final windowed =
-      chat.messages.sublist(start.clamp(0, chat.messages.length));
+  var windowed = chat.messages.sublist(start.clamp(0, chat.messages.length));
+  // Slice D-3: reactive context-recovery trim. `maxHistoryMessages == null`
+  // (the overwhelming default — every non-recovery call) leaves `windowed`
+  // untouched, so assembly stays byte-identical. When set, keep only the
+  // LAST N messages of the window (drop OLDEST first) — cut BEFORE
+  // `insertDepthTurns` / the in-flight skip below so depth anchoring (which
+  // counts from the end of the replayed history) and the in-flight-message
+  // skip both operate on the already-trimmed list, never on stale indices.
+  // HARDCODED FLOOR: never trim below the last message of the window (i.e.
+  // the current exchange's newest turn, typically the just-appended user
+  // message) — `PlanSegment.droppable` is NOT the safety mechanism (it is
+  // inert; nothing reads it), this clamp is.
+  final requestedMax = inputs.maxHistoryMessages;
+  if (requestedMax != null && windowed.length > requestedMax) {
+    final floor = windowed.isEmpty ? 0 : 1;
+    final keep = requestedMax < floor ? floor : requestedMax;
+    windowed = windowed.sublist(windowed.length - keep);
+  }
   final historyTurns = <ChatTurn>[];
   for (final m in windowed) {
     if (m.id == inputs.inFlightMessageId) continue;

@@ -22,6 +22,8 @@ import '../services/lorebook_inject.dart';
 import '../services/live_sheet.dart' as lsheet;
 import '../services/llm_debug_log.dart';
 import '../services/memory.dart' as ltm;
+import '../services/param_policy.dart'
+    show isContextOverflowError, contextLimitFromError;
 import '../services/preset_assembly.dart';
 import '../services/regex_rules.dart';
 import '../services/scene_background.dart' as scenebg;
@@ -71,6 +73,78 @@ bool get _isMobileForHaptics {
   if (kIsWeb) return false;
   return defaultTargetPlatform == TargetPlatform.android ||
       defaultTargetPlatform == TargetPlatform.iOS;
+}
+
+/// Slice D-3 (2026-07-02): the bounded retry cap for the reactive
+/// context-recovery loop in [_ChatScreenState._runGenerationInto]. Combined
+/// with [contextTrimFloor] (a second, independent stop condition — the
+/// window can't shrink below the floor), this guarantees the loop always
+/// terminates: either the attempt counter or the window size runs out.
+const int kMaxContextTrims = 4;
+
+/// Slice D-3: the hardcoded MINIMUM history-window size the reactive
+/// context-recovery loop will ever request — never below the last message
+/// of the replayed window (the current exchange's newest turn). This is the
+/// real safety floor; `PlanSegment.droppable` (prompt_plan.dart) is inert and
+/// must NOT be relied on. `windowLen <= 0` → floor is 0 (nothing to keep).
+int contextTrimFloor(int windowLen) => windowLen <= 0 ? 0 : 1;
+
+/// Slice D-3: compute the NEXT SMALLER history-window size after an overflow.
+/// [currentWindowLen] is the number of history messages the failing request
+/// just carried (the full post-recap window on the first attempt). Returns a
+/// value strictly less than [currentWindowLen] (unless already at the floor,
+/// in which case it returns the floor unchanged so the caller can detect "no
+/// more room to shrink").
+///
+///   * [learnedLimitTokens] known (a real number parsed from the provider's
+///     error, or previously learned) + [estimatedTokensPerMessage] > 0 →
+///     PRECISE cut: shrink the window to roughly fit under the limit (using
+///     the observed per-message token estimate), so the very next retry is
+///     likely to succeed in one shot instead of slowly stepping down.
+///   * Otherwise (no usable numbers) → HALVE the window — a robust default
+///     that converges to the floor in at most `log2(N)` steps, well inside
+///     [kMaxContextTrims] for any chat history a phone/desktop app manages.
+///
+/// Always monotone-shrinking and always clamped to
+/// `[contextTrimFloor(currentWindowLen), currentWindowLen - 1]` (or exactly
+/// the floor when [currentWindowLen] is already at/under it) — never grows,
+/// never returns something >= the input.
+int nextSmallerWindow(
+  int currentWindowLen, {
+  int? learnedLimitTokens,
+  int? estimatedPromptTokens,
+  double? estimatedTokensPerMessage,
+}) {
+  final floor = contextTrimFloor(currentWindowLen);
+  if (currentWindowLen <= floor) return floor;
+
+  int candidate;
+  if (learnedLimitTokens != null &&
+      learnedLimitTokens > 0 &&
+      estimatedPromptTokens != null &&
+      estimatedPromptTokens > 0 &&
+      estimatedTokensPerMessage != null &&
+      estimatedTokensPerMessage > 0) {
+    // How many tokens we need to shed, converted to a message count via the
+    // observed average — then subtract a bit extra (ceil, plus the shed
+    // count itself) so we don't re-overflow by a rounding hair.
+    final overBy = estimatedPromptTokens - learnedLimitTokens;
+    if (overBy > 0) {
+      final dropMessages =
+          (overBy / estimatedTokensPerMessage).ceil() + 1; // +1 safety margin
+      candidate = currentWindowLen - dropMessages;
+    } else {
+      // Estimate says we're already within budget — still take SOME action
+      // (this function is only called after a real overflow) via a halve.
+      candidate = (currentWindowLen / 2).floor();
+    }
+  } else {
+    candidate = (currentWindowLen / 2).floor();
+  }
+
+  if (candidate >= currentWindowLen) candidate = currentWindowLen - 1;
+  if (candidate < floor) candidate = floor;
+  return candidate;
 }
 
 /// chat-core-2-05: build the one-shot system prompt for the Fill-In scenario
@@ -240,6 +314,18 @@ class _ChatScreenState extends State<ChatScreen> {
   // at most once per assistant slot, so a user walking/retrying the same
   // turn doesn't inflate the self-learning "tends to censor" signal.
   final Set<String> _refusalCountedKeys = {};
+
+  // Slice D-3 (2026-07-02): reactive context-recovery loop state, scoped to
+  // ONE logical turn (reset in `_clearPendingFallback`, called at the top of
+  // every generation entry point — mirrors `_fallbackChain`/`_fallbackIndex`
+  // above). `_contextTrimWindow` null == "no trim requested yet" (the first
+  // attempt on THIS provider uses whatever `_buildTurns`'s own pre-trim
+  // read resolves, which is null unless a learned limit already applies);
+  // once set it is the exact `maxHistoryMessages` the NEXT retry passes.
+  // `_contextTrimAttempts` is the bounded-loop counter — capped at
+  // `kMaxContextTrims`, a stop condition independent of the window floor.
+  int? _contextTrimWindow;
+  int _contextTrimAttempts = 0;
 
   /// Wave CY.18.5: stable GlobalKey per message id so we can scroll
   /// to a specific bubble (used when the user picks a node in the
@@ -987,7 +1073,18 @@ class _ChatScreenState extends State<ChatScreen> {
     // fallback retry of the SAME turn (we keep `_inFlightGuide` set across
     // retries) and is cleared once the turn settles in `_finishGeneration`-
     // style cleanup below.
-    final turns = _buildTurns(store, chat, guide: _inFlightGuide);
+    //
+    // Slice D-3: `_contextTrimWindow` is null on the first attempt against
+    // THIS provider (so `_buildTurns`'s own pre-trim read against the
+    // learned-limit cache decides), and is the exact shrunk window on a
+    // context-recovery retry (set below, just before we recurse).
+    final turns = _buildTurns(
+      store,
+      chat,
+      guide: _inFlightGuide,
+      maxHistoryMessages: _contextTrimWindow,
+      provider: provider,
+    );
     // Wave BM: foreground-service keep-alive so the OS doesn't kill
     // Pyre while the LLM streams (especially the slow first-token wait
     // on reasoning models). Matching stop() in onDone / failure paths.
@@ -997,7 +1094,19 @@ class _ChatScreenState extends State<ChatScreen> {
       // fallback retry path can reach here while an earlier stream for
       // this screen is technically still open (e.g. the user abandoned
       // a slow stream via the card); without this the old subscription
-      // leaks and races the new one, writing into a stale slot.
+      // leaks and races the new one, writing into a stale slot. Awaiting
+      // the cancel is what closes that race, so it stays synchronous here.
+      //
+      // Slice D-3 note: the context-recovery retry ALSO re-enters this
+      // method — but from inside the OLD subscription's own `onError`
+      // dispatch, and `await`-ing that subscription's `cancel()` from
+      // inside its own callback hangs (observed as a real hang in the
+      // recovery widget test). That case is handled AT THE SOURCE instead:
+      // `_tryContextRecoveryOrFail` drops `_streamSub` (the erroring,
+      // already-terminal handle) BEFORE it recurses, so on a recovery retry
+      // `_streamSub` is null by the time we reach here and this `cancel()`
+      // is a no-op — leaving the normal abandoned-stream path's protective
+      // synchronous cancel completely untouched.
       await _streamSub?.cancel();
       _streamSub = null;
       _streamSub = streamChatCompletion(
@@ -1027,11 +1136,17 @@ class _ChatScreenState extends State<ChatScreen> {
         },
         // Wave CY.18.99: infra failures route to the fallback handler
         // (offers a switch when a candidate remains + toggle on),
-        // falling through to the old snackbar otherwise.
-        onError: (e) => _handleGenerationFailure(
-          chatId: chat.id,
+        // falling through to the old snackbar otherwise. Slice D-3 sits IN
+        // FRONT of that: a real context-overflow 4xx is trimmed-and-retried
+        // on THIS provider first (the user's chosen provider before any
+        // switch), and only falls through to `_handleGenerationFailure` once
+        // the recovery attempt cap or the window floor is hit.
+        onError: (e) => _tryContextRecoveryOrFail(
+          chat: chat,
           assistantId: assistantId,
           error: e,
+          turnsSent: turns,
+          provider: provider,
         ),
         onDone: () {
           _keepAliveStop();
@@ -1051,12 +1166,115 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     } catch (e) {
       _keepAliveStop();
-      _handleGenerationFailure(
-        chatId: chat.id,
+      _tryContextRecoveryOrFail(
+        chat: chat,
         assistantId: assistantId,
         error: e,
+        turnsSent: turns,
+        provider: provider,
       );
     }
+  }
+
+  /// Slice D-3 (2026-07-02): the bounded context-recovery gate. Runs BEFORE
+  /// `_handleGenerationFailure` on every stream error. Fires the trim+retry
+  /// ONLY when ALL of these hold — otherwise falls straight through to the
+  /// existing, unchanged failure path:
+  ///   - [error] is a `ChatApiError` with a 4xx `statusCode` (never 5xx —
+  ///     a server-side fault is not a length problem);
+  ///   - `isContextOverflowError(error.message)` — a REAL overflow
+  ///     phrasing, never a param-shape or auth/rate-limit rejection
+  ///     (disjoint by construction — see param_policy.dart);
+  ///   - the attempt count is still under [kMaxContextTrims];
+  ///   - the window can still shrink (hasn't already hit
+  ///     [contextTrimFloor]) — the SECOND, independent stop condition.
+  /// Both stops are checked so the loop provably terminates: the attempt
+  /// counter is a hard ceiling regardless of window arithmetic, and the
+  /// floor check means even a pathological `nextSmallerWindow` result can
+  /// never spin — the moment the window stops shrinking, this recognizes it
+  /// (`candidate >= currentWindowLen`) and falls through.
+  void _tryContextRecoveryOrFail({
+    required Chat chat,
+    required String assistantId,
+    required Object error,
+    required List<ChatTurn> turnsSent,
+    required ApiProvider provider,
+  }) {
+    if (error is ChatApiError) {
+      final status = error.statusCode;
+      final isOverflow4xx = status != null &&
+          status >= 400 &&
+          status < 500 &&
+          isContextOverflowError(error.message);
+      if (isOverflow4xx && _contextTrimAttempts < kMaxContextTrims) {
+        final store = context.read<AppStore>();
+        // Ground truth from the provider when it printed a number;
+        // otherwise fall back to this attempt's own estimated size minus a
+        // safety margin so we still learn SOMETHING conservative from a
+        // silent-number overflow.
+        final parsed = contextLimitFromError(error.message).maxTokens;
+        final estimatedThisAttempt =
+            turnsSent.fold<int>(0, (n, t) => n + approxTokens(t.content));
+        const safetyMargin = 256;
+        final fallbackLimit =
+            (estimatedThisAttempt - safetyMargin).clamp(1, 1 << 30);
+        store.recordContextLimit(
+          provider.id,
+          provider.model,
+          parsed ?? fallbackLimit,
+        );
+
+        // The CURRENT window size actually sent — either the explicit trim
+        // window from a prior retry, or (first attempt) the full post-recap
+        // window length.
+        final windowStart =
+            ltm.firstUncoveredIndex(chat).clamp(0, chat.messages.length);
+        final fullWindowLen = chat.messages.length - windowStart;
+        final currentWindowLen = _contextTrimWindow ?? fullWindowLen;
+        final floor = contextTrimFloor(currentWindowLen);
+
+        if (currentWindowLen > floor) {
+          final nextWindow = nextSmallerWindow(
+            currentWindowLen,
+            learnedLimitTokens: parsed ?? fallbackLimit,
+            estimatedPromptTokens: estimatedThisAttempt,
+            estimatedTokensPerMessage: currentWindowLen > 0
+                ? estimatedThisAttempt / currentWindowLen
+                : null,
+          );
+          if (nextWindow < currentWindowLen) {
+            _contextTrimWindow = nextWindow;
+            _contextTrimAttempts++;
+            // Drop the erroring subscription handle BEFORE recursing. In the
+            // streaming case we are inside this very subscription's `onError`
+            // dispatch; the stream already delivered a terminal error so it
+            // can emit nothing more. Nulling `_streamSub` now means the
+            // re-entrant `_runGenerationInto` sees no prior subscription to
+            // `await cancel()` on — which would hang from inside the callback
+            // — while the normal abandoned-stream path keeps its synchronous
+            // cancel. Fire-and-forget the actual cancel for tidiness.
+            final erroring = _streamSub;
+            _streamSub = null;
+            unawaited(erroring?.cancel());
+            // Overflow 4xx bodies are returned BEFORE any SSE chunk is ever
+            // emitted (the provider rejects the request outright), so the
+            // buffer is empty here in practice — reset defensively anyway so
+            // a retry into the same assistant slot can never concatenate
+            // stray partial text from a pathological provider.
+            _streamBuffer = '';
+            unawaited(_runGenerationInto(assistantId));
+            return;
+          }
+        }
+        // Window can't shrink further — fall through to the existing
+        // failure path (the window-floor stop condition).
+      }
+    }
+    _handleGenerationFailure(
+      chatId: chat.id,
+      assistantId: assistantId,
+      error: error,
+    );
   }
 
   /// Wave CY.18.99: infra-failure path. If another candidate remains and
@@ -1235,6 +1453,12 @@ class _ChatScreenState extends State<ChatScreen> {
   /// and a later "Try X" tap would stream into the wrong slot. Safe to
   /// call when nothing is pending (no-op).
   void _clearPendingFallback() {
+    // Slice D-3: a fresh generation entry point always starts this turn's
+    // context-recovery loop over (mirrors the fallback-chain reset below —
+    // a NEW turn must never inherit a shrunk window or attempt count from
+    // an unrelated previous turn).
+    _contextTrimWindow = null;
+    _contextTrimAttempts = 0;
     if (_pendingFallback == null && _fallbackChain.isEmpty) return;
     _fallbackChain = const [];
     _fallbackIndex = 0;
@@ -1773,7 +1997,10 @@ class _ChatScreenState extends State<ChatScreen> {
   /// the pure `injectGuide` inside `buildChatPrompt`; here we just resolve the
   /// position from settings and pass the note through.
   List<ChatTurn> _buildTurns(AppStore store, Chat chat,
-      {String? guide, bool includePostHistory = true}) {
+      {String? guide,
+      bool includePostHistory = true,
+      int? maxHistoryMessages,
+      ApiProvider? provider}) {
     // Use the selected responder for the system prompt (so the right
     // character's voice is described). For >1 member chats, also include
     // a brief roster so the LLM knows the other personas in the scene.
@@ -1809,6 +2036,38 @@ class _ChatScreenState extends State<ChatScreen> {
         ? guide
         : null;
 
+    // Slice D-3 (2026-07-02): pre-trim read. When the caller didn't already
+    // pick a window (a retry after a real overflow — see
+    // `_runGenerationInto`), consult the LEARNED limit for this
+    // provider+model. If we know a real limit AND a cheap estimate of this
+    // prompt already exceeds it, pick an initial window so the FIRST request
+    // has a shot at fitting (no wasted round-trip on a model we've already
+    // seen overflow). `provider == null` (a call site that didn't pass one,
+    // or no learned entry) → `resolvedMaxHistoryMessages` stays exactly
+    // [maxHistoryMessages] (null on every ordinary call) → byte-identical.
+    var resolvedMaxHistoryMessages = maxHistoryMessages;
+    int? learnedLimitTokens;
+    if (maxHistoryMessages == null && provider != null) {
+      learnedLimitTokens =
+          store.learnedContextLimits['${provider.id}|${provider.model}'];
+      if (learnedLimitTokens != null && learnedLimitTokens > 0) {
+        final windowStart =
+            ltm.firstUncoveredIndex(chat).clamp(0, chat.messages.length);
+        final windowLen = chat.messages.length - windowStart;
+        final estimated = _estimatePromptTokens(store, chat, character,
+            persona, preset, windowStart);
+        if (estimated > learnedLimitTokens && windowLen > 0) {
+          final perMessage = windowLen > 0 ? estimated / windowLen : 0.0;
+          resolvedMaxHistoryMessages = nextSmallerWindow(
+            windowLen + 1, // +1 so the result can equal windowLen at most
+            learnedLimitTokens: learnedLimitTokens,
+            estimatedPromptTokens: estimated,
+            estimatedTokensPerMessage: perMessage == 0 ? null : perMessage,
+          );
+        }
+      }
+    }
+
     final inputs = ChatPromptInputs(
       chat: chat,
       character: character,
@@ -1823,6 +2082,8 @@ class _ChatScreenState extends State<ChatScreen> {
       guideNote: guideNote,
       guidePosition: guideSettings.injectionPosition,
       includePostHistory: includePostHistory,
+      maxHistoryMessages: resolvedMaxHistoryMessages,
+      learnedContextLimitTokens: learnedLimitTokens,
     );
     final result = buildChatPrompt(inputs);
 
@@ -1848,6 +2109,37 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     return result.turns;
+  }
+
+  /// Slice D-3 (2026-07-02): a CONSERVATIVE, deliberately simple (chars/4-ish,
+  /// via the existing [approxTokens] heuristic) estimate of this turn's
+  /// outgoing prompt size — card + persona + the post-recap history window
+  /// starting at [windowStart]. Used ONLY to decide whether an initial
+  /// pre-trim is worth attempting against a known learned limit; it never
+  /// feeds into the actual assembled prompt (that stays `buildChatPrompt`'s
+  /// job). Deliberately does not attempt lorebook / preset / live-sheet /
+  /// roadmap precision — those are comparatively small and the estimate only
+  /// needs to be in the right ballpark to pick a starting window before the
+  /// real (ground-truth) provider error takes over via the retry loop.
+  int _estimatePromptTokens(
+    AppStore store,
+    Chat chat,
+    Character? character,
+    Persona? persona,
+    Preset? preset,
+    int windowStart,
+  ) {
+    var total = 0;
+    if (character != null) total += approxTokensForCharacter(character);
+    if (persona != null) total += approxTokensForPersona(persona);
+    if (preset != null) {
+      total += approxTokens(preset.mainPrompt) +
+          approxTokens(preset.postHistoryInstructions);
+    }
+    for (var i = windowStart; i < chat.messages.length; i++) {
+      total += approxTokens(chat.messages[i].text);
+    }
+    return total;
   }
 
   /// Wave CY.18.5: scroll the chat list until [messageId]'s bubble is
