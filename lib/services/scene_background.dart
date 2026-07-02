@@ -4,7 +4,7 @@
 
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../models/models.dart';
@@ -108,22 +108,97 @@ class SceneManifest {
 /// or parsed (feature then stays silently inert). Mirrors the LiveSheet
 /// discipline: never throws out to the caller.
 SceneManifest? _cachedManifest;
-bool _manifestLoadAttempted = false;
 
+/// TEST SEAM — the string-loading function `loadSceneManifest` calls. Swap
+/// this in a test to simulate a transient bundle-read failure without a real
+/// asset bundle. Defaults to the real `rootBundle.loadString`.
+@visibleForTesting
+Future<String> Function(String) sceneManifestStringLoader =
+    (path) => rootBundle.loadString(path);
+
+/// TEST SEAM — resets the cached manifest (and restores the default string
+/// loader) so tests don't leak state into each other.
+@visibleForTesting
+void resetSceneManifestCacheForTest() {
+  _cachedManifest = null;
+  sceneManifestStringLoader = (path) => rootBundle.loadString(path);
+}
+
+/// Wave (audit fix 1): the previous implementation latched a
+/// `_manifestLoadAttempted` flag to true BEFORE the try, so a transient
+/// bundle-read failure permanently disabled retries for the rest of the
+/// session (the whole feature went silently inert) and the failure was only
+/// `debugPrint`ed — never recorded to [SceneErrors], so no snackbar ever
+/// surfaced. Fix: only cache on SUCCESS; a failure records to [SceneErrors]
+/// (so the existing auto-pipeline surfacing can show it) and simply returns
+/// null, leaving the NEXT call free to retry.
 Future<SceneManifest?> loadSceneManifest() async {
   if (_cachedManifest != null) return _cachedManifest;
-  if (_manifestLoadAttempted) return _cachedManifest; // failed once — don't retry-spam
-  _manifestLoadAttempted = true;
   try {
-    final raw = await rootBundle.loadString('assets/scene_bg/manifest.json');
-    _cachedManifest =
+    final raw = await sceneManifestStringLoader('assets/scene_bg/manifest.json');
+    final manifest =
         SceneManifest.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-    return _cachedManifest;
+    _cachedManifest = manifest; // cache only on success — retry on failure
+    return manifest;
   } catch (e) {
     debugPrint('[SceneBg] manifest load failed: $e');
+    SceneErrors.record('loadSceneManifest', e);
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Audit fix 3: service-level in-flight lock (mirrors live_sheet.dart's
+// `_liveSheetInFlight` / `isLiveSheetInFlight`).
+// ---------------------------------------------------------------------------
+
+/// Per-chat in-flight lock for the scene-classify pipeline.
+///
+/// Keyed by chat id. Before this, the auto-pipeline (chat_screen's
+/// `_sceneClassifying`) and the manual "Detect location" button
+/// (customize_chat_sheet's `_classifying`) were two INDEPENDENT widget-local
+/// latches that can't see each other — both could run [classifyScene]
+/// concurrently for the same chat, with the loser's write clobbering the
+/// winner's on `chat.sceneBgFile` / `chat.sceneLocation` (last write wins).
+///
+/// Call sites acquire with [isSceneClassifyInFlight] + a manual set, and
+/// MUST release in a `finally` block around the classify+apply span.
+final Map<String, bool> _sceneClassifyInFlight = {};
+
+/// Returns true while a classify+apply pass is already in progress for
+/// [chatId] (either the auto pipeline or the manual button).
+bool isSceneClassifyInFlight(String chatId) =>
+    _sceneClassifyInFlight[chatId] == true;
+
+/// Acquires the per-chat lock. Returns true if the lock was acquired (caller
+/// must release via [releaseSceneClassifyLock] in a `finally`), false if
+/// another call is already in flight for this chat (caller should skip).
+bool acquireSceneClassifyLock(String chatId) {
+  if (_sceneClassifyInFlight[chatId] == true) return false;
+  _sceneClassifyInFlight[chatId] = true;
+  return true;
+}
+
+/// Releases the per-chat lock acquired by [acquireSceneClassifyLock].
+void releaseSceneClassifyLock(String chatId) {
+  _sceneClassifyInFlight.remove(chatId);
+}
+
+/// TEST SEAM — forcibly marks [chatId] as in-flight or clears it. Only used
+/// in unit tests to verify the lock without spinning up a real LLM call.
+@visibleForTesting
+void setSceneClassifyInFlightForTest(String chatId, {required bool inFlight}) {
+  if (inFlight) {
+    _sceneClassifyInFlight[chatId] = true;
+  } else {
+    _sceneClassifyInFlight.remove(chatId);
+  }
+}
+
+/// TEST SEAM — clears ALL in-flight state so lock state from one test never
+/// leaks into the next.
+@visibleForTesting
+void clearAllSceneClassifyInFlightForTest() => _sceneClassifyInFlight.clear();
 
 // ---------------------------------------------------------------------------
 // TASK 2: pure engine + classifier orchestration.
@@ -461,7 +536,7 @@ Narration: "I just— I don't know what to say to him," she whispered, staring a
 her hands. "It's complicated."
 {"location": "none", "setting": "medieval_fantasy", "timeOfDay": "unknown", "confidence": "low", "locationNote": "candle-lit fantasy tavern"}
 
-Tracked: guild_hall (medieval_fantasy)
+Tracked: fantasy_tavern (medieval_fantasy)
 Narration: "You really think the Guildmaster will agree?" she asked, leaning back
 in her chair. He shrugged and took another sip of ale.
 {"location": "none", "setting": "medieval_fantasy", "timeOfDay": "unknown", "confidence": "low", "locationNote": "the guild hall"}
@@ -584,7 +659,17 @@ Future<SceneVerdict?> classifyScene({
       SceneErrors.record('classifyScene', 'LLM returned empty response');
       return null;
     }
-    return parseClassifierJson(out, manifest);
+    final verdict = parseClassifierJson(out, manifest);
+    if (verdict == null) {
+      // Audit fix 2: a non-empty reply that fails to parse (bad/invalid JSON)
+      // must ALSO be recorded — previously only the empty-response and
+      // exception paths recorded to SceneErrors, so a bad-JSON reply from the
+      // manual "Detect location" button failed completely silently (no
+      // snackbar). Recording here lets BOTH the auto pipeline and the manual
+      // button surface it uniformly.
+      SceneErrors.record('classifyScene', 'reply could not be parsed as a valid scene verdict');
+    }
+    return verdict;
   } catch (e) {
     SceneErrors.record('classifyScene', e);
     return null;

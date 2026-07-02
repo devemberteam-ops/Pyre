@@ -1765,6 +1765,17 @@ class _ChatScreenState extends State<ChatScreen> {
     final provider = store.activeProvider;
     if (provider == null) return;
 
+    // Audit fix 3: service-level in-flight lock. The widget-local
+    // _sceneClassifying bool above only guards THIS screen instance against
+    // itself; it can't see the manual "Detect location" button in
+    // customize_chat_sheet.dart running concurrently for the same chat. Skip
+    // (rather than race) when another classify+apply pass already holds the
+    // lock for this chat.
+    if (!scenebg.acquireSceneClassifyLock(chat.id)) {
+      debugPrint('[SceneBg] auto-classify skipped — already in flight for ${chat.id}');
+      return;
+    }
+
     _sceneClassifying = true;
     try {
       final verdict = await scenebg.classifyScene(
@@ -1845,6 +1856,7 @@ class _ChatScreenState extends State<ChatScreen> {
       store.touchChat(chat); // F1: scene fields + watermarks sync
     } finally {
       _sceneClassifying = false;
+      scenebg.releaseSceneClassifyLock(chat.id);
     }
   }
 

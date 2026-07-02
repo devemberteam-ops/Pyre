@@ -506,4 +506,132 @@ void main() {
           ChatBackgroundSource.dynamic);
     });
   });
+
+  group('Audit fix 1: loadSceneManifest retries after a transient failure', () {
+    setUp(() {
+      resetSceneManifestCacheForTest();
+      SceneErrors.clear();
+    });
+    tearDown(() {
+      resetSceneManifestCacheForTest();
+      SceneErrors.clear();
+    });
+
+    test('a failing loader returns null AND records to SceneErrors', () async {
+      sceneManifestStringLoader = (_) => throw Exception('bundle read boom');
+      final m = await loadSceneManifest();
+      expect(m, isNull);
+      expect(SceneErrors.log, isNotEmpty);
+      expect(SceneErrors.log.first, contains('loadSceneManifest'));
+    });
+
+    test('a later call retries after a transient failure (no permanent latch)',
+        () async {
+      var calls = 0;
+      sceneManifestStringLoader = (_) async {
+        calls++;
+        if (calls == 1) throw Exception('transient failure');
+        return File('assets/scene_bg/manifest.json').readAsStringSync();
+      };
+      final first = await loadSceneManifest();
+      expect(first, isNull, reason: 'first call fails');
+      expect(calls, 1);
+
+      final second = await loadSceneManifest();
+      expect(second, isNotNull, reason: 'second call must retry, not stay latched');
+      expect(calls, 2);
+    });
+
+    test('a successful load is cached (no re-parse on a later call)', () async {
+      var calls = 0;
+      sceneManifestStringLoader = (_) async {
+        calls++;
+        return File('assets/scene_bg/manifest.json').readAsStringSync();
+      };
+      final first = await loadSceneManifest();
+      final second = await loadSceneManifest();
+      expect(first, isNotNull);
+      expect(identical(first, second), isTrue);
+      expect(calls, 1, reason: 'success must cache — no re-parse on later calls');
+    });
+  });
+
+  group('Audit fix 3: scene-classify service-level in-flight lock', () {
+    setUp(() => clearAllSceneClassifyInFlightForTest());
+    tearDown(() => clearAllSceneClassifyInFlightForTest());
+
+    test('nothing in flight by default', () {
+      expect(isSceneClassifyInFlight('chat-A'), isFalse);
+      expect(isSceneClassifyInFlight('chat-B'), isFalse);
+    });
+
+    test('acquire succeeds once, then blocks a concurrent caller for the same chat',
+        () {
+      expect(acquireSceneClassifyLock('chat-A'), isTrue);
+      expect(isSceneClassifyInFlight('chat-A'), isTrue);
+      // A second caller (e.g. the manual button) for the SAME chat must be
+      // refused while the first classify+apply span is still running.
+      expect(acquireSceneClassifyLock('chat-A'), isFalse);
+    });
+
+    test('release frees the lock for a later acquire', () {
+      expect(acquireSceneClassifyLock('chat-A'), isTrue);
+      releaseSceneClassifyLock('chat-A');
+      expect(isSceneClassifyInFlight('chat-A'), isFalse);
+      expect(acquireSceneClassifyLock('chat-A'), isTrue);
+    });
+
+    test('locks are independent per chat id', () {
+      expect(acquireSceneClassifyLock('chat-X'), isTrue);
+      expect(acquireSceneClassifyLock('chat-Y'), isTrue);
+      expect(isSceneClassifyInFlight('chat-X'), isTrue);
+      expect(isSceneClassifyInFlight('chat-Y'), isTrue);
+      releaseSceneClassifyLock('chat-X');
+      expect(isSceneClassifyInFlight('chat-X'), isFalse);
+      expect(isSceneClassifyInFlight('chat-Y'), isTrue);
+    });
+
+    test('setSceneClassifyInFlightForTest + clearAllSceneClassifyInFlightForTest',
+        () {
+      setSceneClassifyInFlightForTest('chat-A', inFlight: true);
+      expect(isSceneClassifyInFlight('chat-A'), isTrue);
+      setSceneClassifyInFlightForTest('chat-A', inFlight: false);
+      expect(isSceneClassifyInFlight('chat-A'), isFalse);
+
+      setSceneClassifyInFlightForTest('chat-A', inFlight: true);
+      setSceneClassifyInFlightForTest('chat-B', inFlight: true);
+      clearAllSceneClassifyInFlightForTest();
+      expect(isSceneClassifyInFlight('chat-A'), isFalse);
+      expect(isSceneClassifyInFlight('chat-B'), isFalse);
+    });
+  });
+
+  group('Audit fix 2: classifyScene records a bad-JSON verdict to SceneErrors', () {
+    setUp(() => SceneErrors.clear());
+    tearDown(() => SceneErrors.clear());
+
+    test('parseClassifierJson null on structurally-bad JSON (sanity)', () {
+      final m = _realManifest();
+      expect(parseClassifierJson('not json at all', m), isNull);
+    });
+  });
+
+  group('Audit fix 4: classifier prompt no longer references guild_hall', () {
+    test('guild_hall is not a real manifest slug (regression guard)', () {
+      final m = _realManifest();
+      expect(m.slugs.contains('guild_hall'), isFalse);
+    });
+
+    test('kSceneClassifierPrompt does not reference guild_hall as a slug', () {
+      expect(kSceneClassifierPrompt.contains('guild_hall'), isFalse);
+    });
+
+    test('kSceneClassifierPrompt still teaches the same "unchanged location" '
+        'lesson using a real slug', () {
+      // The replaced example must still demonstrate: tracked location stays
+      // the same -> "location":"none" + "confidence":"low".
+      expect(kSceneClassifierPrompt.contains('Tracked: fantasy_tavern (medieval_fantasy)'),
+          isTrue);
+    });
+  });
 }

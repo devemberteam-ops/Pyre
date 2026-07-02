@@ -235,6 +235,15 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
     final manifest = await scenebg.loadSceneManifest();
     if (manifest == null || !mounted) return;
 
+    // Audit fix 3: service-level in-flight lock. Without this, the auto
+    // pipeline (chat_screen's _sceneClassifying) and this manual button
+    // (this widget's own _classifying) can't see each other and could both
+    // classify+apply concurrently for the same chat — last write wins.
+    if (!scenebg.acquireSceneClassifyLock(chat.id)) {
+      debugPrint('[SceneBg] manual classify skipped — already in flight for ${chat.id}');
+      return;
+    }
+
     setState(() => _classifying = true);
     try {
       // Keyword pre-pass first (free) — CONFIDENT hits only. A weak lone
@@ -312,6 +321,7 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
       }
     } finally {
       if (mounted) setState(() => _classifying = false);
+      scenebg.releaseSceneClassifyLock(chat.id);
     }
   }
 
