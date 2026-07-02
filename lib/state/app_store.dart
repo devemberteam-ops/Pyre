@@ -2952,6 +2952,19 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
+  /// Party mode (2026-07): per-chat toggle for GROUP chats — when on, a
+  /// fresh assistant turn voices the whole party in one scene message
+  /// instead of one picked responder. Mirrors `renameChat`/`touchChat`:
+  /// bumps `mtime` so the toggle propagates over LAN sync.
+  void setChatPartyMode(String chatId, bool value) {
+    final chat = _chatById(chatId);
+    if (chat == null) return;
+    chat.partyMode = value;
+    chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
+    chat.mtime = chat.updatedAt; // sync metadata
+    _bump();
+  }
+
   /// Wave CX: change the persona attached to a specific chat without
   /// touching the global active persona. Pass null to clear (falls
   /// back to the global active at runtime).

@@ -86,6 +86,22 @@ class GroupAndLorebooksSheet extends StatelessWidget {
                   onPressed: () => _showAddMember(context, chatId),
                 ),
               ),
+              // Party mode v1 (2026-07): only meaningful for an actual
+              // group (>1 member) — a single-character chat has no "party"
+              // to voice together.
+              if (c.characterIds.length > 1)
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  activeThumbColor: EmberColors.primary,
+                  title: const Text('Party mode'),
+                  subtitle: const Text(
+                    'Everyone responds together in one scene.',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  value: c.partyMode,
+                  onChanged: (v) => store.setChatPartyMode(c.id, v),
+                ),
               Divider(color: EmberColors.stroke),
               Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),

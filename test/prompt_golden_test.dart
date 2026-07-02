@@ -939,6 +939,85 @@ void main() {
               'across repeated builds');
       expect(_serialize(result.turns), _expected14);
     });
+
+    // -------------------------------------------------------------------
+    // Scenario 15 — Party mode v1: a 3-character group with `partyMode: true`
+    // on both the chat AND the inputs. Snapshots the JOINT leading-system
+    // shape (every member's card, delimited, followed by the OWNER-TUNABLE
+    // joint-scene instruction) that REPLACES the single-responder card +
+    // thin "other characters" roster used by every other scenario in this
+    // file. `preset: null` exercises the `injectCardFallback` party path
+    // (see `party_mode_test.dart` for the sibling flat-preset/`fill()` path,
+    // which is NOT part of this byte-parity oracle).
+    // -------------------------------------------------------------------
+    test('15_party_mode_joint_scene', () {
+      final sera = Character(
+        id: 'gc-char-15a',
+        name: 'Sera',
+        description: 'A quiet blacksmith with soot-stained hands.',
+        personality: 'Reserved, dry humor, fiercely loyal.',
+        scenario: 'A small forge at the edge of town.',
+        mesExample: '<START>\n{{char}}: *hammers steadily* "Almost done."',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final talia = Character(
+        id: 'gc-char-15b',
+        name: 'Talia',
+        description: 'A sharp-tongued traveling merchant.',
+        personality: 'Bold, quick to laugh, always haggling.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final orin = Character(
+        id: 'gc-char-15c',
+        name: 'Orin',
+        description: 'A watchful town guard.',
+        personality: 'Stoic, dutiful, slow to trust strangers.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final persona = Persona(
+        id: 'gc-persona-15',
+        name: 'Alex',
+        description: 'A traveling merchant, curious and talkative.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final messages = <Message>[
+        _msg('gc15-m1', MessageKind.user, 'You all gather at the forge.'),
+      ];
+      final chat = Chat(
+        id: 'gc-chat-15',
+        characterIds: [sera.id, talia.id, orin.id],
+        characterSnapshots: {
+          sera.id: sera,
+          talia.id: talia,
+          orin.id: orin,
+        },
+        personaId: persona.id,
+        messages: messages,
+        partyMode: true,
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        // The "selected responder" is irrelevant in party mode — every
+        // member's card is inlined regardless of which one is passed here.
+        character: sera,
+        persona: persona,
+        preset: null,
+        responderId: sera.id,
+        beatsCap: 3,
+        lookupCharacter: _charLookup([sera, talia, orin]),
+        lookupBook: _bookLookup(const []),
+        inFlightMessageId: null,
+        partyMode: true,
+      );
+      final result = buildChatPrompt(inputs);
+      expect(_serialize(result.turns), _expected15);
+    });
   });
 }
 
@@ -1249,3 +1328,45 @@ The anvil rings differently when rain is coming.
 ===TURN===
 user
 Tell me about the anvil.''';
+
+const String _expected15 = '''system
+--- Sera ---
+You are Sera.
+
+Description:
+A quiet blacksmith with soot-stained hands.
+
+Personality:
+Reserved, dry humor, fiercely loyal.
+
+Scenario:
+A small forge at the edge of town.
+
+Example dialogue:
+<START>
+Sera: *hammers steadily* "Almost done."
+
+--- Talia ---
+You are Talia.
+
+Description:
+A sharp-tongued traveling merchant.
+
+Personality:
+Bold, quick to laugh, always haggling.
+
+--- Orin ---
+You are Orin.
+
+Description:
+A watchful town guard.
+
+Personality:
+Stoic, dutiful, slow to trust strangers.
+
+You are narrating a group scene featuring the characters described above. Voice each character in their own distinct manner as the moment calls for — they do NOT all have to speak or act every turn. Write one cohesive, flowing scene. Prefix each character's spoken/acted beat with their name so the reader can follow who is who. Never speak, act, think, or decide for Alex.
+
+The user appears as "Alex". A traveling merchant, curious and talkative.
+===TURN===
+user
+You all gather at the forge.''';

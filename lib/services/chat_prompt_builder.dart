@@ -57,6 +57,10 @@ enum PromptSegmentKind {
   groupRoster,
   history,
   postHistory,
+  /// Party mode v1: the joint multi-character card + scene instruction that
+  /// REPLACES [character] + [groupRoster] when `ChatPromptInputs.partyMode`
+  /// is true on a >1-member chat.
+  partyScene,
 }
 
 /// One labeled chunk of the assembled prompt. `text` is the contributed
@@ -163,6 +167,16 @@ class ChatPromptInputs {
   /// not itself change assembly. Default null → no effect.
   final int? learnedContextLimitTokens;
 
+  /// Party mode v1 (2026-07): mirrors `chat.partyMode`, threaded explicitly
+  /// (like every other input) rather than read off `chat` directly, so the
+  /// harness/tests can flip it independent of the chat fixture. Default
+  /// false → assembly is BYTE-IDENTICAL to before this field existed (see
+  /// `buildChatPrompt`'s `chat.characterIds.length > 1` block). When true AND
+  /// the chat has more than one member, the single-responder card + thin
+  /// "other characters" roster is replaced by a JOINT block containing every
+  /// member's full card plus a joint-scene instruction.
+  final bool partyMode;
+
   const ChatPromptInputs({
     required this.chat,
     required this.character,
@@ -180,6 +194,7 @@ class ChatPromptInputs {
     this.loreSeed,
     this.maxHistoryMessages,
     this.learnedContextLimitTokens,
+    this.partyMode = false,
   });
 }
 
@@ -302,6 +317,61 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // was a logging side-effect only (no influence on the assembled turns);
   // it stays in the widget shim so this pure builder has no Flutter import.
 
+  // Party mode v1 (2026-07): true only when the feature is ON for a chat
+  // that actually has more than one member — a single-member "group" (or a
+  // stray flag on a solo chat) is meaningless, so this condition keeps the
+  // party path fully inert everywhere it doesn't apply. Declared here (before
+  // `fill`) because BOTH the marker-based flat-preset path (`fill`'s
+  // `{{description}}` et al.) and the marker-less `injectCardFallback` path
+  // need it.
+  final isPartyScene = inputs.partyMode && chat.characterIds.length > 1;
+
+  // Party mode: every member's card, clearly delimited, followed by the
+  // OWNER-TUNABLE joint-scene instruction below. Built ONCE and reused by
+  // both injection paths (`fill()`'s {{description}} substitution for a flat
+  // preset that already has card markers, and `injectCardFallback` for a
+  // preset-less / modular-without-markers chat) so the two never drift.
+  String buildJointPartyBlock() {
+    final buf = StringBuffer();
+    for (final id in chat.characterIds) {
+      final member = chat.characterSnapshots[id] ?? inputs.lookupCharacter(id);
+      if (member == null) continue;
+      buf.writeln('--- ${member.name} ---');
+      buf.writeln("You are ${member.name}.");
+      if (member.description.isNotEmpty) {
+        buf.writeln('\nDescription:\n${member.description}');
+      }
+      if (member.personality.isNotEmpty) {
+        buf.writeln('\nPersonality:\n${member.personality}');
+      }
+      if (member.scenario.isNotEmpty) {
+        buf.writeln('\nScenario:\n${member.scenario}');
+      }
+      if (member.mesExample.isNotEmpty) {
+        buf.writeln('\nExample dialogue:\n${member.mesExample}');
+      }
+      if (member.systemPrompt.isNotEmpty) {
+        buf.writeln('\n${member.systemPrompt}');
+      }
+      buf.writeln();
+    }
+    // -----------------------------------------------------------------
+    // OWNER-TUNABLE: this is the joint-scene instruction told to the model
+    // after every member's card. First draft — tune freely; it is the ONLY
+    // place party mode's narration framing lives.
+    // -----------------------------------------------------------------
+    final userName = persona?.name ?? 'You';
+    buf.writeln(
+      'You are narrating a group scene featuring the characters described '
+      'above. Voice each character in their own distinct manner as the '
+      "moment calls for — they do NOT all have to speak or act every turn. "
+      'Write one cohesive, flowing scene. Prefix each character\'s '
+      "spoken/acted beat with their name so the reader can follow who is "
+      'who. Never speak, act, think, or decide for $userName.',
+    );
+    return buf.toString();
+  }
+
   // Resolve template tokens used by preset prompts (SillyTavern's standard
   // markers map to these via our st_preset_import.dart).
   //
@@ -323,24 +393,57 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // that carried it don't leak the literal token into the prompt.
   String fill(String s) {
     // 1. Static substitutions first.
-    var out = s
-        .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false),
-            character?.name ?? '')
-        .replaceAll(RegExp(r'\{\{user\}\}', caseSensitive: false),
-            persona?.name ?? 'You')
-        .replaceAll(RegExp(r'\{\{description\}\}', caseSensitive: false),
-            character?.description ?? '')
-        .replaceAll(RegExp(r'\{\{personality\}\}', caseSensitive: false),
-            character?.personality ?? '')
-        .replaceAll(RegExp(r'\{\{scenario\}\}', caseSensitive: false),
-            character?.scenario ?? '')
-        .replaceAll(RegExp(r'\{\{persona\}\}', caseSensitive: false),
-            persona?.description ?? '')
-        .replaceAll(RegExp(r'\{\{mesExample\}\}', caseSensitive: false),
-            character?.mesExample ?? '')
-        .replaceAll(RegExp(r'\{\{wiBefore\}\}', caseSensitive: false),
-            loreText.toString().trim())
-        .replaceAll(RegExp(r'\{\{wiAfter\}\}', caseSensitive: false), '');
+    //
+    // Party mode: a preset with card markers (e.g. the locked default —
+    // "You are {{char}}." / {{description}} / {{personality}} / {{scenario}}
+    // / {{mesExample}}) is the COMMON case and does NOT go through
+    // `injectCardFallback` at all (see the `asm.systemPrompt` branch below),
+    // so party mode must also override these markers here or a flat-preset
+    // group chat would silently keep single-responder framing. The full
+    // joint block (every member + the joint instruction) rides on
+    // {{description}} — the FIRST structural marker the default preset
+    // emits — and the sibling markers are blanked so nothing doubles up.
+    // {{char}} still resolves to the responder's name so surrounding preset
+    // prose ("You are {{char}}.") reads oddly but harmlessly; the very next
+    // line (the joint block) immediately re-frames the scene as multi-
+    // character, matching what `injectCardFallback` produces for a
+    // preset-less chat.
+    var out = isPartyScene
+        ? s
+            .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false),
+                character?.name ?? '')
+            .replaceAll(RegExp(r'\{\{user\}\}', caseSensitive: false),
+                persona?.name ?? 'You')
+            .replaceAll(RegExp(r'\{\{description\}\}', caseSensitive: false),
+                buildJointPartyBlock().trim())
+            .replaceAll(
+                RegExp(r'\{\{personality\}\}', caseSensitive: false), '')
+            .replaceAll(RegExp(r'\{\{scenario\}\}', caseSensitive: false), '')
+            .replaceAll(RegExp(r'\{\{persona\}\}', caseSensitive: false),
+                persona?.description ?? '')
+            .replaceAll(
+                RegExp(r'\{\{mesExample\}\}', caseSensitive: false), '')
+            .replaceAll(RegExp(r'\{\{wiBefore\}\}', caseSensitive: false),
+                loreText.toString().trim())
+            .replaceAll(RegExp(r'\{\{wiAfter\}\}', caseSensitive: false), '')
+        : s
+            .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false),
+                character?.name ?? '')
+            .replaceAll(RegExp(r'\{\{user\}\}', caseSensitive: false),
+                persona?.name ?? 'You')
+            .replaceAll(RegExp(r'\{\{description\}\}', caseSensitive: false),
+                character?.description ?? '')
+            .replaceAll(RegExp(r'\{\{personality\}\}', caseSensitive: false),
+                character?.personality ?? '')
+            .replaceAll(RegExp(r'\{\{scenario\}\}', caseSensitive: false),
+                character?.scenario ?? '')
+            .replaceAll(RegExp(r'\{\{persona\}\}', caseSensitive: false),
+                persona?.description ?? '')
+            .replaceAll(RegExp(r'\{\{mesExample\}\}', caseSensitive: false),
+                character?.mesExample ?? '')
+            .replaceAll(RegExp(r'\{\{wiBefore\}\}', caseSensitive: false),
+                loreText.toString().trim())
+            .replaceAll(RegExp(r'\{\{wiAfter\}\}', caseSensitive: false), '');
     // Pyre 1.1 (F1): {{summary}} → the LTM recap, resolved anywhere the user
     // places it. Use replaceAllMapped so we can record that it fired and then
     // SUPPRESS the hardcoded recap block below (no double injection).
@@ -403,7 +506,14 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // model the jailbreak blocks but NEVER the character, persona, or lore).
   void injectCardFallback() {
     final charBuf = StringBuffer();
-    if (character != null) {
+    if (isPartyScene) {
+      // Every member's card, clearly delimited, followed by the joint-scene
+      // instruction (see `buildJointPartyBlock` above — shared with the
+      // marker-based flat-preset path in `fill()` so the two never drift).
+      // Replaces the single-responder card AND the thin "other characters"
+      // roster (suppressed below).
+      charBuf.write(buildJointPartyBlock());
+    } else if (character != null) {
       charBuf.writeln("You are ${character.name}.");
       if (character.description.isNotEmpty) {
         charBuf.writeln('\nDescription:\n${character.description}');
@@ -420,13 +530,16 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     }
     if (charBuf.isNotEmpty) {
       segments.add(PromptSegment(
-          PromptSegmentKind.character, charBuf.toString().trimRight(),
-          note: 'fallback (no card markers in preset)'));
+          isPartyScene ? PromptSegmentKind.partyScene : PromptSegmentKind.character,
+          charBuf.toString().trimRight(),
+          note: isPartyScene
+              ? 'party mode (${chat.characterIds.length} members)'
+              : 'fallback (no card markers in preset)'));
     }
     planSegments.add(PlanSegment(
       role: 'system',
       slot: PlanSlot.leadingSystem,
-      kind: PromptSegmentKind.character,
+      kind: isPartyScene ? PromptSegmentKind.partyScene : PromptSegmentKind.character,
       content: charBuf.toString(),
       id: nextId('character'),
     ));
@@ -537,7 +650,9 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   }
 
   // Group chat roster — list the other members so the responder knows them.
-  if (chat.characterIds.length > 1) {
+  // Party mode: SKIPPED — the joint block above already carries every
+  // member's full card, so the thin roster would be redundant.
+  if (chat.characterIds.length > 1 && !isPartyScene) {
     final rosterBuf = StringBuffer();
     rosterBuf.writeln('\n--- Other characters in this scene ---');
     for (final id in chat.characterIds) {

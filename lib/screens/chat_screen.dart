@@ -996,7 +996,17 @@ class _ChatScreenState extends State<ChatScreen> {
     final assistantId = newId('msg');
     _streamMessageId = assistantId;
     _streamVariantIndex = 0; // fresh message has one variant at index 0
-    // Pick the responder — explicit override, else primary
+    // Party mode (2026-07): a group chat with the flag on voices the WHOLE
+    // party in one scene message — there is no single responder to pin, so
+    // the message carries `characterId: null` (see _MessageBubble's
+    // `showSpeakerName`/avatar handling, which only skips the single-author
+    // affordance when `chat.partyMode` is also true — a party-mode-off
+    // group message with a null characterId, a pre-existing edge case,
+    // keeps falling back to the primary character exactly as before).
+    final isPartyTurn = chat.partyMode && chat.characterIds.length > 1;
+    // Pick the responder — explicit override, else primary. Unused for a
+    // party turn (kept so _activeResponderId's fallback bookkeeping doesn't
+    // change), but the message itself pins no single author.
     final responderId = _activeResponderId(chat);
     final character = responderId == null
         ? null
@@ -1007,7 +1017,7 @@ class _ChatScreenState extends State<ChatScreen> {
       Message(
         id: assistantId,
         kind: MessageKind.char,
-        characterId: character?.id,
+        characterId: isPartyTurn ? null : character?.id,
         variants: [''],
       ),
     );
@@ -2093,6 +2103,9 @@ class _ChatScreenState extends State<ChatScreen> {
       guideNote: guideNote,
       guidePosition: guideSettings.injectionPosition,
       includePostHistory: includePostHistory,
+      // Party mode: `chat.partyMode` is the single source of truth (default
+      // false -> byte-identical assembly, unaffected by anything below).
+      partyMode: chat.partyMode,
       maxHistoryMessages: resolvedMaxHistoryMessages,
       learnedContextLimitTokens: learnedLimitTokens,
     );
@@ -4364,11 +4377,39 @@ class _ChatScreenState extends State<ChatScreen> {
                       final persona = _chatPersona(store, chat);
                       // In group chats, prefer the message's recorded
                       // character so each bubble shows the correct speaker.
-                      final speaker = m.characterId == null
-                          ? character
-                          : (chat.characterSnapshots[m.characterId!] ??
-                              store.characterById(m.characterId!) ??
-                              character);
+                      //
+                      // Party mode: a char message with `characterId == null`
+                      // in a party-mode chat is a deliberate "party scene"
+                      // message (no single author — see
+                      // `_startFreshAssistantTurn`) and must render WITHOUT
+                      // falling back to a single character. A `characterId
+                      // == null` message in a chat where party mode is OFF
+                      // is a pre-existing, unrelated edge case (e.g. no
+                      // responder was resolvable) — that keeps falling back
+                      // to `character` exactly as before.
+                      final isPartySceneMessage =
+                          chat.partyMode && m.characterId == null;
+                      final speaker = isPartySceneMessage
+                          ? null
+                          : (m.characterId == null
+                              ? character
+                              : (chat.characterSnapshots[m.characterId!] ??
+                                  store.characterById(m.characterId!) ??
+                                  character));
+                      // OWNER DECISION (2026-07): a party-scene bubble's
+                      // header shows every member's name (joined/abbreviated)
+                      // and the avatar is a stacked cluster of their
+                      // portraits — resolved once here (same lookup order as
+                      // every other speaker resolution: per-chat snapshot
+                      // first, then the library). Unresolvable ids are
+                      // skipped rather than crashing.
+                      final partyMembers = isPartySceneMessage
+                          ? [
+                              for (final id in chat.characterIds)
+                                chat.characterSnapshots[id] ??
+                                    store.characterById(id)
+                            ].whereType<Character>().toList(growable: false)
+                          : const <Character>[];
                       final bubble = _MessageBubble(
                         message: m,
                         character: speaker,
@@ -4378,6 +4419,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         messageIndex: i,
                         isStreaming: _streamMessageId == m.id,
                         showSpeakerName: chat.characterIds.length > 1,
+                        isPartySceneMessage: isPartySceneMessage,
+                        partyMembers: partyMembers,
                         isLast: isLast,
                         isEditing: _editingMessageId == m.id,
                         isSelecting: _selectingMessageId == m.id,
@@ -4531,7 +4574,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                   ]),
           ),
-          if (chat.characterIds.length > 1)
+          // Party mode: HIDDEN — there's no single responder to pick when
+          // the whole party answers together in one scene message.
+          if (chat.characterIds.length > 1 && !chat.partyMode)
             _ResponderChips(
               chat: chat,
               store: store,
@@ -4576,6 +4621,92 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Party mode v1 (2026-07, OWNER DECISION): the party-scene bubble header —
+/// every member's name joined with " · ", abbreviated to the first 2 names
+/// + "+N" once the party is larger than 3 (so a big roster doesn't wrap the
+/// header into an unreadable wall of names). Empty list -> empty string
+/// (the header Padding above still renders, just blank; callers only reach
+/// this when `isPartySceneMessage` is true, which implies >1 member, so an
+/// empty list here only happens if every id failed to resolve).
+String _partyHeaderNames(List<Character> members) {
+  if (members.isEmpty) return '';
+  if (members.length <= 3) return members.map((c) => c.name).join(' · ');
+  final shown = members.take(2).map((c) => c.name).join(', ');
+  return '$shown +${members.length - 2}';
+}
+
+/// Party mode v1 (2026-07, OWNER DECISION): a stacked "messenger group"
+/// avatar cluster for a party-scene bubble — up to 3 overlapping mini
+/// portraits (the classic 2-3 circle stack), reusing [AvatarBubble] per
+/// circle for image resolution/decoding/fallback-initial (no hand-rolled
+/// image loading). A party larger than 3 collapses the 3rd slot into a
+/// "+N" disc instead of a portrait. Sized to occupy roughly the same
+/// footprint as the normal single avatar ([radius] * 2 square) so bubble
+/// layout doesn't shift between a single-responder message and a scene one.
+class _PartyAvatarCluster extends StatelessWidget {
+  final List<Character> members;
+  final double radius;
+
+  const _PartyAvatarCluster({required this.members, required this.radius});
+
+  @override
+  Widget build(BuildContext context) {
+    // Mini-avatar radius: smaller than the normal single avatar so 2-3 of
+    // them overlapping still reads as one compact cluster.
+    final miniRadius = radius * 0.62;
+    final miniDiameter = miniRadius * 2;
+    // Overlap amount — how far each subsequent circle shifts right.
+    final step = miniDiameter * 0.62;
+    const maxVisible = 3;
+    final visibleCount =
+        members.length <= maxVisible ? members.length : maxVisible;
+    final overflow = members.length - maxVisible;
+
+    Widget ring(Widget child) => Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: EmberColors.bgDeep, width: 1.5),
+          ),
+          child: child,
+        );
+
+    final circles = <Widget>[];
+    for (var i = 0; i < visibleCount; i++) {
+      final isLastSlot = i == maxVisible - 1;
+      final showOverflowDisc = isLastSlot && overflow > 0;
+      circles.add(Positioned(
+        left: step * i,
+        child: ring(showOverflowDisc
+            ? CircleAvatar(
+                radius: miniRadius,
+                backgroundColor: EmberColors.bgElevated,
+                child: Text(
+                  '+$overflow',
+                  style: TextStyle(
+                    color: EmberColors.textHigh,
+                    fontWeight: FontWeight.w600,
+                    fontSize: miniRadius * 0.62,
+                  ),
+                ),
+              )
+            : AvatarBubble(
+                dataUrl: members[i].avatar,
+                fallback: members[i].name,
+                radius: miniRadius,
+              )),
+      ));
+    }
+
+    // Total width: the last circle's left offset + its own diameter.
+    final width = step * (visibleCount - 1) + miniDiameter;
+    return SizedBox(
+      width: width < miniDiameter ? miniDiameter : width,
+      height: miniDiameter,
+      child: Stack(children: circles),
     );
   }
 }
@@ -4643,6 +4774,21 @@ class _MessageBubble extends StatefulWidget {
   /// (default 20) and the user wants to know how close they are.
   final int messageIndex;
 
+  /// Party mode v1 (2026-07): true for a char message with no single author
+  /// (`characterId == null`) in a party-mode chat — a "the whole party
+  /// spoke" scene message. `character` is null for these (the parent never
+  /// falls back to a single speaker); this flag switches the header to the
+  /// joined member names and the avatar to a stacked mini-avatar cluster
+  /// (see [partyMembers]) instead of the normal single name/portrait. False
+  /// for every other bubble (including the pre-existing, unrelated
+  /// `characterId == null` edge case when party mode is off).
+  final bool isPartySceneMessage;
+
+  /// Party mode v1: every resolved member of the chat, in `characterIds`
+  /// order — used ONLY when [isPartySceneMessage] is true, to build the
+  /// joined-names header and the stacked avatar cluster. Empty otherwise.
+  final List<Character> partyMembers;
+
   const _MessageBubble({
     required this.message,
     required this.character,
@@ -4653,6 +4799,8 @@ class _MessageBubble extends StatefulWidget {
     required this.messageIndex,
     this.isStreaming = false,
     this.showSpeakerName = false,
+    this.isPartySceneMessage = false,
+    this.partyMembers = const <Character>[],
     this.onRegenerate,
     this.onBranchUser,
     this.onSelectVariant,
@@ -4973,14 +5121,18 @@ class _MessageBubbleState extends State<_MessageBubble> {
             // Non-destructive Recrop: tap shows the full uncropped image.
             fullImageUrl: persona?.avatarOriginal ?? persona?.avatar,
           )
-        : AvatarBubble(
-            dataUrl: widget.character?.avatar,
-            fallback: widget.character?.name ?? '?',
-            radius: 16,
-            tappableLightbox: true,
-            fullImageUrl:
-                widget.character?.avatarOriginal ?? widget.character?.avatar,
-          );
+        : (widget.isPartySceneMessage
+            // Party mode (OWNER DECISION 2026-07): a stacked mini-avatar
+            // cluster instead of one portrait — see `_PartyAvatarCluster`.
+            ? _PartyAvatarCluster(members: widget.partyMembers, radius: 16)
+            : AvatarBubble(
+                dataUrl: widget.character?.avatar,
+                fallback: widget.character?.name ?? '?',
+                radius: 16,
+                tappableLightbox: true,
+                fullImageUrl: widget.character?.avatarOriginal ??
+                    widget.character?.avatar,
+              ));
 
     final variantCount = m.variants.length;
     final atLast = m.selectedVariant >= variantCount - 1;
@@ -5137,11 +5289,19 @@ class _MessageBubbleState extends State<_MessageBubble> {
         crossAxisAlignment:
             isUserSide ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
-          if (widget.showSpeakerName && !isUserSide && widget.character != null)
+          if (widget.showSpeakerName &&
+              !isUserSide &&
+              (widget.character != null || widget.isPartySceneMessage))
             Padding(
               padding: const EdgeInsets.only(left: 48, bottom: 4),
               child: Text(
-                widget.character!.name,
+                // Party mode: no single speaker — the header names every
+                // member of the scene (joined/abbreviated) instead of one.
+                widget.character?.name ??
+                    (widget.isPartySceneMessage
+                        ? _partyHeaderNames(widget.partyMembers)
+                        : ''),
+                key: const Key('speakerNameHeader'),
                 style: TextStyle(
                   color: EmberColors.primary,
                   fontSize: 12,

@@ -971,6 +971,15 @@ class Chat {
   // the only top-level user-created entity with no name, so multiple chats of
   // one character were indistinguishable. Mirrors CreatorSession.title.
   String? title;
+  /// Party mode (2026-07): per-chat opt-in, GROUP chats only. When true, a
+  /// fresh assistant turn voices the WHOLE party in one "scene" message
+  /// instead of a single picked responder — see `buildChatPrompt`'s joint
+  /// leading-system block (chat_prompt_builder.dart) and
+  /// `_startFreshAssistantTurn` (chat_screen.dart). Defaults to false so
+  /// every existing chat (and every chat with <=1 member) behaves exactly as
+  /// before; omitted from `toJson` when false so old backups/synced chats
+  /// stay byte-clean.
+  bool partyMode;
 
   Chat({
     required this.id,
@@ -1005,6 +1014,7 @@ class Chat {
     this.sceneLastClassifyKey = '',
     this.sceneLocation = '',
     this.title,
+    this.partyMode = false,
   })  : characterSnapshots = characterSnapshots ?? {},
         attachedLorebookIds = attachedLorebookIds ?? [],
         disabledInheritedLorebookIds = disabledInheritedLorebookIds ?? [],
@@ -1106,6 +1116,10 @@ class Chat {
       sceneLastClassifyKey: (j['sceneLastClassifyKey'] as String?) ?? '',
       sceneLocation: (j['sceneLocation'] as String?) ?? '',
       title: (j['title'] as String?),
+      // Absent key -> false: an old chat persisted before Party Mode existed
+      // (or one where the user never turned it on) stays off. A stored value
+      // always wins.
+      partyMode: (j['partyMode'] as bool?) ?? false,
     );
   }
 
@@ -1148,6 +1162,9 @@ class Chat {
         // Only persist a manual title when actually set (blank → omit so
         // legacy/untitled chats stay byte-clean and unchanged).
         if (title != null && title!.trim().isNotEmpty) 'title': title!.trim(),
+        // Party mode: only persist when on, so every chat that never touched
+        // this feature (the overwhelming default) stays byte-clean.
+        if (partyMode) 'partyMode': true,
       };
 }
 
