@@ -35,6 +35,7 @@ import 'live_sheet.dart' as lsheet;
 import 'lorebook_inject.dart';
 import 'memory.dart' as ltm;
 import 'preset_assembly.dart';
+import 'prompt_plan.dart';
 import 'regex_rules.dart';
 import 'story_roadmap.dart' as roadmap;
 
@@ -358,17 +359,22 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     return out;
   }
 
-  // Build the system prompt — prefer the preset's (assembled) system text if
-  // set, else fall back to the character-only builder. `asm.systemPrompt` is
-  // byte-identical to `preset.mainPrompt` for a flat preset (no blocks).
-  final buffer = StringBuffer();
+  // Motor Fase 1 (Slice B): the internal `PromptPlan` this build assembles.
+  // Every `buffer.write`/`buffer.writeln` from the pre-refactor code becomes
+  // ONE `PlanSegment` in the `leadingSystem` slot, storing the EXACT string
+  // that was written plus whether it was a `writeln` (trailing '\n') or a
+  // `write` (no separator) — see prompt_plan.dart's file doc for why this
+  // reproduces the old single-StringBuffer join byte-for-byte.
+  final planSegments = <PlanSegment>[];
+  var planSeq = 0;
+  String nextId(String label) => 'plan-${chat.id}-${planSeq++}-$label';
 
-  // BLOCKER fix: inject the character / persona / lorebook-before content into
-  // [buffer] (and record the segments) — the SOLE injector of the card content
-  // when the preset's system text doesn't carry it via markers. Extracted to a
-  // closure so BOTH the no-preset path AND the "modular preset with no markers"
-  // path can call it (the bug was that a non-empty modular system prompt
-  // suppressed this entirely, so an ST-imported modular preset — which drops the
+  // BLOCKER fix: inject the character / persona / lorebook-before content —
+  // the SOLE injector of the card content when the preset's system text
+  // doesn't carry it via markers. Extracted to a closure so BOTH the
+  // no-preset path AND the "modular preset with no markers" path can call it
+  // (the bug was that a non-empty modular system prompt suppressed this
+  // entirely, so an ST-imported modular preset — which drops the
   // charDescription / personaDescription / worldInfoBefore markers — sent the
   // model the jailbreak blocks but NEVER the character, persona, or lore).
   void injectCardFallback() {
@@ -388,12 +394,18 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
         charBuf.writeln('\n${character.systemPrompt}');
       }
     }
-    buffer.write(charBuf.toString());
     if (charBuf.isNotEmpty) {
       segments.add(PromptSegment(
           PromptSegmentKind.character, charBuf.toString().trimRight(),
           note: 'fallback (no card markers in preset)'));
     }
+    planSegments.add(PlanSegment(
+      role: 'system',
+      slot: PlanSlot.leadingSystem,
+      kind: PromptSegmentKind.character,
+      content: charBuf.toString(),
+      id: nextId('character'),
+    ));
     if (persona != null) {
       final personaBuf = StringBuffer();
       personaBuf.writeln(
@@ -407,9 +419,15 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
         );
         personaBuf.writeln(persona.dialogueExamples.trim());
       }
-      buffer.write(personaBuf.toString());
       segments.add(PromptSegment(
           PromptSegmentKind.persona, personaBuf.toString().trimRight()));
+      planSegments.add(PlanSegment(
+        role: 'system',
+        slot: PlanSlot.leadingSystem,
+        kind: PromptSegmentKind.persona,
+        content: personaBuf.toString(),
+        id: nextId('persona'),
+      ));
     }
     // Also inline the lore so it isn't lost when no preset marker provides
     // {{wiBefore}}.
@@ -417,18 +435,32 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
       final loreBuf = StringBuffer();
       loreBuf.writeln('\n--- Lore ---');
       loreBuf.writeln(loreText.toString().trim());
-      buffer.write(loreBuf.toString());
       segments.add(PromptSegment(
           PromptSegmentKind.lorebookBefore, loreBuf.toString().trimRight(),
           note: '${scan.hits.length} entr${scan.hits.length == 1 ? "y" : "ies"} fired'));
+      planSegments.add(PlanSegment(
+        role: 'system',
+        slot: PlanSlot.leadingSystem,
+        kind: PromptSegmentKind.lorebookBefore,
+        content: loreBuf.toString(),
+        droppable: true, // D's trim proposal: oldest history, then lore
+        id: nextId('lore'),
+      ));
     }
   }
 
   if (asm != null && asm.systemPrompt.trim().isNotEmpty) {
     final filled = fill(asm.systemPrompt).trim();
-    buffer.writeln(filled);
     segments.add(PromptSegment(PromptSegmentKind.systemPrompt, filled,
         note: 'preset.mainPrompt'));
+    planSegments.add(PlanSegment(
+      role: 'system',
+      slot: PlanSlot.leadingSystem,
+      kind: PromptSegmentKind.systemPrompt,
+      content: filled,
+      appendNewline: true,
+      id: nextId('systemPrompt'),
+    ));
     // BLOCKER fix: a MODULAR preset (toggleable blocks) whose assembled system
     // text carries NONE of the card-content markers ({{description}},
     // {{personality}}, {{scenario}}, {{persona}}, {{mesExample}}, {{wiBefore}})
@@ -450,18 +482,34 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // SKIP this when the user's preset already placed the recap via the
   // {{summary}} macro — otherwise the recap would appear twice.
   if (recap.isNotEmpty && !summaryMacroUsed) {
-    buffer.writeln('\n--- Story so far (recap) ---');
-    buffer.writeln(recap);
     segments.add(PromptSegment(PromptSegmentKind.ltmRecap, recap,
         note: 'from ${chat.memoryCheckpoints.length} checkpoint(s)'));
+    planSegments.add(PlanSegment(
+      role: 'system',
+      slot: PlanSlot.leadingSystem,
+      kind: PromptSegmentKind.ltmRecap,
+      // `buffer.writeln('\n--- Story so far (recap) ---'); buffer.writeln(recap);`
+      // == '\n--- Story so far (recap) ---' + '\n' + recap + '\n'.
+      content: '\n--- Story so far (recap) ---\n$recap',
+      appendNewline: true,
+      id: nextId('ltmRecap'),
+    ));
   }
 
   // Wave CY.18.170: Live Sheet — authoritative current-state block.
   final liveSheet = lsheet.buildLiveSheetBlock(chat);
   if (liveSheet.isNotEmpty) {
-    buffer.writeln();
-    buffer.writeln(liveSheet);
     segments.add(PromptSegment(PromptSegmentKind.liveSheet, liveSheet));
+    planSegments.add(PlanSegment(
+      role: 'system',
+      slot: PlanSlot.leadingSystem,
+      kind: PromptSegmentKind.liveSheet,
+      // `buffer.writeln(); buffer.writeln(liveSheet);`
+      // == '' + '\n' + liveSheet + '\n' == '\n' + liveSheet + '\n'.
+      content: '\n$liveSheet',
+      appendNewline: true,
+      id: nextId('liveSheet'),
+    ));
   }
 
   // Group chat roster — list the other members so the responder knows them.
@@ -475,14 +523,16 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
       rosterBuf.writeln(
           '• ${other.name}: ${other.tagline ?? other.description.split("\n").first}');
     }
-    buffer.write(rosterBuf.toString());
     segments.add(PromptSegment(
         PromptSegmentKind.groupRoster, rosterBuf.toString().trimRight()));
+    planSegments.add(PlanSegment(
+      role: 'system',
+      slot: PlanSlot.leadingSystem,
+      kind: PromptSegmentKind.groupRoster,
+      content: rosterBuf.toString(),
+      id: nextId('groupRoster'),
+    ));
   }
-
-  final turns = <ChatTurn>[
-    ChatTurn('system', buffer.toString().trim()),
-  ];
 
   // Prompt Manager Core: role-`user`/`assistant` blocks placed BEFORE history
   // become REAL chat turns right after the system prompt. Empty for flat /
@@ -490,7 +540,14 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // system text (the final name-only pass also runs over them).
   if (asm != null) {
     for (final t in asm.beforeTurns) {
-      turns.add(ChatTurn(t.role, fill(t.content).trim()));
+      final filled = fill(t.content).trim();
+      planSegments.add(PlanSegment(
+        role: t.role,
+        slot: PlanSlot.beforeHistoryTurn,
+        kind: PromptSegmentKind.systemPrompt,
+        content: filled,
+        id: nextId('beforeTurn'),
+      ));
     }
   }
 
@@ -550,17 +607,27 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     }
   }
   // Prompt Manager Core: splice any depth-injected preset turns into the
-  // replayed history, then append the whole history block to the outgoing
-  // turns. For a flat / all-system preset `depthFilled` is empty, so
-  // `insertDepthTurns` returns `historyTurns` unchanged and this `addAll`
-  // reproduces the exact pre-Core order (which appended each message inline).
+  // replayed history. For a flat / all-system preset `depthFilled` is empty,
+  // so `insertDepthTurns` returns `historyTurns` unchanged and the resulting
+  // list reproduces the exact pre-Core order (which appended each message
+  // inline).
   final depthFilled = asm == null
       ? const <({int depth, String role, String content})>[]
       : [
           for (final t in asm.depthTurns)
             (depth: t.depth, role: t.role, content: fill(t.content).trim()),
         ];
-  turns.addAll(insertDepthTurns(historyTurns, depthFilled));
+  final splicedHistory = insertDepthTurns(historyTurns, depthFilled);
+  for (final t in splicedHistory) {
+    planSegments.add(PlanSegment(
+      role: t.role,
+      slot: PlanSlot.historyTurn,
+      kind: PromptSegmentKind.history,
+      content: t.content,
+      droppable: true,
+      id: nextId('historyTurn'),
+    ));
+  }
   if (historyTurns.isNotEmpty) {
     segments.add(PromptSegment(
       PromptSegmentKind.history,
@@ -574,7 +641,13 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
       roadmap.buildStoryRoadmapBlock(chat, beatsCap: inputs.beatsCap);
   if (roadmapBlock.isNotEmpty) {
     final filled = fill(roadmapBlock).trim();
-    turns.add(ChatTurn('system', filled));
+    planSegments.add(PlanSegment(
+      role: 'system',
+      slot: PlanSlot.roadmapTurn,
+      kind: PromptSegmentKind.script,
+      content: filled,
+      id: nextId('roadmap'),
+    ));
     segments.add(PromptSegment(PromptSegmentKind.script, filled));
   }
 
@@ -587,7 +660,13 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
       asm != null &&
       asm.postHistory.trim().isNotEmpty) {
     final filled = fill(asm.postHistory).trim();
-    turns.add(ChatTurn('system', filled));
+    planSegments.add(PlanSegment(
+      role: 'system',
+      slot: PlanSlot.postHistoryTurn,
+      kind: PromptSegmentKind.postHistory,
+      content: filled,
+      id: nextId('postHistory'),
+    ));
     segments.add(PromptSegment(PromptSegmentKind.postHistory, filled,
         note: 'preset.postHistoryInstructions'));
   }
@@ -597,9 +676,19 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // presets → no change.
   if (asm != null) {
     for (final t in asm.afterTurns) {
-      turns.add(ChatTurn(t.role, fill(t.content).trim()));
+      final filled = fill(t.content).trim();
+      planSegments.add(PlanSegment(
+        role: t.role,
+        slot: PlanSlot.afterHistoryTurn,
+        kind: PromptSegmentKind.systemPrompt,
+        content: filled,
+        id: nextId('afterTurn'),
+      ));
     }
   }
+
+  final plan = PromptPlan(planSegments);
+  final turns = plan.toChatTurns();
 
   // Wave CY.18.216: GLOBAL {{user}}/{{char}} substitution. Until now only
   // `preset.mainPrompt`, the roadmap, and history message BODIES were
