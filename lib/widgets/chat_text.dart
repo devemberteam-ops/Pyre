@@ -116,12 +116,27 @@ class ChatText extends StatelessWidget {
   // it. The cached spans are immutable (TextSpan / a const-friendly WidgetSpan
   // child) and safe to reuse across builds — _InlineImage reads MediaQuery at
   // ITS own build time, so layout still adapts. Bounded LRU-ish (clear on cap).
+  //
+  // Theme-correctness (whole-app audit #10): `_parse` also bakes in
+  // EmberColors.textHigh / textMid / bgElevated directly for the dialogue,
+  // italic and inline-code spans — independent of the caller-supplied `base`
+  // style. EmberColors.active is a mutable runtime palette (Pyre supports
+  // switching themes without restart), so the key must include those
+  // palette-derived colors too; otherwise a message parsed under the OLD
+  // palette is served from cache with the OLD colors baked in after the user
+  // switches themes.
   static const _kParseCacheMax = 256;
   static final Map<_ParseKey, List<InlineSpan>> _parseCache =
       <_ParseKey, List<InlineSpan>>{};
 
   static List<InlineSpan> _parseMemo(String src, TextStyle base) {
-    final key = _ParseKey(src, base);
+    final key = _ParseKey(
+      src,
+      base,
+      EmberColors.textHigh,
+      EmberColors.textMid,
+      EmberColors.bgElevated,
+    );
     final hit = _parseCache[key];
     if (hit != null) return hit;
     final spans = _parse(src, base);
@@ -285,22 +300,39 @@ class ChatText extends StatelessWidget {
   }
 }
 
-/// Composite cache key for [ChatText]'s parse memo: the cleaned body text
-/// plus the base [TextStyle] (which folds in caller-passed `baseStyle` + the
-/// computed font size). `TextStyle` has a value `==`/`hashCode`, so two
-/// bubbles with identical text + style share a cache entry.
+/// Composite cache key for [ChatText]'s parse memo: the cleaned body text,
+/// the base [TextStyle] (which folds in caller-passed `baseStyle` + the
+/// computed font size), and the palette-derived colors [_parse] bakes into
+/// dialogue/italic/code spans (read from the mutable [EmberColors.active] at
+/// parse time). `TextStyle` and `Color` both have value `==`/`hashCode`, so
+/// two bubbles with identical text + style + active palette share a cache
+/// entry, and a palette switch correctly misses the cache.
 @immutable
 class _ParseKey {
   final String src;
   final TextStyle base;
-  const _ParseKey(this.src, this.base);
+  final Color textHigh;
+  final Color textMid;
+  final Color bgElevated;
+  const _ParseKey(
+    this.src,
+    this.base,
+    this.textHigh,
+    this.textMid,
+    this.bgElevated,
+  );
 
   @override
   bool operator ==(Object other) =>
-      other is _ParseKey && other.src == src && other.base == base;
+      other is _ParseKey &&
+      other.src == src &&
+      other.base == base &&
+      other.textHigh == textHigh &&
+      other.textMid == textMid &&
+      other.bgElevated == bgElevated;
 
   @override
-  int get hashCode => Object.hash(src, base);
+  int get hashCode => Object.hash(src, base, textHigh, textMid, bgElevated);
 }
 
 /// Inline image for [ChatText]'s markdown `![](url)` support — common in
