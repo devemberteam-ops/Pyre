@@ -1,8 +1,11 @@
 // Sub-task C: OOC / Scene message behavior regression tests.
 //
-// Verifies the founder-decision: OOC and Scene must behave like normal user
-// messages (editable, deletable, branchable / variant-swipeable). Only
-// MessageKind.system remains truly read-only / aux.
+// REVISED 2026-07 (owner): OOC renders as the centred AUX NOTE again ("tem
+// que voltar ao formato antigo") — reversing the 1.1.3 de-risk-wave move to
+// the full user-side bubble. The OPTIONS survive the visual change: the
+// long-press message menu is gated by `m.kind` (not by which visual rendered
+// it), so OOC keeps Edit / Delete / Branch from the note, and the aux branch
+// renders the inline editor when editing. Scene keeps the full bubble.
 //
 // These are PURE / logic tests (no widget build required), so they run fast
 // without a real Flutter rendering tree and are not sensitive to widget layout
@@ -18,8 +21,10 @@ void main() {
       expect(isReadOnlyAuxKind(MessageKind.system), isTrue);
     });
 
-    test('ooc is NOT read-only aux — it must go through the full bubble', () {
-      expect(isReadOnlyAuxKind(MessageKind.ooc), isFalse);
+    test(
+        'ooc IS aux again — centred note, old format (owner reversal '
+        '2026-07); its Edit/Delete/Branch live in the long-press menu', () {
+      expect(isReadOnlyAuxKind(MessageKind.ooc), isTrue);
     });
 
     test('scene is NOT read-only aux — it must go through the full bubble', () {
@@ -34,14 +39,13 @@ void main() {
       expect(isReadOnlyAuxKind(MessageKind.char), isFalse);
     });
 
-    test('all non-system kinds return false', () {
-      final nonSystem = [
+    test('user/char/scene return false', () {
+      final fullBubbleKinds = [
         MessageKind.user,
         MessageKind.char,
-        MessageKind.ooc,
         MessageKind.scene,
       ];
-      for (final k in nonSystem) {
+      for (final k in fullBubbleKinds) {
         expect(
           isReadOnlyAuxKind(k),
           isFalse,
@@ -50,10 +54,10 @@ void main() {
       }
     });
 
-    test('only system returns true', () {
+    test('exactly ooc + system return true (enum declaration order)', () {
       final all = MessageKind.values;
       final readOnlyKinds = all.where(isReadOnlyAuxKind).toList();
-      expect(readOnlyKinds, equals([MessageKind.system]));
+      expect(readOnlyKinds, equals([MessageKind.ooc, MessageKind.system]));
     });
   });
 

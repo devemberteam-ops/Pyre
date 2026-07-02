@@ -58,14 +58,20 @@ bool get _isDesktop {
 
 // kExplicitNoPersonaId is declared in models.dart (canonical location).
 
-/// True only for [MessageKind.system] — the read-only aux kind whose bubble
-/// is a centred italic note with NO variant arrows, edit, branch, or swipe.
+/// Kinds that render as the centred AUX NOTE (no user-side bubble, no avatar,
+/// no variant arrows) instead of a full chat bubble.
 ///
-/// OOC and Scene are deliberately NOT included here: the founder decision is
-/// that they must behave like normal user messages (editable, deletable,
-/// branchable). This pure helper is also tested in
+/// [MessageKind.system] — always was. [MessageKind.ooc] — RESTORED here
+/// 2026-07 (owner: "OOC não deve aparecer assim, tem que voltar ao formato
+/// antigo"), reversing the 1.1.3 de-risk-wave move to the full bubble. The
+/// "read-only" in the name is about the VISUAL (no bubble controls inline) —
+/// long-press on the note still opens the full message menu, which is gated
+/// by `m.kind`, so OOC keeps Edit / Delete / Branch from the note, and the
+/// aux branch renders the inline editor when editing. Scene stays a full
+/// bubble (the owner only reverted OOC). Pure helper, tested in
 /// test/ooc_message_behavior_test.dart.
-bool isReadOnlyAuxKind(MessageKind k) => k == MessageKind.system;
+bool isReadOnlyAuxKind(MessageKind k) =>
+    k == MessageKind.system || k == MessageKind.ooc;
 
 /// True on Android and iOS — used to gate haptic feedback calls so they never
 /// fire on desktop or web (where `HapticFeedback` is a no-op or annoying).
