@@ -102,6 +102,88 @@ class LlmCallRecord {
         if (parseOutcome != null && parseOutcome!.isNotEmpty)
           'parseOutcome': parseOutcome,
       };
+
+  /// Rebuild a record from a decoded JSONL line. Tolerant: missing / wrong-
+  /// typed fields degrade to sensible empties rather than throwing, so a
+  /// hand-edited or partially-written log line can still be shown in the
+  /// in-app viewer. Powers [parseLlmLog].
+  factory LlmCallRecord.fromJson(Map<String, dynamic> j) {
+    int asInt(dynamic v) =>
+        v is int ? v : int.tryParse('${v ?? ''}') ?? 0;
+    String? asOptStr(dynamic v) {
+      if (v == null) return null;
+      final s = '$v';
+      return s.isEmpty ? null : s;
+    }
+
+    return LlmCallRecord(
+      ts: asInt(j['ts']),
+      feature: '${j['feature'] ?? ''}',
+      provider: '${j['provider'] ?? ''}',
+      model: '${j['model'] ?? ''}',
+      messages: j['messages'] is List ? j['messages'] as List : const [],
+      sampling: j['sampling'] is Map
+          ? Map<String, dynamic>.from(j['sampling'] as Map)
+          : const <String, dynamic>{},
+      response: '${j['response'] ?? ''}',
+      finishReason: asOptStr(j['finishReason']),
+      durationMs: asInt(j['durationMs']),
+      parseOutcome: asOptStr(j['parseOutcome']),
+    );
+  }
+}
+
+/// One parsed line from the diagnostics JSONL: either a full LLM [call]
+/// record or a lightweight [trace] breadcrumb (`{ts, trace}`). Produced by
+/// [parseLlmLog] for the in-app viewer.
+class LlmLogEntry {
+  /// ms-epoch of the line (0 if the line had no usable `ts`).
+  final int ts;
+
+  /// The breadcrumb text for a trace line; null for a call record.
+  final String? trace;
+
+  /// The captured call for a record line; null for a trace line.
+  final LlmCallRecord? call;
+
+  const LlmLogEntry({required this.ts, this.trace, this.call});
+
+  /// True for a `{ts, trace}` breadcrumb; false for a full call record.
+  bool get isTrace => trace != null;
+}
+
+/// Parse the concatenated diagnostics JSONL (as returned by
+/// [LlmDebugLog.readAll]) into typed [LlmLogEntry]s, **newest first**.
+///
+/// Best-effort for a diagnostics VIEWER: blank lines, non-JSON lines, and
+/// JSON that isn't an object are silently skipped rather than throwing, so a
+/// truncated or hand-edited log still renders what it can. A line with a
+/// `trace` key becomes a breadcrumb; anything else that looks like a call
+/// record (`feature`/`messages` present) becomes a call.
+List<LlmLogEntry> parseLlmLog(String jsonl) {
+  final out = <LlmLogEntry>[];
+  for (final raw in const LineSplitter().convert(jsonl)) {
+    final line = raw.trim();
+    if (line.isEmpty) continue;
+    Map<String, dynamic> m;
+    try {
+      final decoded = jsonDecode(line);
+      if (decoded is! Map<String, dynamic>) continue;
+      m = decoded;
+    } catch (_) {
+      continue; // not JSON — skip
+    }
+    final ts = m['ts'] is int
+        ? m['ts'] as int
+        : int.tryParse('${m['ts'] ?? ''}') ?? 0;
+    if (m.containsKey('trace')) {
+      out.add(LlmLogEntry(ts: ts, trace: '${m['trace']}'));
+    } else if (m.containsKey('feature') || m.containsKey('messages')) {
+      out.add(LlmLogEntry(ts: ts, call: LlmCallRecord.fromJson(m)));
+    }
+  }
+  out.sort((a, b) => b.ts.compareTo(a.ts)); // newest first
+  return out;
 }
 
 class LlmDebugLog {

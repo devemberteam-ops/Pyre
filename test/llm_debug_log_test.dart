@@ -205,4 +205,94 @@ void main() {
     expect(onDisk.contains('X-Custom'), isFalse);
     expect(onDisk.contains('"value"'), isFalse);
   });
+
+  // E (#131): the in-app viewer reads the JSONL back through parseLlmLog.
+  group('parseLlmLog (viewer parser)', () {
+    test('parses call + trace lines and sorts newest-first', () {
+      final jsonl = [
+        jsonEncode({'ts': 100, 'trace': 'ltm.auto: fired'}),
+        jsonEncode({
+          'ts': 300,
+          'feature': 'chat',
+          'provider': 'Venice',
+          'model': 'qwen',
+          'messages': [
+            {'role': 'user', 'content': 'hi'}
+          ],
+          'sampling': {'temperature': 0.7, 'max_tokens': 512},
+          'response': 'hello there',
+          'finishReason': 'stop',
+          'durationMs': 1234,
+        }),
+        jsonEncode({'ts': 200, 'trace': 'scene: classified'}),
+      ].join('\n');
+
+      final entries = parseLlmLog(jsonl);
+      expect(entries.length, 3);
+      // newest-first: 300, 200, 100
+      expect(entries.map((e) => e.ts), [300, 200, 100]);
+      expect(entries[0].isTrace, isFalse);
+      expect(entries[0].call!.feature, 'chat');
+      expect(entries[0].call!.provider, 'Venice');
+      expect(entries[0].call!.response, 'hello there');
+      expect(entries[0].call!.finishReason, 'stop');
+      expect(entries[1].isTrace, isTrue);
+      expect(entries[1].trace, 'scene: classified');
+    });
+
+    test('skips blank + malformed lines without throwing', () {
+      final jsonl = [
+        '',
+        'not json at all {',
+        '42', // valid json but not a map
+        jsonEncode({'ts': 5, 'trace': 'ok'}),
+      ].join('\n');
+      final entries = parseLlmLog(jsonl);
+      expect(entries.length, 1);
+      expect(entries[0].trace, 'ok');
+    });
+
+    test('LlmCallRecord.fromJson round-trips toJson', () {
+      final rec = LlmCallRecord(
+        ts: 7,
+        feature: 'creator-architect',
+        provider: 'OpenAI-compat',
+        model: 'gpt',
+        messages: const [
+          {'role': 'system', 'content': 'x'}
+        ],
+        sampling: const {'top_p': 0.9},
+        response: 'r',
+        finishReason: 'length',
+        durationMs: 42,
+        parseOutcome: 'SHEET present',
+      );
+      final back = LlmCallRecord.fromJson(rec.toJson());
+      expect(back.feature, rec.feature);
+      expect(back.provider, rec.provider);
+      expect(back.model, rec.model);
+      expect(back.response, rec.response);
+      expect(back.finishReason, rec.finishReason);
+      expect(back.durationMs, rec.durationMs);
+      expect(back.parseOutcome, rec.parseOutcome);
+      expect(back.messages, rec.messages);
+      expect(back.sampling, rec.sampling);
+    });
+
+    test('fromJson tolerates missing optional fields', () {
+      final back = LlmCallRecord.fromJson({
+        'ts': 1,
+        'feature': 'chat',
+        'provider': 'P',
+        'model': 'M',
+        'messages': const [],
+        'sampling': const {},
+        'response': '',
+        'durationMs': 0,
+      });
+      expect(back.finishReason, isNull);
+      expect(back.parseOutcome, isNull);
+      expect(back.messages, isEmpty);
+    });
+  });
 }

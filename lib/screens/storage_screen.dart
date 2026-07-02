@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../services/error_log.dart';
 import '../services/llm_debug_log.dart';
+import 'llm_debug_log_viewer_screen.dart';
 import '../services/secure_keys.dart';
 import '../services/storage.dart';
 import '../state/app_store.dart';
@@ -534,6 +535,19 @@ class _LlmDebugLogCardState extends State<_LlmDebugLogCard> {
               spacing: 8,
               runSpacing: 8,
               children: [
+                FilledButton.icon(
+                  icon: const Icon(Icons.visibility_outlined, size: 18),
+                  label: const Text('View log'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: EmberColors.primary,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const LlmDebugLogViewerScreen(),
+                    ),
+                  ),
+                ),
                 OutlinedButton.icon(
                   icon: Icon(Icons.ios_share,
                       color: EmberColors.primary, size: 18),
