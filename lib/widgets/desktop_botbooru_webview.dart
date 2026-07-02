@@ -835,8 +835,23 @@ const String _downloadHookScript = r'''
           if (x && x.length < 80) { lbName = x; break; }
         }
       } catch (_) {} }
-      fetch(abs, { credentials: 'include', headers: { 'Accept': 'application/json' } })
+      // TIMEOUT GUARD: a bare fetch with no AbortController can stall
+      // forever (bad connection / hung upstream), leaving native stuck on
+      // "Importing lorebook…" — and since native's re-entrancy guard never
+      // clears while busy, EVERY later import is blocked too. Abort after
+      // ~30s and post the SAME error-message shape the .catch() below
+      // already sends, so the existing "Couldn't…" snackbar + busy-flag
+      // reset fire exactly as for a network failure. Kept IDENTICAL to the
+      // mobile hook in discover_screen.dart — don't let them drift.
+      var lbCtrl = new AbortController();
+      var lbTimedOut = false;
+      var lbTimer = setTimeout(function() {
+        lbTimedOut = true;
+        lbCtrl.abort();
+      }, 30000);
+      fetch(abs, { credentials: 'include', headers: { 'Accept': 'application/json' }, signal: lbCtrl.signal })
         .then(function(r) {
+          clearTimeout(lbTimer);
           if (!r.ok) throw new Error('HTTP ' + r.status);
           return r.text();
         })
@@ -844,9 +859,10 @@ const String _downloadHookScript = r'''
           try { window.chrome.webview.postMessage(JSON.stringify({ lorebookJson: t, lorebookName: lbName })); } catch (_) {}
         })
         .catch(function(err) {
+          clearTimeout(lbTimer);
           try {
             window.chrome.webview.postMessage(JSON.stringify({
-              lorebookError: (err && err.message) || 'download failed'
+              lorebookError: lbTimedOut ? 'timed out' : ((err && err.message) || 'download failed')
             }));
           } catch (_) {}
         });

@@ -129,6 +129,63 @@ PyreCardPayload? parseCardBytesPayload(String body) {
 /// (the import handler itself drives a webview that can't be widget-tested).
 bool canStartDiscoverImport(bool alreadyBusy) => !alreadyBusy;
 
+/// Audit fix #3: importing the same BotBooru card twice used to silently
+/// create two Character records with no warning. This is a lightweight
+/// pre-save check — no BotBooru card id is captured anywhere in the import
+/// pipeline, so it works off what IS available: the candidate's name +
+/// description against the existing library. Non-blocking (the caller still
+/// lets the user proceed after a confirm).
+///
+/// Returns the FIRST [existing] character whose normalized name matches the
+/// [candidate]'s AND whose description is similar (identical, or both empty,
+/// or a cheap word-overlap ratio above [_kDuplicateDescriptionSimilarity]) —
+/// or null when nothing looks like a duplicate.
+Character? findLikelyDuplicateCharacter(
+  Character candidate,
+  List<Character> existing,
+) {
+  final candidateName = _normalizeForDuplicateCheck(candidate.name);
+  if (candidateName.isEmpty) return null;
+  for (final other in existing) {
+    if (_normalizeForDuplicateCheck(other.name) != candidateName) continue;
+    if (_descriptionsLookSimilar(candidate.description, other.description)) {
+      return other;
+    }
+  }
+  return null;
+}
+
+/// Word-overlap ratio at/above which two non-identical descriptions count as
+/// "similar" for [findLikelyDuplicateCharacter]. Tuned to catch a lightly
+/// edited re-export of the same card while letting two genuinely different
+/// characters that merely share a name pass through unflagged.
+const double _kDuplicateDescriptionSimilarity = 0.6;
+
+/// Lowercase + collapse whitespace + trim, for a robust name comparison that
+/// ignores case and incidental leading/trailing/extra spacing.
+String _normalizeForDuplicateCheck(String s) =>
+    s.toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' ');
+
+/// True when [a] and [b] are close enough to call "the same card's
+/// description": identical after normalization, both blank, or a cheap
+/// Jaccard word-overlap ratio at/above [_kDuplicateDescriptionSimilarity].
+/// Word-overlap (not exact match) so a lightly-edited re-export of the same
+/// card still gets flagged, while two unrelated characters that happen to
+/// share a name do not.
+bool _descriptionsLookSimilar(String a, String b) {
+  final na = _normalizeForDuplicateCheck(a);
+  final nb = _normalizeForDuplicateCheck(b);
+  if (na == nb) return true; // covers the both-empty case too
+  if (na.isEmpty || nb.isEmpty) return false;
+  final wordsA = na.split(' ').where((w) => w.isNotEmpty).toSet();
+  final wordsB = nb.split(' ').where((w) => w.isNotEmpty).toSet();
+  if (wordsA.isEmpty || wordsB.isEmpty) return false;
+  final intersection = wordsA.intersection(wordsB).length;
+  final union = wordsA.union(wordsB).length;
+  if (union == 0) return false;
+  return (intersection / union) >= _kDuplicateDescriptionSimilarity;
+}
+
 /// Max length for a captured lorebook page-title hint. A real title is short;
 /// this caps a runaway / hostile heading so it can't bloat the book name.
 const int _kLorebookNameHintMaxChars = 120;
@@ -735,11 +792,26 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 if (x && x.length < 80) { lbName = x; break; }
               }
             } catch (_) {} }
+            // TIMEOUT GUARD: a bare fetch with no AbortController can stall
+            // forever (bad connection / hung upstream), leaving native stuck
+            // on "Importing lorebook…" — and since native's re-entrancy guard
+            // never clears while busy, EVERY later import is blocked too.
+            // Abort after ~30s and post the SAME error-message shape the
+            // .catch() below already sends, so the existing "Couldn't…"
+            // snackbar + busy-flag reset fire exactly as for a network failure.
+            var lbCtrl = new AbortController();
+            var lbTimedOut = false;
+            var lbTimer = setTimeout(function() {
+              lbTimedOut = true;
+              lbCtrl.abort();
+            }, 30000);
             fetch(abs, {
               credentials: 'include',
-              headers: { 'Accept': 'application/json' }
+              headers: { 'Accept': 'application/json' },
+              signal: lbCtrl.signal
             })
               .then(function(r) {
+                clearTimeout(lbTimer);
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.text();
               })
@@ -747,8 +819,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 EmberDL.postMessage('PYRELB' + lbName + '' + t);
               })
               .catch(function(err) {
-                EmberDL.postMessage(
-                  'PYRELBERR' + ((err && err.message) || 'download failed'));
+                clearTimeout(lbTimer);
+                var msg = lbTimedOut
+                  ? 'timed out'
+                  : ((err && err.message) || 'download failed');
+                EmberDL.postMessage('PYRELBERR' + msg);
               });
             return;
           }
@@ -1015,6 +1090,34 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     }
   }
 
+  /// Audit fix #3: shows "You already imported '`name`' — import again
+  /// anyway?" when [findLikelyDuplicateCharacter] flags a likely duplicate.
+  /// Non-blocking — returns true (proceed) on explicit confirm, false on
+  /// cancel/dismiss. [existingName] is the ALREADY-saved character's name
+  /// (may differ in case/whitespace from the freshly-parsed candidate's).
+  Future<bool> _confirmDuplicateImport(String existingName) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Already imported?'),
+        content: Text(
+          "You already imported '$existingName' — import again anyway?",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Import anyway'),
+          ),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
   /// Shared import CORE: parse chara-card [bytes] → resolve the BotBooru
   /// mini-gallery (when [allowGallery]) → confirm dialog → handle the embedded
   /// character_book → externalise inline images → add to the library.
@@ -1059,8 +1162,29 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       );
       return;
     }
+    // Audit fix #3: warn (non-blocking) before saving a second copy of a
+    // card that's already in the library — same normalized name + a
+    // similar description. The user can still proceed.
+    final duplicate =
+        findLikelyDuplicateCharacter(character, store.characters);
+    if (duplicate != null) {
+      if (!mounted) return;
+      final proceed = await _confirmDuplicateImport(duplicate.name);
+      if (!proceed) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Import cancelled.')),
+        );
+        return;
+      }
+    }
+    // Audit fix #2: the gallery import caps (≤12 images / ≤24MB aggregate)
+    // used to truncate silently. Use the stats-returning variant so a
+    // truncation is visible on the final snackbar instead of hidden.
+    var gallerySkippedForCap = 0;
     if (choice.withGallery) {
-      character.gallery = await downloadGalleryImages(galleryUrls);
+      final result = await downloadGalleryImagesWithStats(galleryUrls);
+      character.gallery = result.refs;
+      gallerySkippedForCap = result.skippedForCap;
     }
     // Wave CA: handle embedded character_book if present.
     if (!mounted) return;
@@ -1074,8 +1198,16 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     // ref, not inline base64.
     await externalizeCharacterImages(character);
     store.addCharacter(character);
+    final importedMsg = StringBuffer('Imported ${character.name}');
+    if (gallerySkippedForCap > 0) {
+      final imported = character.gallery.length;
+      final requested = imported + gallerySkippedForCap;
+      importedMsg.write(
+        ' — imported $imported of $requested gallery images (cap reached)',
+      );
+    }
     messenger.showSnackBar(
-      SnackBar(content: Text('Imported ${character.name}')),
+      SnackBar(content: Text(importedMsg.toString())),
     );
   }
 

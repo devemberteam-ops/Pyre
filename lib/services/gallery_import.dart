@@ -18,6 +18,8 @@
 
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
+
 import 'capped_fetch.dart';
 import 'card_import.dart' show CardImportErrors;
 import 'attachment_store.dart';
@@ -37,26 +39,63 @@ const int kMaxGalleryImageBytes = 4 * 1024 * 1024; // 4 MB
 /// bytes exceed this.
 const int kMaxGalleryAggregateBytes = 24 * 1024 * 1024; // 24 MB
 
-/// Download + store each gallery image, returning the `pyre://attachment/…`
-/// refs gathered (in order). Best-effort: a failed / oversized / non-image
-/// entry is skipped (logged), and downloading stops once
-/// [kMaxGalleryImages] is reached or the aggregate exceeds
-/// [kMaxGalleryAggregateBytes]. Returns `[]` on web (AttachmentStore is a
-/// no-op there) or when nothing could be gathered.
-Future<List<String>> downloadGalleryImages(List<String> urls) async {
+/// Result of [downloadGalleryImagesWithStats]: the stored `pyre://attachment/…`
+/// refs, plus how many of the REQUESTED urls were never even attempted
+/// because a cap ([kMaxGalleryImages] / [kMaxGalleryAggregateBytes]) was
+/// already hit when the loop reached them. Audit fix #2: the caps used to
+/// truncate silently — this makes the truncation visible so a caller can
+/// tell the user e.g. "Imported 12 of 20 gallery images (size cap reached)".
+class GalleryDownloadResult {
+  /// The `pyre://attachment/…` refs successfully stored, in order.
+  final List<String> refs;
+
+  /// Count of input urls that were never attempted because the count cap
+  /// ([kMaxGalleryImages]) or the aggregate byte cap
+  /// ([kMaxGalleryAggregateBytes]) was already reached. Does NOT include
+  /// urls that were attempted and skipped for other reasons (bad host,
+  /// fetch failure, non-image response) — those are silent best-effort
+  /// skips unrelated to the caps.
+  final int skippedForCap;
+
+  const GalleryDownloadResult(this.refs, this.skippedForCap);
+}
+
+/// Download + store each gallery image, returning the refs gathered plus a
+/// cap-truncation count. Best-effort: a failed / oversized / non-image entry
+/// is skipped (logged) and does NOT count toward [GalleryDownloadResult
+/// .skippedForCap] — only urls left untried once a cap is hit are counted.
+/// Downloading stops once [kMaxGalleryImages] is reached or the aggregate
+/// exceeds [kMaxGalleryAggregateBytes]. Returns an empty result on web
+/// (AttachmentStore is a no-op there) or when nothing could be gathered.
+///
+/// [client] is injectable for tests (mirrors [fetchCappedNoRedirect]'s own
+/// injectable client); production passes nothing and each fetch creates +
+/// closes its own client as before.
+Future<GalleryDownloadResult> downloadGalleryImagesWithStats(
+  List<String> urls, {
+  http.Client? client,
+}) async {
   final refs = <String>[];
   var aggregate = 0;
-  for (final url in urls) {
-    if (refs.length >= kMaxGalleryImages) break;
-    if (aggregate >= kMaxGalleryAggregateBytes) break;
+  for (var i = 0; i < urls.length; i++) {
+    if (refs.length >= kMaxGalleryImages ||
+        aggregate >= kMaxGalleryAggregateBytes) {
+      // A cap is already hit — every remaining url (this one included) is
+      // left untried. Count them all and stop.
+      return GalleryDownloadResult(refs, urls.length - i);
+    }
+    final url = urls[i];
     try {
       final uri = Uri.tryParse(url);
       if (uri == null ||
           !kBotbooruGalleryHosts.contains(uri.host.toLowerCase())) {
         continue;
       }
-      final resp =
-          await fetchCappedNoRedirect(uri, maxBytes: kMaxGalleryImageBytes);
+      final resp = await fetchCappedNoRedirect(
+        uri,
+        maxBytes: kMaxGalleryImageBytes,
+        client: client,
+      );
       if (resp.statusCode >= 400) continue;
       final bytes = resp.bodyBytes;
       final mime = _imageMime(bytes);
@@ -69,7 +108,19 @@ Future<List<String>> downloadGalleryImages(List<String> urls) async {
       // skip this one, keep going
     }
   }
-  return refs;
+  return GalleryDownloadResult(refs, 0);
+}
+
+/// Legacy entry point kept for existing callers ([main.dart]'s bookmarklet
+/// handoff, `characters_screen.dart`'s file-import paths) that only ever
+/// pass an empty `urls` list today and don't need the cap-visibility stats —
+/// returns just the refs from [downloadGalleryImagesWithStats].
+Future<List<String>> downloadGalleryImages(
+  List<String> urls, {
+  http.Client? client,
+}) async {
+  final result = await downloadGalleryImagesWithStats(urls, client: client);
+  return result.refs;
 }
 
 /// Sniff the leading bytes for a supported raster image format. Returns the
