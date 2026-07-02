@@ -1422,6 +1422,17 @@ class _ChatScreenState extends State<ChatScreen> {
       _streamBuffer = '';
       _streamMessageId = pf.assistantId;
     });
+    // Slice D-3 (2026-07-02, review-caught): switching to a DIFFERENT provider
+    // must start the context-recovery loop fresh. This is a generation entry
+    // point exactly like _send/_retryGeneration/_stop/_regenerateMessage — but
+    // it deliberately can't route through _clearPendingFallback (that clears
+    // the fallback chain this method is walking), so it was the one entry point
+    // that never reset the trim state. Without this, the NEW provider inherits
+    // the OLD provider's shrunk `_contextTrimWindow` (a window sized for a
+    // different, possibly much smaller, real context limit → the new provider
+    // gets a needlessly-truncated history) plus a depleted attempt budget.
+    _contextTrimWindow = null;
+    _contextTrimAttempts = 0;
     // Clear the failed/refused content from the slot so it isn't shown
     // during the new stream (buildTurns already skips _streamMessageId).
     if (chat != null) {
