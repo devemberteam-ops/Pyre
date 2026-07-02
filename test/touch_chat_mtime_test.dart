@@ -134,6 +134,36 @@ void main() {
       expect(chat.mtime, greaterThan(0));
       await store.flushPersist();
     });
+
+    // H-2: attaching/detaching a per-chat lorebook (LorebookAttachPickerScreen)
+    // used to mutate chat.attachedLorebookIds then call a bare
+    // notifyAndPersist() — never bumping chat.mtime. The screen now routes
+    // through touchChat, mirroring the detach path in
+    // group_lorebooks_sheet.dart. This test exercises the store-level
+    // contract the screen relies on.
+    test('attaching a per-chat lorebook bumps chat.mtime', () async {
+      chat.attachedLorebookIds.add('book1');
+      store.touchChat(chat);
+      expect(chat.attachedLorebookIds, contains('book1'));
+      expect(chat.mtime, greaterThan(0));
+      await store.flushPersist();
+    });
+
+    // H-3: a per-chat character-snapshot override edit (character_edit_screen
+    // .dart, the widget.overrideChatId != null branch) set chat.updatedAt
+    // (sort field) but never chat.mtime (sync field), so the edit saved
+    // locally but never propagated to a paired device. Fixed by also
+    // stamping chat.mtime = chat.updatedAt, mirroring addCharacterToChat.
+    test('per-chat character-snapshot override bumps chat.mtime', () async {
+      final updated = Character(id: 'x', name: 'Updated Name');
+      chat.characterSnapshots['x'] = updated;
+      chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
+      chat.mtime = chat.updatedAt;
+      expect(chat.characterSnapshots['x']?.name, 'Updated Name');
+      expect(chat.mtime, greaterThan(0));
+      expect(chat.mtime, equals(chat.updatedAt));
+      await store.flushPersist();
+    });
   });
 
   group('disabled-inherited-lorebook toggle bumps chat.mtime', () {

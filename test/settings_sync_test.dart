@@ -69,6 +69,36 @@ void main() {
     });
   });
 
+  // H-4: live_sheet_settings_screen.dart / script_settings_screen.dart used
+  // to mutate store.liveSheetSettings.* / store.scriptSettings.* in place
+  // then call a bare notifyAndPersist() — never bumping settingsMtime, so
+  // these global settings saved locally but never propagated to a paired
+  // device. Both screens now route through these funnels.
+  group('updateLiveSheetSettings / updateScriptSettings bump settingsMtime',
+      () {
+    test('updateLiveSheetSettings advances settingsMtime and applies value',
+        () {
+      final store = AppStore(storage: _NoopBackend());
+      final before = store.settingsMtime;
+      final ls = store.liveSheetSettings
+        ..autoEvery = 5
+        ..newChatsEnabled = false;
+      store.updateLiveSheetSettings(ls);
+      expect(store.liveSheetSettings.autoEvery, 5);
+      expect(store.liveSheetSettings.newChatsEnabled, isFalse);
+      expect(store.settingsMtime, greaterThanOrEqualTo(before));
+      expect(store.settingsMtime, greaterThan(0));
+    });
+
+    test('updateScriptSettings advances settingsMtime and applies value', () {
+      final store = AppStore(storage: _NoopBackend());
+      final ss = store.scriptSettings..beatsCap = 7;
+      store.updateScriptSettings(ss);
+      expect(store.scriptSettings.beatsCap, 7);
+      expect(store.settingsMtime, greaterThan(0));
+    });
+  });
+
   group('applySyncedSettings round-trip', () {
     test('a higher-mtime payload applies settings + pointers to a fresh store',
         () {

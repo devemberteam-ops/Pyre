@@ -39,9 +39,15 @@ class _LiveSheetSettingsScreenState extends State<LiveSheetSettingsScreen> {
 
   void _commit() {
     final store = context.read<AppStore>();
-    store.liveSheetSettings.autoEvery = _autoEvery;
-    store.liveSheetSettings.newChatsEnabled = _newChatsEnabled;
-    store.notifyAndPersist();
+    // H-4: mutating store.liveSheetSettings.* in place then calling a bare
+    // notifyAndPersist() never bumps settingsMtime, so this global settings
+    // unit saved locally but never propagated to a paired device. Route
+    // through the updateLiveSheetSettings funnel (app_store.dart), which
+    // stamps settingsMtime via _touchSettings.
+    final ls = store.liveSheetSettings;
+    ls.autoEvery = _autoEvery;
+    ls.newChatsEnabled = _newChatsEnabled;
+    store.updateLiveSheetSettings(ls);
   }
 
   @override

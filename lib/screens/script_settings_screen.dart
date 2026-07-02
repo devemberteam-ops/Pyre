@@ -35,8 +35,14 @@ class _ScriptSettingsScreenState extends State<ScriptSettingsScreen> {
 
   void _commit() {
     final store = context.read<AppStore>();
-    store.scriptSettings.beatsCap = _beatsCap;
-    store.notifyAndPersist();
+    // H-4: mutating store.scriptSettings.* in place then calling a bare
+    // notifyAndPersist() never bumps settingsMtime, so this global settings
+    // unit saved locally but never propagated to a paired device. Route
+    // through the updateScriptSettings funnel (app_store.dart), which stamps
+    // settingsMtime via _touchSettings.
+    final ss = store.scriptSettings;
+    ss.beatsCap = _beatsCap;
+    store.updateScriptSettings(ss);
   }
 
   @override

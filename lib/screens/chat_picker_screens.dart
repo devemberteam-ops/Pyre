@@ -483,7 +483,14 @@ class _LorebookAttachPickerScreenState
                           } else {
                             chat!.attachedLorebookIds.remove(l.id);
                           }
-                          store.notifyAndPersist();
+                          // H-2: attaching/detaching a per-chat lorebook edits
+                          // chat sub-state that rides a chat sync, but a bare
+                          // notifyAndPersist() never bumps chat.mtime — so the
+                          // change saved locally but never propagated. Route
+                          // through touchChat (mirrors the detach path in
+                          // group_lorebooks_sheet.dart) so it reaches the
+                          // paired device.
+                          store.touchChat(chat);
                           setState(() {});
                         },
                       );

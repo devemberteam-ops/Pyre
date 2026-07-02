@@ -332,6 +332,11 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
       if (chat != null) {
         chat.characterSnapshots[widget.characterId!] = updated;
         chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
+        // H-3: this per-chat character-snapshot override rides a chat sync,
+        // but chat.mtime (the sync field) was never bumped — only updatedAt
+        // (the sort field) — so the edit saved locally but never propagated
+        // to a paired device. Mirrors addCharacterToChat's mtime stamp.
+        chat.mtime = chat.updatedAt;
         store.notifyAndPersist();
       } else {
         store.updateCharacter(updated);
