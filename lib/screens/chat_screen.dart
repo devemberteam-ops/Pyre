@@ -5239,6 +5239,16 @@ class _MessageBubbleState extends State<_MessageBubble> {
 
     final chatSettings = widget.chatSettings;
     final isEmptyVariant = m.text.isEmpty;
+    // Fix (2026-07-02 streaming regression): the ACTIVE streaming bubble
+    // starts with an empty variant but must NOT render the static empty-slot
+    // placeholder — its live text arrives via the `streamingText` notifier,
+    // not `m.text`, and (because the isolated streaming path skips the global
+    // notify) this build never re-runs to flip an `m.text.isEmpty` gate. So
+    // every empty-slot VISUAL (ghost colour/border/min-width + the
+    // "Generating…" child) is gated on the bubble NOT being the streaming
+    // target; the VLB branch below then owns the placeholder-vs-live decision.
+    final showsStaticPlaceholder =
+        isEmptyVariant && widget.streamingText == null;
 
     // Wave CY.7: an empty variant that is NEITHER the streaming target
     // NOR the last message in the chat is an abandoned slot — the user
@@ -5265,7 +5275,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
         isUserSide ? chatSettings.userBubbleColor : chatSettings.aiBubbleColor;
     final Color bubbleBase =
         roleColorArgb != null ? Color(roleColorArgb) : EmberColors.bgPanel;
-    final Color bubbleColor = isEmptyVariant
+    final Color bubbleColor = showsStaticPlaceholder
         ? bubbleBase.withValues(alpha: chatSettings.bubbleAlpha * 0.35)
         : bubbleBase.withValues(alpha: chatSettings.bubbleAlpha);
     final BorderRadius bubbleRadius =
@@ -5280,7 +5290,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                 : EmberColors.stroke,
             width: chatSettings.bubbleBorderWidth,
           )
-        : (isEmptyVariant
+        : (showsStaticPlaceholder
             ? Border.all(
                 color: EmberColors.stroke.withValues(alpha: 0.6),
                 width: 1,
@@ -5319,11 +5329,11 @@ class _MessageBubbleState extends State<_MessageBubble> {
             // waiting for input), give the bubble a generous minimum width
             // so it reads as a "ghost message slot" instead of a tiny "…"
             // dot floating at the screen edge.
-            minWidth: isEmptyVariant
+            minWidth: showsStaticPlaceholder
                 ? MediaQuery.of(context).size.width * 0.55
                 : 0,
           ),
-          child: isEmptyVariant
+          child: showsStaticPlaceholder
               ? Text(
                   isUser
                       ? 'Type your alternative reply…'
@@ -5416,29 +5426,52 @@ class _MessageBubbleState extends State<_MessageBubble> {
                             if (widget.streamingText != null)
                               ValueListenableBuilder<String>(
                                 valueListenable: widget.streamingText!,
-                                builder: (context, liveText, _) => ChatText(
-                                  // Same display-stage pipeline as the
-                                  // non-streaming branch below — name-fill
-                                  // then regex — just fed from the live
-                                  // notifier value instead of `m.text` so
-                                  // formatting (italics/quotes/markdown)
-                                  // renders identically while streaming.
-                                  applyRegexRules(
-                                    _fillNamePlaceholders(
-                                      liveText,
-                                      charName: widget.character?.name,
-                                      personaName: widget.persona?.name,
+                                builder: (context, liveText, _) {
+                                  // Streaming placeholder: while the notifier
+                                  // is still empty (the first-token wait, which
+                                  // can be long on reasoning models) show
+                                  // "Generating…" — the same affordance the
+                                  // static empty-variant branch used to give.
+                                  // The old code relied on `m.text.isEmpty` +
+                                  // a per-token GLOBAL notify to flip that
+                                  // placeholder into live text; the isolated
+                                  // path skips the global notify, so the flip
+                                  // has to happen HERE, driven by the live
+                                  // notifier value instead.
+                                  if (liveText.isEmpty) {
+                                    return Text(
+                                      'Generating…',
+                                      style: TextStyle(
+                                        color: EmberColors.textDim,
+                                        fontStyle: FontStyle.italic,
+                                        fontSize: 13,
+                                      ),
+                                    );
+                                  }
+                                  return ChatText(
+                                    // Same display-stage pipeline as the
+                                    // non-streaming branch below — name-fill
+                                    // then regex — just fed from the live
+                                    // notifier value instead of `m.text` so
+                                    // formatting (italics/quotes/markdown)
+                                    // renders identically while streaming.
+                                    applyRegexRules(
+                                      _fillNamePlaceholders(
+                                        liveText,
+                                        charName: widget.character?.name,
+                                        personaName: widget.persona?.name,
+                                      ),
+                                      widget.regexRules,
+                                      stream: isUserSide
+                                          ? RegexStream.userInput
+                                          : RegexStream.aiOutput,
+                                      stage: RegexStage.display,
                                     ),
-                                    widget.regexRules,
-                                    stream: isUserSide
-                                        ? RegexStream.userInput
-                                        : RegexStream.aiOutput,
-                                    stage: RegexStage.display,
-                                  ),
-                                  hideReasoning: _reasoningOverride ??
-                                      chatSettings.hideReasoning,
-                                  isStreaming: true,
-                                ),
+                                    hideReasoning: _reasoningOverride ??
+                                        chatSettings.hideReasoning,
+                                    isStreaming: true,
+                                  );
+                                },
                               )
                             else
                               ChatText(

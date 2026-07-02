@@ -25,6 +25,7 @@ library;
 //   4. At onDone, the final settled message text equals the full streamed
 //      content and that exact text is what lands in the persisted blob.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -286,4 +287,140 @@ void main() {
             'streamed text — the debounced persist must not have been '
             'skipped or shortened by the isolation path');
   });
+
+  // REGRESSION (2026-07-02, owner-reported "streaming ficou em branco até o
+  // fim"): the test above uses a BUFFERED MockClient that delivers the whole
+  // SSE body + [DONE] in one burst, so onDone's global-notify render satisfies
+  // its assertions even if the LIVE per-token path is dead. This test streams
+  // chunks over time and asserts partial text is on screen BEFORE [DONE] —
+  // i.e. the isolated ValueListenableBuilder actually reflects mid-stream
+  // updates, not just the final settle.
+  testWidgets('streaming bubble shows partial text mid-stream, before [DONE]',
+      (tester) async {
+    final controller = StreamController<List<int>>();
+    debugHttpClientFactory = () => _ChunkedClient(controller.stream);
+
+    provider = ApiProvider(
+      id: 'p1',
+      name: 'Test Provider',
+      baseUrl: 'http://fake-provider.test/v1',
+      apiKey: 'sk-test',
+      model: 'test-model',
+    );
+    final backend = _RecordingBackend();
+    final store = AppStore(storage: backend);
+    final character = Character(
+      id: 'char-1',
+      name: 'Sera',
+      description: 'A quiet blacksmith.',
+      personality: 'Reserved.',
+      scenario: 'A forge.',
+      createdAt: 0,
+      updatedAt: 0,
+    );
+    store.characters.add(character);
+    store.providers.add(provider);
+    store.activeProviderId = provider.id;
+    final chat = Chat(
+      id: 'chat-1',
+      characterIds: [character.id],
+      characterSnapshots: {character.id: character},
+      messages: [
+        Message(
+            id: 'u0',
+            kind: MessageKind.user,
+            variants: ['Hello Sera.'],
+            createdAt: 0,
+            mtime: 0),
+      ],
+      memoryEnabled: false,
+      liveSheetEnabled: false,
+      createdAt: 0,
+      updatedAt: 0,
+    );
+    store.chats.add(chat);
+
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    ChatText.debugClearParseCache();
+
+    await tester.pumpWidget(_host(store, ChatScreen(chatId: chat.id)));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField).first, 'Go on.');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.arrow_upward));
+    await tester.pump(); // starts the turn + subscribes to the stream
+
+    // Walk every rendered RichText for a needle (ChatText renders spans, not
+    // a plain Text, so find.textContaining won't see it).
+    bool renders(String needle) {
+      var found = false;
+      void search(InlineSpan span) {
+        if (span is TextSpan) {
+          if ((span.text ?? '').contains(needle)) found = true;
+          for (final c in span.children ?? const <InlineSpan>[]) {
+            search(c);
+          }
+        }
+      }
+
+      for (final rt in tester.widgetList<RichText>(find.byType(RichText))) {
+        search(rt.text);
+      }
+      return found;
+    }
+
+    // Release ONE chunk, advance generously past the 16ms coalesce window —
+    // the partial text MUST be on screen now, long before [DONE].
+    controller.add(utf8.encode(sseChunk('The gate ')));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+    // Diagnostic: did the MODEL receive the chunk (proving the stream was
+    // processed) even if the SCREEN didn't show it? If model has it but the
+    // screen is blank, the bug is the UI render path, not test timing.
+    final liveMsg =
+        chat.messages.lastWhere((m) => m.kind == MessageKind.char);
+    expect(liveMsg.text, contains('The gate'),
+        reason: 'sanity: the streamed chunk reached the model synchronously');
+    expect(renders('The gate'), isTrue,
+        reason: 'the streaming bubble must show text WHILE generating, not '
+            'only after the response completes');
+
+    // A second live chunk must append on screen, still before [DONE].
+    controller.add(utf8.encode(sseChunk('creaked open')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+    expect(renders('creaked open'), isTrue,
+        reason: 'subsequent live tokens must keep updating the bubble');
+
+    // Close out cleanly so no timers dangle into teardown.
+    controller.add(utf8.encode(sseDone()));
+    await controller.close();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pump(const Duration(milliseconds: 700));
+  });
+}
+
+/// A minimal streaming client whose response body is a caller-controlled
+/// stream, so a test can release SSE chunks one at a time and assert the UI
+/// updates BETWEEN chunks (unlike a buffered MockClient, which delivers the
+/// whole body — and fires onDone — in a single burst).
+class _ChunkedClient extends http.BaseClient {
+  final Stream<List<int>> body;
+  _ChunkedClient(this.body);
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    return http.StreamedResponse(
+      body,
+      200,
+      headers: {'content-type': 'text/event-stream'},
+    );
+  }
 }
