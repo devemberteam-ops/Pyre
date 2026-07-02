@@ -333,25 +333,47 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // preset-less / modular-without-markers chat) so the two never drift.
   String buildJointPartyBlock() {
     final buf = StringBuffer();
+    // Per-member macro fill (owner decision 2026-07, ST "Join" parity):
+    // cards routinely use {{char}} SELF-referentially inside their own
+    // description/personality ("{{char}} is a shy elf..."). Inside the joint
+    // block each member's {{char}} must resolve to THAT member's own name —
+    // NOT to the chat's primary/responder (which is what the global
+    // name-fill pass would do to any leftovers). {{user}} resolves to the
+    // persona exactly like everywhere else.
+    final memberUserName = persona?.name ?? 'You';
+    String fillForMember(String s, String memberName) => s
+        .replaceAll(
+            RegExp(r'\{\{char\}\}', caseSensitive: false), memberName)
+        .replaceAll(
+            RegExp(r'\{\{user\}\}', caseSensitive: false), memberUserName);
     for (final id in chat.characterIds) {
       final member = chat.characterSnapshots[id] ?? inputs.lookupCharacter(id);
       if (member == null) continue;
+      // NOTE (owner decision 2026-07): deliberately NO per-member
+      // "You are X." line — with several members it is contradictory (the
+      // model can't BE three people), and for a world/scenario card it is
+      // nonsense ("You are Eldoria."). The `--- Name ---` delimiter binds
+      // name↔card; the joint instruction below frames the model as the
+      // scene's NARRATOR instead.
       buf.writeln('--- ${member.name} ---');
-      buf.writeln("You are ${member.name}.");
       if (member.description.isNotEmpty) {
-        buf.writeln('\nDescription:\n${member.description}');
+        buf.writeln(
+            '\nDescription:\n${fillForMember(member.description, member.name)}');
       }
       if (member.personality.isNotEmpty) {
-        buf.writeln('\nPersonality:\n${member.personality}');
+        buf.writeln(
+            '\nPersonality:\n${fillForMember(member.personality, member.name)}');
       }
       if (member.scenario.isNotEmpty) {
-        buf.writeln('\nScenario:\n${member.scenario}');
+        buf.writeln(
+            '\nScenario:\n${fillForMember(member.scenario, member.name)}');
       }
       if (member.mesExample.isNotEmpty) {
-        buf.writeln('\nExample dialogue:\n${member.mesExample}');
+        buf.writeln(
+            '\nExample dialogue:\n${fillForMember(member.mesExample, member.name)}');
       }
       if (member.systemPrompt.isNotEmpty) {
-        buf.writeln('\n${member.systemPrompt}');
+        buf.writeln('\n${fillForMember(member.systemPrompt, member.name)}');
       }
       buf.writeln();
     }
@@ -403,15 +425,16 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     // joint block (every member + the joint instruction) rides on
     // {{description}} — the FIRST structural marker the default preset
     // emits — and the sibling markers are blanked so nothing doubles up.
-    // {{char}} still resolves to the responder's name so surrounding preset
-    // prose ("You are {{char}}.") reads oddly but harmlessly; the very next
-    // line (the joint block) immediately re-frames the scene as multi-
-    // character, matching what `injectCardFallback` produces for a
-    // preset-less chat.
+    // {{char}} resolves to 'Narrator' (owner decision 2026-07): in party
+    // mode the model IS the scene's narrator, so preset prose like
+    // "You are {{char}}." / "Stay in character as {{char}}" reads naturally
+    // ("You are Narrator.") and matches the joint-scene instruction's
+    // framing. Per-member {{char}} INSIDE each card is already resolved to
+    // that member's own name by `buildJointPartyBlock` before this runs.
     var out = isPartyScene
         ? s
             .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false),
-                character?.name ?? '')
+                'Narrator')
             .replaceAll(RegExp(r'\{\{user\}\}', caseSensitive: false),
                 persona?.name ?? 'You')
             .replaceAll(RegExp(r'\{\{description\}\}', caseSensitive: false),

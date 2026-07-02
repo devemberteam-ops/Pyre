@@ -1331,7 +1331,6 @@ Tell me about the anvil.''';
 
 const String _expected15 = '''system
 --- Sera ---
-You are Sera.
 
 Description:
 A quiet blacksmith with soot-stained hands.
@@ -1347,7 +1346,6 @@ Example dialogue:
 Sera: *hammers steadily* "Almost done."
 
 --- Talia ---
-You are Talia.
 
 Description:
 A sharp-tongued traveling merchant.
@@ -1356,7 +1354,6 @@ Personality:
 Bold, quick to laugh, always haggling.
 
 --- Orin ---
-You are Orin.
 
 Description:
 A watchful town guard.

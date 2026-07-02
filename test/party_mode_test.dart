@@ -291,6 +291,89 @@ void main() {
       expect(text, contains(b.personality));
       expect(text, contains('narrating a group scene'));
       expect(text, isNot(contains('Other characters in this scene')));
+
+      // Owner decision (2026-07): in party mode the PRESET's {{char}}
+      // resolves to 'Narrator' — the model is the scene's narrator, not any
+      // single member. The locked default preset opens with
+      // "You are a Gamemaster..." but uses {{char}} later ("...depending on
+      // the context..." / card-law prose names {{char}}) — assert the
+      // narrator substitution actually landed somewhere.
+      expect(text, contains('Narrator'));
+      expect(text, isNot(contains('{{char}}')),
+          reason: 'no unresolved {{char}} may survive party assembly');
+    });
+
+    test(
+        'party mode fills {{char}} INSIDE each member card with that '
+        'member\'s OWN name (ST-Join parity) and injects no per-member '
+        '"You are X." line', () {
+      final a = Character(
+        id: 'pm4-char-a',
+        name: 'Sera',
+        description: '{{char}} is a quiet blacksmith. {{char}} trusts {{user}}.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final b = Character(
+        id: 'pm4-char-b',
+        name: 'Talia',
+        description: '{{char}} is a sharp-tongued merchant.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final world = Character(
+        id: 'pm4-world',
+        name: 'Eldoria',
+        description: 'A rain-soaked frontier town where iron is currency.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final persona = Persona(
+        id: 'pm4-persona',
+        name: 'Alex',
+        description: 'A curious traveler.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final chat = Chat(
+        id: 'pm4-chat-1',
+        characterIds: [a.id, b.id, world.id],
+        characterSnapshots: {a.id: a, b.id: b, world.id: world},
+        personaId: persona.id,
+        messages: const [],
+        partyMode: true,
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        character: a,
+        persona: persona,
+        preset: null,
+        responderId: a.id,
+        beatsCap: 3,
+        lookupCharacter: _charLookup([a, b, world]),
+        lookupBook: (_) => null,
+        inFlightMessageId: null,
+        partyMode: true,
+      );
+      final result = buildChatPrompt(inputs);
+      final text = _serialize(result.turns);
+
+      // Each member's self-referential {{char}} resolved to their OWN name —
+      // Talia's description must NOT carry Sera's (primary) name.
+      expect(text, contains('Sera is a quiet blacksmith. Sera trusts Alex.'));
+      expect(text, contains('Talia is a sharp-tongued merchant.'));
+      expect(text, isNot(contains('Sera is a sharp-tongued merchant.')));
+
+      // No contradictory per-member identity line — nonsense for a world
+      // card ("You are Eldoria.") and impossible with several members.
+      expect(text, isNot(contains('You are Sera.')));
+      expect(text, isNot(contains('You are Talia.')));
+      expect(text, isNot(contains('You are Eldoria.')));
+      // The world card still enters as delimited scene context.
+      expect(text, contains('--- Eldoria ---'));
+      expect(text, contains('A rain-soaked frontier town'));
     });
   });
 }
