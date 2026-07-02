@@ -281,6 +281,28 @@ String scrubProviderBody(String body, {String? apiKey}) {
   return s;
 }
 
+/// Party mode (owner request): one generation voices the WHOLE party in a
+/// scene, so the single-character `max_tokens` ceiling is too tight. Scales
+/// [base] up with [memberCount] members in the scene:
+///   - `memberCount <= 1` → [base] unchanged (byte-identical for every
+///     non-party chat, and for every caller that doesn't pass a count).
+///   - else → `base * (1 + 0.6*(memberCount-1))`, rounded, clamped to
+///     `[base, base*3]` (2 members ≈1.6x, 3 ≈2.2x, 4 ≈2.8x, 5+ capped 3x).
+///   - `base <= 0` passes through unchanged — 0/negative means
+///     "unset/unlimited" in this codebase (see chat_api.dart's Anthropic
+///     `rawMax <= 0` fallback and `ModelSettings.maxTokens`'s own default),
+///     so we must never invent a ceiling the user/provider didn't set.
+int partyScaledMaxTokens(int base, int memberCount) {
+  if (base <= 0) return base;
+  if (memberCount <= 1) return base;
+  final scale = 1 + 0.6 * (memberCount - 1);
+  final scaled = (base * scale).round();
+  final cap = base * 3;
+  if (scaled > cap) return cap;
+  if (scaled < base) return base;
+  return scaled;
+}
+
 /// Merge sampling values from a preset on top of the global ModelSettings,
 /// SillyTavern-style: each preset field is an OPTIONAL override. A null on
 /// the preset means "use the user's global default"; a non-null wins.
@@ -289,13 +311,24 @@ String scrubProviderBody(String body, {String? apiKey}) {
 /// payload. Fields that the model server doesn't recognise are silently
 /// ignored on its end — we just send everything we know about so providers
 /// that support more params (OpenRouter, Soji, etc.) get to use them.
-Map<String, dynamic> _samplingPayload(ModelSettings settings, Preset? preset) {
+///
+/// [partyMemberCount] scales the resolved `max_tokens` ceiling up for a
+/// party-mode scene (see [partyScaledMaxTokens]). Defaults to 1 — a no-op —
+/// so every existing caller stays byte-identical.
+Map<String, dynamic> _samplingPayload(
+  ModelSettings settings,
+  Preset? preset, {
+  int partyMemberCount = 1,
+}) {
   // For temp/top_p/max_tokens we always send a value — fall back to the
   // global setting. For the rest we ONLY include them when something
   // actually sets them; otherwise we let the server use its defaults.
   final temp = preset?.temperature ?? settings.temperature;
   final topP = preset?.topP ?? settings.topP;
-  final maxTokens = preset?.maxTokens ?? settings.maxTokens;
+  final maxTokens = partyScaledMaxTokens(
+    preset?.maxTokens ?? settings.maxTokens,
+    partyMemberCount,
+  );
   // top_k: preset wins, else global (0 = disabled on our slider).
   final topK = preset?.topK ?? settings.topK;
   final out = <String, dynamic>{
@@ -350,6 +383,9 @@ Map<String, dynamic> buildRequestBody({
   List<String>? stop,
   required bool stream,
   Map<String, dynamic>? extraBody,
+  // Party mode: number of characters voiced in this scene. Defaults to 1 —
+  // a no-op that keeps the body byte-identical — see [partyScaledMaxTokens].
+  int partyMemberCount = 1,
 }) {
   // Wave CY.18.267: reshape the assembled message array to this provider's
   // configured format right before serialising. `none` (default) returns the
@@ -366,7 +402,7 @@ Map<String, dynamic> buildRequestBody({
     ...provider.extraParams,
     'model': provider.model,
     'messages': processed.map((m) => m.toJson()).toList(),
-    ..._samplingPayload(settings, preset),
+    ..._samplingPayload(settings, preset, partyMemberCount: partyMemberCount),
     if (stop != null && stop.isNotEmpty) 'stop': stop,
     'stream': stream,
     ...?extraBody,
@@ -445,6 +481,9 @@ Map<String, dynamic> buildAnthropicBody({
   required bool stream,
   List<String>? stop,
   Map<String, dynamic>? extraParams,
+  // Party mode: number of characters voiced in this scene. Defaults to 1 —
+  // a no-op that keeps the body byte-identical — see [partyScaledMaxTokens].
+  int partyMemberCount = 1,
 }) {
   // 1. Split system turns: leading ones → top-level `system`; post-history
   //    ones → converted to user turns inline (Defect 2 fix).
@@ -502,7 +541,11 @@ Map<String, dynamic> buildAnthropicBody({
     msgs.insert(0, {'role': 'user', 'content': '.'});
   }
   // 4. Sampling — reuse the shared payload, map to Anthropic names/ranges.
-  final sampling = _samplingPayload(settings, preset);
+  final sampling = _samplingPayload(
+    settings,
+    preset,
+    partyMemberCount: partyMemberCount,
+  );
   final rawMax = (sampling['max_tokens'] as num?)?.toInt() ?? 4096;
   final maxTokens = rawMax <= 0 ? 4096 : rawMax;
   final body = <String, dynamic>{
@@ -604,6 +647,7 @@ Stream<String> _streamAnthropic({
   required List<ChatTurn> messages,
   Preset? preset,
   List<String>? stop,
+  int partyMemberCount = 1,
 }) async* {
   final url = Uri.parse(buildChatUrl(provider.baseUrl, 'messages'));
   // `var` (not `final`) so the retry below can swap in the minimal-safe body,
@@ -616,6 +660,7 @@ Stream<String> _streamAnthropic({
     stream: true,
     stop: stop,
     extraParams: provider.extraParams.isEmpty ? null : provider.extraParams,
+    partyMemberCount: partyMemberCount,
   );
   final client = debugHttpClientFactory?.call() ?? http.Client();
   try {
@@ -850,6 +895,11 @@ Stream<String> streamChatCompletion({
   // a per-build flag on this so it stops re-sending `response_format` on every
   // subsequent batch. Null = no-op for every other caller.
   void Function()? onParamFallback,
+  // Party mode: number of characters voiced in this reply (a joint scene).
+  // Scales the resolved `max_tokens` ceiling up so one generation has room
+  // to speak for the whole party — see [partyScaledMaxTokens]. Defaults to
+  // 1, which is a no-op: every existing / non-party caller is unaffected.
+  int partyMemberCount = 1,
 }) async* {
   // Wave CY.18.71: web/PWA proxy mode. When running in a browser tab
   // that's paired to a desktop Pyre server, we don't call the upstream
@@ -880,6 +930,7 @@ Stream<String> streamChatCompletion({
       messages: messages,
       preset: preset,
       stop: stop,
+      partyMemberCount: partyMemberCount,
     );
     return;
   }
@@ -896,6 +947,7 @@ Stream<String> streamChatCompletion({
     stop: stop,
     stream: true,
     extraBody: extraBody,
+    partyMemberCount: partyMemberCount,
   );
 
   // Wave CY.18.214: capture for the diagnostics log. The `body` map above

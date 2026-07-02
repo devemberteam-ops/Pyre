@@ -1213,6 +1213,11 @@ class _ChatScreenState extends State<ChatScreen> {
         preset: store.activePreset,
         messages: turns,
         debugTag: 'chat', // Wave CY.18.214 diagnostics tag
+        // Party mode: one generation voices the whole party in a scene, so
+        // the single-character max_tokens ceiling scales with member count.
+        partyMemberCount: (chat.partyMode && chat.characterIds.length > 1)
+            ? chat.characterIds.length
+            : 1,
       ).listen(
         (chunk) {
           if (!mounted) return;
@@ -3166,6 +3171,11 @@ class _ChatScreenState extends State<ChatScreen> {
         preset: store.activePreset,
         messages: turns,
         debugTag: 'chat', // Wave CY.18.214 diagnostics tag
+        // Party mode: one generation voices the whole party in a scene, so
+        // the single-character max_tokens ceiling scales with member count.
+        partyMemberCount: (chat.partyMode && chat.characterIds.length > 1)
+            ? chat.characterIds.length
+            : 1,
       ).listen(
         (chunk) {
           if (!mounted) return;
@@ -4049,6 +4059,11 @@ class _ChatScreenState extends State<ChatScreen> {
           ChatTurn('user', '[Begin the scene.]'),
         ],
         debugTag: 'chat', // Wave CY.18.214 diagnostics tag
+        // Party mode: one generation voices the whole party in a scene, so
+        // the single-character max_tokens ceiling scales with member count.
+        partyMemberCount: (chat.partyMode && chat.characterIds.length > 1)
+            ? chat.characterIds.length
+            : 1,
       ).listen(
         (chunk) {
           if (!mounted) return;
@@ -4291,6 +4306,11 @@ class _ChatScreenState extends State<ChatScreen> {
         preset: store.activePreset,
         messages: turns,
         debugTag: 'chat', // Wave CY.18.214 diagnostics tag
+        // Party mode: one generation voices the whole party in a scene, so
+        // the single-character max_tokens ceiling scales with member count.
+        partyMemberCount: (chat.partyMode && chat.characterIds.length > 1)
+            ? chat.characterIds.length
+            : 1,
       ).listen(
         (chunk) {
           if (!mounted) return;
