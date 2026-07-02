@@ -116,6 +116,15 @@ const List<String> _paramErrorSignatures = [
 /// fix. Case-insensitive. Empty body ⇒ false.
 bool isUnsupportedParamError(String scrubbedBody) {
   if (scrubbedBody.isEmpty) return false;
+  // A context-overflow rejection often ALSO mentions `max_tokens` (a param
+  // signature) — e.g. "maximum context length is N tokens ... decrease
+  // max_tokens". It is NOT a param-shape error: dropping extras won't help,
+  // trimming the chat history will. Classify overflow FIRST so an overflow
+  // body is never swallowed into the param-minimal-retry path — otherwise the
+  // ChatApiError never reaches the Slice-D context-recovery loop that would
+  // trim+retry it. (Genuine param bodies contain no overflow phrase, so this
+  // guard is a no-op for them.)
+  if (isContextOverflowError(scrubbedBody)) return false;
   final lower = scrubbedBody.toLowerCase();
   for (final sig in _paramErrorSignatures) {
     if (lower.contains(sig)) return true;

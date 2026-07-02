@@ -6,6 +6,32 @@ import 'package:pyre/services/param_policy.dart';
 /// style. These functions are provably INERT (no production caller yet) —
 /// this file is the only place that exercises them.
 void main() {
+  // Review-corollary regression (2026-07-02): a real overflow body often ALSO
+  // mentions `max_tokens` (a param signature). isUnsupportedParamError must
+  // classify overflow FIRST and return false, so the overflow error is never
+  // swallowed into the param-minimal-retry path (which would starve Slice-D's
+  // context-recovery loop).
+  group('collision guard — overflow bodies never classify as param error', () {
+    test('overflow body mentioning max_tokens routes to overflow, NOT param',
+        () {
+      const body =
+          "This model's maximum context length is 8192 tokens, however your "
+          "messages resulted in 9000 tokens. Please reduce the length of the "
+          "messages or decrease max_tokens.";
+      expect(isContextOverflowError(body), isTrue);
+      expect(isUnsupportedParamError(body), isFalse,
+          reason: 'overflow must not be swallowed by the param-retry backstop');
+    });
+
+    test('genuine param body (no overflow phrase) still classifies as param',
+        () {
+      const body = "Unsupported parameter: 'max_tokens' is not supported here; "
+          "use 'max_completion_tokens' instead.";
+      expect(isContextOverflowError(body), isFalse);
+      expect(isUnsupportedParamError(body), isTrue);
+    });
+  });
+
   group('isContextOverflowError — truth table (each signature hits)', () {
     test('maximum context length', () {
       expect(
