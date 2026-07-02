@@ -3,6 +3,7 @@
 // backup JSONs stay portable between the prototype and the Flutter app.
 
 import 'dart:async';
+import 'dart:math' show min;
 
 import 'package:flutter/foundation.dart';
 
@@ -63,6 +64,16 @@ class AppStore extends ChangeNotifier {
   /// the "this one tends to censor → try a clean one" suggestion. Keyed
   /// by provider id; persisted in the main JSON blob (tiny).
   Map<String, int> providerRefusals = {};
+  /// Slice D-2 (2026-07-02): persisted "learned context-limit" cache.
+  /// Keyed `'${provider.id}|${provider.model}'` (the model_metadata.dart:78
+  /// convention — NOT providerRefusals' providerId-alone key, since the same
+  /// provider can be re-pointed at different models with different real
+  /// limits). Value = the conservative REAL context limit (in tokens)
+  /// learned from a real overflow error, in Pyre's existing token-estimate
+  /// unit. PURE STATE — inert until Slice D-3 wires a reader
+  /// (ChatPromptInputs.learnedContextLimitTokens); nothing consults this map
+  /// yet.
+  Map<String, int> learnedContextLimits = {};
   /// Optional override: when non-null, the AI character builder uses
   /// this provider instead of [activeProviderId]. Useful when the user
   /// wants (a) an uncensored text model for chatting (DeepSeek, Soji),
@@ -559,6 +570,13 @@ class AppStore extends ChangeNotifier {
           (k, v) => MapEntry(k.toString(), (v as num?)?.toInt() ?? 0),
         );
       }
+      // Slice D-2: learned context-limit cache (keyed 'providerId|model').
+      final rawLearnedContextLimits = raw['learnedContextLimits'];
+      if (rawLearnedContextLimits is Map) {
+        learnedContextLimits = rawLearnedContextLimits.map(
+          (k, v) => MapEntry(k.toString(), (v as num?)?.toInt() ?? 0),
+        );
+      }
 
       // Hydrate API keys from OS-secure storage. We support a one-time
       // migration: if a provider blob still has a key in plain JSON (from
@@ -1043,6 +1061,13 @@ class AppStore extends ChangeNotifier {
     // Wave CY.18.99: drop refusal records for providers that no longer
     // exist so the map doesn't grow unbounded across deletes.
     providerRefusals.removeWhere((id, _) => !providerIds.contains(id));
+    // Slice D-2: drop learned context-limit entries for providers that no
+    // longer exist. Keys are 'providerId|model' — split and check the
+    // providerId part only (the model half is provider-specific and not
+    // itself tracked as an id set).
+    learnedContextLimits.removeWhere(
+      (key, _) => !providerIds.contains(key.split('|').first),
+    );
     if (activePersonaId != null &&
         !personaIds.contains(activePersonaId)) {
       activePersonaId = null;
@@ -1285,6 +1310,9 @@ class AppStore extends ChangeNotifier {
       'guideProviderId': guideProviderId,
       // Wave CY.18.99: refusal history (omit when empty to keep blobs clean).
       if (providerRefusals.isNotEmpty) 'providerRefusals': providerRefusals,
+      // Slice D-2: learned context-limit cache (omit when empty).
+      if (learnedContextLimits.isNotEmpty)
+        'learnedContextLimits': learnedContextLimits,
       'characters': characters.map((c) => c.toJson()).toList(),
       'personas': personas.map((p) => p.toJson()).toList(),
       'activePersonaId': activePersonaId,
@@ -1537,6 +1565,23 @@ class AppStore extends ChangeNotifier {
   /// from [providerId] is classified as a content refusal.
   void bumpRefusal(String providerId) {
     providerRefusals[providerId] = (providerRefusals[providerId] ?? 0) + 1;
+    _bump();
+  }
+
+  /// Slice D-2: record a learned context limit for [providerId]+[model],
+  /// keyed `'$providerId|$model'` (model_metadata.dart:78 convention).
+  /// MONOTONE TIGHTEN — a learned limit only ever shrinks (min of any
+  /// existing value and [limitTokens]), never loosens, since a provider
+  /// serving a smaller real limit than previously observed is the more
+  /// conservative (safer) number to keep. Non-positive values are ignored
+  /// (never a legitimate token count). PURE STATE — nothing reads this map
+  /// yet; Slice D-3 wires the consumer.
+  void recordContextLimit(String providerId, String model, int limitTokens) {
+    if (limitTokens <= 0) return;
+    final key = '$providerId|$model';
+    final existing = learnedContextLimits[key];
+    learnedContextLimits[key] =
+        existing == null ? limitTokens : min(existing, limitTokens);
     _bump();
   }
 
