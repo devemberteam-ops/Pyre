@@ -255,6 +255,106 @@ Map<String, dynamic> safeBodyFor(
   return body;
 }
 
+/// Context-overflow error signatures. These are substrings that appear in the
+/// (already scrubbed) error body of a 4xx that rejected the request because it
+/// was too long for the model's context window — as opposed to auth,
+/// rate-limit, or param-shape errors (see [_paramErrorSignatures]), for which
+/// trimming history would not help. Drawn from real provider error strings
+/// (OpenAI/OpenRouter `context_length_exceeded`, Anthropic "prompt is too
+/// long", vLLM/llama.cpp local-server phrasings).
+///
+/// MUST stay disjoint from [_paramErrorSignatures] — a `max_tokens` /
+/// `max_completion_tokens` naming complaint is a param-shape rejection, NOT
+/// an overflow, so none of these phrasings may overlap with that list.
+///
+/// All lower-cased; the matcher lower-cases the body before comparing. The
+/// last two ('kv cache', 'n_ctx') are low-confidence local-server signatures;
+/// callers must additionally gate on `statusCode < 500` to avoid mistaking an
+/// unrelated local-server crash for an overflow.
+const List<String> _contextOverflowSignatures = [
+  'maximum context length',
+  'context length exceeded',
+  'context_length_exceeded',
+  'reduce the length of the messages',
+  'context window',
+  'exceeds the maximum',
+  'too many tokens',
+  'prompt is too long',
+  'input is too long',
+  'requested too many tokens',
+  'is longer than the maximum',
+  'exceeds the context',
+  'decrease the number of tokens',
+  // Low-confidence local-server signatures — gate on statusCode < 500.
+  'kv cache',
+  'n_ctx',
+];
+
+/// Returns true when [scrubbedBody] looks like a provider rejecting the
+/// request because it exceeded the model's context window (a length-overflow
+/// 4xx), for which the right move is to trim the chat history and retry.
+/// Returns false for auth, rate-limit, quota, param-shape, and other 4xx that
+/// trimming can't fix. Case-insensitive. Empty body ⇒ false.
+bool isContextOverflowError(String scrubbedBody) {
+  if (scrubbedBody.isEmpty) return false;
+  final lower = scrubbedBody.toLowerCase();
+  for (final sig in _contextOverflowSignatures) {
+    if (lower.contains(sig)) return true;
+  }
+  return false;
+}
+
+/// The two token-count regexes tried, in order, for [contextLimitFromError]'s
+/// `maxTokens` field. Case-insensitive; first match wins.
+final List<RegExp> _maxTokenPatterns = [
+  RegExp(r'maximum context length is\s+(\d+)', caseSensitive: false),
+  RegExp(r'context length is\s+(\d+)', caseSensitive: false),
+  RegExp(r'maximum of\s+(\d+)\s+tokens', caseSensitive: false),
+  // Anthropic: "250000 tokens > 200000 maximum".
+  RegExp(r'>\s*(\d+)\s+maximum', caseSensitive: false),
+  RegExp(r'n_ctx\s*=?\s*(\d+)', caseSensitive: false),
+];
+
+/// The token-count regexes tried, in order, for [contextLimitFromError]'s
+/// `requestedTokens` field. Case-insensitive; first match wins.
+final List<RegExp> _requestedTokenPatterns = [
+  RegExp(r'however,?\s+your messages resulted in\s+(\d+)',
+      caseSensitive: false),
+  RegExp(r'however,?\s+you requested\s+(\d+)', caseSensitive: false),
+  RegExp(r'you requested\s+(\d+)', caseSensitive: false),
+  RegExp(r'requested\s+(\d+)\s+tokens', caseSensitive: false),
+  // Anthropic: "prompt is too long: 250000 tokens > 200000 maximum".
+  RegExp(r'prompt is too long:\s+(\d+)', caseSensitive: false),
+];
+
+/// Regex-pulls the real numbers out of a context-overflow error [body] when
+/// the provider printed them (the model's real max context and/or the
+/// requested/actual token count). Case-insensitive; the first matching
+/// pattern wins per field, tried independently (a body can supply one, both,
+/// or neither number). Returns `(null, null)` when nothing parses. Pure and
+/// total — never throws, never guesses a number that isn't in the text.
+({int? maxTokens, int? requestedTokens}) contextLimitFromError(String body) {
+  int? maxTokens;
+  for (final pattern in _maxTokenPatterns) {
+    final match = pattern.firstMatch(body);
+    if (match != null) {
+      maxTokens = int.tryParse(match.group(1)!);
+      if (maxTokens != null) break;
+    }
+  }
+
+  int? requestedTokens;
+  for (final pattern in _requestedTokenPatterns) {
+    final match = pattern.firstMatch(body);
+    if (match != null) {
+      requestedTokens = int.tryParse(match.group(1)!);
+      if (requestedTokens != null) break;
+    }
+  }
+
+  return (maxTokens: maxTokens, requestedTokens: requestedTokens);
+}
+
 /// LOW F9 — OpenRouter's newer streaming reasoning shape is
 /// `delta.reasoning_details: [...]` (an array of typed parts) instead of (or
 /// in addition to) the flat `delta.reasoning` string. Routes that emit ONLY
