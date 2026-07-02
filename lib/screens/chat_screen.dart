@@ -171,6 +171,7 @@ String buildFillInOpenerPrompt({
   required String filledScenario,
   required List<LoreEntry> loreHits,
   required String presetMainPrompt,
+  String? jointPartyBlock,
 }) {
   final sys = StringBuffer();
   // 1. Active preset main prompt first — it frames tone / register the rest of
@@ -181,7 +182,15 @@ String buildFillInOpenerPrompt({
     sys.writeln(presetMainPrompt.trim());
     sys.writeln();
   }
-  if (responder != null) {
+  // Party mode (2026-07, owner feedback: "a new greeting still opened as the
+  // primary character only"): when the chat is a party, the caller passes the
+  // SAME joint block every scene turn uses (buildJointPartyBlock — every
+  // member's card + the narrator scene instruction) and it REPLACES the
+  // single-responder canon below, so the generated opener sets up the whole
+  // party from the very first message.
+  if (jointPartyBlock != null && jointPartyBlock.trim().isNotEmpty) {
+    sys.writeln(jointPartyBlock.trim());
+  } else if (responder != null) {
     sys.writeln('You are ${responder.name}.');
     if (responder.description.isNotEmpty) {
       sys.writeln('\nDescription:\n${responder.description}');
@@ -3698,6 +3707,16 @@ class _ChatScreenState extends State<ChatScreen> {
                         filledScenario: filled,
                         loreHits: loreScan.hits,
                         presetMainPrompt: presetMain,
+                        // Party mode: the opener sets up the WHOLE party
+                        // (same joint block as every later scene turn).
+                        jointPartyBlock: (chat.partyMode &&
+                                chat.characterIds.length > 1)
+                            ? buildJointPartyBlock(
+                                chat: chat,
+                                persona: persona,
+                                lookupCharacter: store.characterById,
+                              )
+                            : null,
                       );
                       Navigator.pop(ctx);
                       _streamFillInVariant(
@@ -4625,20 +4644,6 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
-/// Party mode v1 (2026-07, OWNER DECISION): the party-scene bubble header —
-/// every member's name joined with " · ", abbreviated to the first 2 names
-/// + "+N" once the party is larger than 3 (so a big roster doesn't wrap the
-/// header into an unreadable wall of names). Empty list -> empty string
-/// (the header Padding above still renders, just blank; callers only reach
-/// this when `isPartySceneMessage` is true, which implies >1 member, so an
-/// empty list here only happens if every id failed to resolve).
-String _partyHeaderNames(List<Character> members) {
-  if (members.isEmpty) return '';
-  if (members.length <= 3) return members.map((c) => c.name).join(' · ');
-  final shown = members.take(2).map((c) => c.name).join(', ');
-  return '$shown +${members.length - 2}';
-}
-
 /// Party mode v1 (2026-07, OWNER DECISION): a stacked "messenger group"
 /// avatar cluster for a party-scene bubble — up to 3 overlapping mini
 /// portraits (the classic 2-3 circle stack), reusing [AvatarBubble] per
@@ -5295,12 +5300,14 @@ class _MessageBubbleState extends State<_MessageBubble> {
             Padding(
               padding: const EdgeInsets.only(left: 48, bottom: 4),
               child: Text(
-                // Party mode: no single speaker — the header names every
-                // member of the scene (joined/abbreviated) instead of one.
+                // Party mode (owner decision 2026-07, revised after live
+                // testing): no single speaker — the header reads "Narrator"
+                // (matches the prompt-side framing, where the preset's
+                // {{char}} resolves to Narrator and the joint instruction
+                // casts the model as the scene's narrator). WHO is in the
+                // party is already shown by the stacked avatar cluster.
                 widget.character?.name ??
-                    (widget.isPartySceneMessage
-                        ? _partyHeaderNames(widget.partyMembers)
-                        : ''),
+                    (widget.isPartySceneMessage ? 'Narrator' : ''),
                 key: const Key('speakerNameHeader'),
                 style: TextStyle(
                   color: EmberColors.primary,

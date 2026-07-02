@@ -3,9 +3,11 @@ library;
 
 // Pyre 1.2 — Party mode v1, Layer 4 (render).
 //
-// OWNER DECISION (2026-07): a party-scene message (a char message with
-// `characterId == null` in a party-mode group chat) renders with:
-//   1. A header naming EVERY member (joined with " · ", abbreviated past 3).
+// OWNER DECISION (2026-07, revised after live testing): a party-scene message
+// (a char message with `characterId == null` in a party-mode group chat)
+// renders with:
+//   1. A "Narrator" header (matches the prompt-side framing; who is in the
+//      party is conveyed by the avatar cluster, not the header).
 //   2. A stacked mini-avatar cluster (up to 3 circles) instead of one portrait.
 // A normal single-responder group message (characterId set) keeps rendering
 // exactly as before — one name, one avatar.
@@ -78,8 +80,8 @@ void main() {
   }
 
   testWidgets(
-      'party-scene message (characterId null, partyMode on) shows a joined '
-      'names header and a stacked avatar cluster', (tester) async {
+      'party-scene message (characterId null, partyMode on) shows a '
+      '"Narrator" header and a stacked avatar cluster', (tester) async {
     final sera = Character(id: 'a', name: 'Sera', createdAt: 0, updatedAt: 0);
     final talia =
         Character(id: 'b', name: 'Talia', createdAt: 0, updatedAt: 0);
@@ -104,12 +106,13 @@ void main() {
       ],
     );
 
-    // Header names every member (<=3 -> full joined names). Scoped to the
-    // speaker-name header widget (Key) to avoid colliding with the AppBar
-    // title / avatar fallback-letter text, which also render "Sera".
+    // Header reads "Narrator" (owner decision after live testing — matches
+    // the prompt-side framing; WHO is in the party is shown by the avatar
+    // cluster). Scoped to the speaker-name header widget (Key) to avoid
+    // colliding with the AppBar title / avatar fallback-letter text.
     final header = find.byKey(const Key('speakerNameHeader'));
     expect(header, findsOneWidget);
-    expect(tester.widget<Text>(header).data, 'Sera · Talia · Orin');
+    expect(tester.widget<Text>(header).data, 'Narrator');
 
     // Stacked cluster: 3 mini AvatarBubbles for the party message (one per
     // member), scoped to the message LIST (excludes the AppBar's own

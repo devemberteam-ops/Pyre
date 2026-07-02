@@ -258,6 +258,79 @@ List<ChatTurn> insertDepthTurns(
 /// `chat_screen._buildTurns` (Wave CY.18.210): same order, framing, token
 /// logic. Every `store.X` became an `inputs.X`. As each block is built it
 /// is also recorded as a [PromptSegment].
+/// Party mode (2026-07): every member's card, clearly delimited, followed by
+/// the OWNER-TUNABLE joint-scene instruction. Top-level + pure so it has ONE
+/// definition shared by all three consumers — `buildChatPrompt`'s two
+/// injection paths (`fill()`'s {{description}} substitution for flat presets
+/// AND `injectCardFallback` for marker-less ones) and the Fill-In opener
+/// builder in chat_screen.dart (a party-mode "new greeting" must carry the
+/// same joint framing as every later scene turn).
+String buildJointPartyBlock({
+  required Chat chat,
+  required Persona? persona,
+  required Character? Function(String id) lookupCharacter,
+}) {
+  final buf = StringBuffer();
+  // Per-member macro fill (owner decision 2026-07, ST "Join" parity):
+  // cards routinely use {{char}} SELF-referentially inside their own
+  // description/personality ("{{char}} is a shy elf..."). Inside the joint
+  // block each member's {{char}} must resolve to THAT member's own name —
+  // NOT to the chat's primary/responder (which is what the global
+  // name-fill pass would do to any leftovers). {{user}} resolves to the
+  // persona exactly like everywhere else.
+  final memberUserName = persona?.name ?? 'You';
+  String fillForMember(String s, String memberName) => s
+      .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false), memberName)
+      .replaceAll(
+          RegExp(r'\{\{user\}\}', caseSensitive: false), memberUserName);
+  for (final id in chat.characterIds) {
+    final member = chat.characterSnapshots[id] ?? lookupCharacter(id);
+    if (member == null) continue;
+    // NOTE (owner decision 2026-07): deliberately NO per-member
+    // "You are X." line — with several members it is contradictory (the
+    // model can't BE three people), and for a world/scenario card it is
+    // nonsense ("You are Eldoria."). The `--- Name ---` delimiter binds
+    // name↔card; the joint instruction below frames the model as the
+    // scene's NARRATOR instead.
+    buf.writeln('--- ${member.name} ---');
+    if (member.description.isNotEmpty) {
+      buf.writeln(
+          '\nDescription:\n${fillForMember(member.description, member.name)}');
+    }
+    if (member.personality.isNotEmpty) {
+      buf.writeln(
+          '\nPersonality:\n${fillForMember(member.personality, member.name)}');
+    }
+    if (member.scenario.isNotEmpty) {
+      buf.writeln(
+          '\nScenario:\n${fillForMember(member.scenario, member.name)}');
+    }
+    if (member.mesExample.isNotEmpty) {
+      buf.writeln(
+          '\nExample dialogue:\n${fillForMember(member.mesExample, member.name)}');
+    }
+    if (member.systemPrompt.isNotEmpty) {
+      buf.writeln('\n${fillForMember(member.systemPrompt, member.name)}');
+    }
+    buf.writeln();
+  }
+  // -----------------------------------------------------------------
+  // OWNER-TUNABLE: this is the joint-scene instruction told to the model
+  // after every member's card. First draft — tune freely; it is the ONLY
+  // place party mode's narration framing lives.
+  // -----------------------------------------------------------------
+  final userName = persona?.name ?? 'You';
+  buf.writeln(
+    'You are narrating a group scene featuring the characters described '
+    'above. Voice each character in their own distinct manner as the '
+    "moment calls for — they do NOT all have to speak or act every turn. "
+    'Write one cohesive, flowing scene. Prefix each character\'s '
+    "spoken/acted beat with their name so the reader can follow who is "
+    'who. Never speak, act, think, or decide for $userName.',
+  );
+  return buf.toString();
+}
+
 ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   final chat = inputs.chat;
   final character = inputs.character;
@@ -327,72 +400,16 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   final isPartyScene = inputs.partyMode && chat.characterIds.length > 1;
 
   // Party mode: every member's card, clearly delimited, followed by the
-  // OWNER-TUNABLE joint-scene instruction below. Built ONCE and reused by
-  // both injection paths (`fill()`'s {{description}} substitution for a flat
-  // preset that already has card markers, and `injectCardFallback` for a
-  // preset-less / modular-without-markers chat) so the two never drift.
-  String buildJointPartyBlock() {
-    final buf = StringBuffer();
-    // Per-member macro fill (owner decision 2026-07, ST "Join" parity):
-    // cards routinely use {{char}} SELF-referentially inside their own
-    // description/personality ("{{char}} is a shy elf..."). Inside the joint
-    // block each member's {{char}} must resolve to THAT member's own name —
-    // NOT to the chat's primary/responder (which is what the global
-    // name-fill pass would do to any leftovers). {{user}} resolves to the
-    // persona exactly like everywhere else.
-    final memberUserName = persona?.name ?? 'You';
-    String fillForMember(String s, String memberName) => s
-        .replaceAll(
-            RegExp(r'\{\{char\}\}', caseSensitive: false), memberName)
-        .replaceAll(
-            RegExp(r'\{\{user\}\}', caseSensitive: false), memberUserName);
-    for (final id in chat.characterIds) {
-      final member = chat.characterSnapshots[id] ?? inputs.lookupCharacter(id);
-      if (member == null) continue;
-      // NOTE (owner decision 2026-07): deliberately NO per-member
-      // "You are X." line — with several members it is contradictory (the
-      // model can't BE three people), and for a world/scenario card it is
-      // nonsense ("You are Eldoria."). The `--- Name ---` delimiter binds
-      // name↔card; the joint instruction below frames the model as the
-      // scene's NARRATOR instead.
-      buf.writeln('--- ${member.name} ---');
-      if (member.description.isNotEmpty) {
-        buf.writeln(
-            '\nDescription:\n${fillForMember(member.description, member.name)}');
-      }
-      if (member.personality.isNotEmpty) {
-        buf.writeln(
-            '\nPersonality:\n${fillForMember(member.personality, member.name)}');
-      }
-      if (member.scenario.isNotEmpty) {
-        buf.writeln(
-            '\nScenario:\n${fillForMember(member.scenario, member.name)}');
-      }
-      if (member.mesExample.isNotEmpty) {
-        buf.writeln(
-            '\nExample dialogue:\n${fillForMember(member.mesExample, member.name)}');
-      }
-      if (member.systemPrompt.isNotEmpty) {
-        buf.writeln('\n${fillForMember(member.systemPrompt, member.name)}');
-      }
-      buf.writeln();
-    }
-    // -----------------------------------------------------------------
-    // OWNER-TUNABLE: this is the joint-scene instruction told to the model
-    // after every member's card. First draft — tune freely; it is the ONLY
-    // place party mode's narration framing lives.
-    // -----------------------------------------------------------------
-    final userName = persona?.name ?? 'You';
-    buf.writeln(
-      'You are narrating a group scene featuring the characters described '
-      'above. Voice each character in their own distinct manner as the '
-      "moment calls for — they do NOT all have to speak or act every turn. "
-      'Write one cohesive, flowing scene. Prefix each character\'s '
-      "spoken/acted beat with their name so the reader can follow who is "
-      'who. Never speak, act, think, or decide for $userName.',
-    );
-    return buf.toString();
-  }
+  // OWNER-TUNABLE joint-scene instruction — see the top-level
+  // [buildJointPartyBlock], shared with the Fill-In opener path in
+  // chat_screen.dart so a party-mode "new greeting" carries the SAME joint
+  // framing as every later scene turn (no sibling copy to drift). This thin
+  // closure just binds this build's chat/persona/lookup.
+  String jointPartyBlock() => buildJointPartyBlock(
+        chat: chat,
+        persona: persona,
+        lookupCharacter: inputs.lookupCharacter,
+      );
 
   // Resolve template tokens used by preset prompts (SillyTavern's standard
   // markers map to these via our st_preset_import.dart).
@@ -438,7 +455,7 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
             .replaceAll(RegExp(r'\{\{user\}\}', caseSensitive: false),
                 persona?.name ?? 'You')
             .replaceAll(RegExp(r'\{\{description\}\}', caseSensitive: false),
-                buildJointPartyBlock().trim())
+                jointPartyBlock().trim())
             .replaceAll(
                 RegExp(r'\{\{personality\}\}', caseSensitive: false), '')
             .replaceAll(RegExp(r'\{\{scenario\}\}', caseSensitive: false), '')
@@ -535,7 +552,7 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
       // marker-based flat-preset path in `fill()` so the two never drift).
       // Replaces the single-responder card AND the thin "other characters"
       // roster (suppressed below).
-      charBuf.write(buildJointPartyBlock());
+      charBuf.write(jointPartyBlock());
     } else if (character != null) {
       charBuf.writeln("You are ${character.name}.");
       if (character.description.isNotEmpty) {

@@ -17,6 +17,7 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/models/models.dart';
+import 'package:pyre/screens/chat_screen.dart' show buildFillInOpenerPrompt;
 import 'package:pyre/services/chat_api.dart' show ChatTurn;
 import 'package:pyre/services/chat_prompt_builder.dart';
 import 'package:pyre/services/store_backend.dart';
@@ -374,6 +375,68 @@ void main() {
       // The world card still enters as delimited scene context.
       expect(text, contains('--- Eldoria ---'));
       expect(text, contains('A rain-soaked frontier town'));
+    });
+
+    test(
+        'Fill-In opener with a jointPartyBlock sets up the WHOLE party '
+        '(owner feedback: a party-mode "new greeting" opened as the primary '
+        'character only)', () {
+      final a = Character(
+        id: 'fi-char-a',
+        name: 'Sera',
+        description: 'A quiet blacksmith.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final b = Character(
+        id: 'fi-char-b',
+        name: 'Talia',
+        description: 'A sharp-tongued merchant.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final persona = Persona(
+        id: 'fi-persona',
+        name: 'Alex',
+        description: 'A curious traveler.',
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final chat = Chat(
+        id: 'fi-chat-1',
+        characterIds: [a.id, b.id],
+        characterSnapshots: {a.id: a, b.id: b},
+        messages: const [],
+        partyMode: true,
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final joint = buildJointPartyBlock(
+        chat: chat,
+        persona: persona,
+        lookupCharacter: (_) => null,
+      );
+
+      final sys = buildFillInOpenerPrompt(
+        responder: a,
+        persona: persona,
+        filledScenario: 'The party gathers at the forge.',
+        loreHits: const [],
+        presetMainPrompt: '',
+        jointPartyBlock: joint,
+      );
+
+      // Every member's card is in the opener prompt, via the SAME joint
+      // block the ongoing scene turns use.
+      expect(sys, contains('--- Sera ---'));
+      expect(sys, contains('--- Talia ---'));
+      expect(sys, contains(b.description));
+      expect(sys, contains('narrating a group scene'));
+      // The single-responder canon section is REPLACED, not doubled.
+      expect(sys, isNot(contains('You are Sera.')));
+      // The opener's own scenario + output instruction still close it out.
+      expect(sys, contains('The party gathers at the forge.'));
+      expect(sys, contains('Output ONLY the opening message'));
     });
   });
 }
