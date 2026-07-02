@@ -186,33 +186,35 @@ List<Widget> _buildLorebookSections(
 
   final widgets = <Widget>[];
 
-  // Section 1 — per character.
-  if (perCharacterBooks.isNotEmpty) {
-    for (final entry in perCharacterBooks.entries) {
-      final cid = entry.key;
-      final books = entry.value;
-      final char = chat.characterSnapshots[cid] ?? store.characterById(cid);
-      final charName = char?.name ?? '(unknown character)';
-      widgets.add(_subgroupLabel('From character · $charName'));
-      for (final b in books) {
-        final disabled = chat.disabledInheritedLorebookIds.contains(b.id);
-        widgets.add(_inheritedTile(
-          context: context,
-          store: store,
-          chat: chat,
-          book: b,
-          enabled: !disabled,
-          originLabel: charName,
-        ));
-      }
+  // Sections 1+2 — inherited books, grouped by BOOK (2026-07, owner
+  // feedback): in a group chat several members often carry the SAME world
+  // lorebook, and the old per-source sections listed it once per member —
+  // N rows for what is ONE underlying switch (the enable/disable state is
+  // keyed on the book id alone, so those rows always flipped together).
+  // Now each unique book renders ONCE, with every origin (members and/or
+  // persona) joined in the subtitle. The engine already dedupes injection
+  // by book id (collectBoundLorebooks), so this is purely presentational.
+  final inheritedBooks = <String, Lorebook>{}; // book id -> book
+  final inheritedSources = <String, List<String>>{}; // book id -> origins
+  for (final entry in perCharacterBooks.entries) {
+    final char =
+        chat.characterSnapshots[entry.key] ?? store.characterById(entry.key);
+    final charName = char?.name ?? '(unknown character)';
+    for (final b in entry.value) {
+      inheritedBooks[b.id] = b;
+      (inheritedSources[b.id] ??= []).add(charName);
     }
   }
-
-  // Section 2 — persona.
   if (personaBooks.isNotEmpty) {
-    final pname = activePersona!.name;
-    widgets.add(_subgroupLabel('From persona · $pname'));
+    final pname = '${activePersona!.name} (persona)';
     for (final b in personaBooks) {
+      inheritedBooks[b.id] = b;
+      (inheritedSources[b.id] ??= []).add(pname);
+    }
+  }
+  if (inheritedBooks.isNotEmpty) {
+    widgets.add(_subgroupLabel('Inherited'));
+    for (final b in inheritedBooks.values) {
       final disabled = chat.disabledInheritedLorebookIds.contains(b.id);
       widgets.add(_inheritedTile(
         context: context,
@@ -220,7 +222,7 @@ List<Widget> _buildLorebookSections(
         chat: chat,
         book: b,
         enabled: !disabled,
-        originLabel: pname,
+        originLabel: inheritedSources[b.id]!.join(' · '),
       ));
     }
   }
