@@ -111,6 +111,29 @@ class GalleryStrip extends StatelessWidget {
   }
 }
 
+/// Open the fullscreen swipeable image viewer over an arbitrary list of image
+/// [refs] (avatar / gallery / `pyre://` / `data:` / http / base64 — resolved
+/// by [Lightbox.resolveImage], the shared decoder). Starts on [initialIndex]
+/// and lets the user swipe through the rest — used by the party-message avatar
+/// cluster so tapping a member's photo opens it and cycles through the party.
+/// [ownerName] names a saved image. Empty [refs] is a no-op.
+void showImageSwipeViewer(
+  BuildContext context, {
+  required List<String> refs,
+  int initialIndex = 0,
+  String ownerName = '',
+}) {
+  if (refs.isEmpty) return;
+  Navigator.of(context).push(MaterialPageRoute(
+    fullscreenDialog: true,
+    builder: (_) => _GallerySwipeViewer(
+      refs: refs,
+      initialIndex: initialIndex.clamp(0, refs.length - 1),
+      ownerName: ownerName,
+    ),
+  ));
+}
+
 /// A single read-only gallery thumbnail. Resolves the `pyre://` ref via the
 /// same path the avatar uses: a local file on native, or (on web) the paired
 /// server's `GET /attachments/<hash>` via `AttachmentStore.webAttachmentRequest`.

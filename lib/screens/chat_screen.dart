@@ -32,6 +32,7 @@ import '../services/token_estimate.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
+import '../widgets/gallery_strip.dart' show showImageSwipeViewer;
 import '../widgets/lightbox.dart';
 import '../widgets/chat_text.dart';
 import '../widgets/confirm_dialog.dart';
@@ -4928,30 +4929,53 @@ class _PartyAvatarCluster extends StatelessWidget {
           child: child,
         );
 
+    // Tapping any member's photo opens the fullscreen viewer and lets the
+    // user swipe through the WHOLE party's photos (owner ask: "abrir a imagem
+    // e rodar as fotos"). Full-res `avatarOriginal` (falling back to the
+    // thumbnail) so the lightbox shows the uncropped picture, mirroring the
+    // single-avatar tap. Members with no image become a broken-image page
+    // rather than shifting the swipe indices out of sync with the cluster.
+    final memberRefs = [
+      for (final m in members) (m.avatarOriginal ?? m.avatar ?? ''),
+    ];
+    void openAt(BuildContext context, int index) => showImageSwipeViewer(
+          context,
+          refs: memberRefs,
+          initialIndex: index,
+          ownerName: (index >= 0 && index < members.length)
+              ? members[index].name
+              : '',
+        );
+
     final circles = <Widget>[];
     for (var i = 0; i < visibleCount; i++) {
       final isLastSlot = i == maxVisible - 1;
       final showOverflowDisc = isLastSlot && overflow > 0;
       circles.add(Positioned(
         left: step * i,
-        child: ring(showOverflowDisc
-            ? CircleAvatar(
-                radius: miniRadius,
-                backgroundColor: EmberColors.bgElevated,
-                child: Text(
-                  '+$overflow',
-                  style: TextStyle(
-                    color: EmberColors.textHigh,
-                    fontWeight: FontWeight.w600,
-                    fontSize: miniRadius * 0.62,
+        child: GestureDetector(
+          // The overflow disc opens at slot i too — that index is the FIRST
+          // hidden member, so a swipe-right reveals the rest of the party.
+          onTap: () => openAt(context, i),
+          child: ring(showOverflowDisc
+              ? CircleAvatar(
+                  radius: miniRadius,
+                  backgroundColor: EmberColors.bgElevated,
+                  child: Text(
+                    '+$overflow',
+                    style: TextStyle(
+                      color: EmberColors.textHigh,
+                      fontWeight: FontWeight.w600,
+                      fontSize: miniRadius * 0.62,
+                    ),
                   ),
-                ),
-              )
-            : AvatarBubble(
-                dataUrl: members[i].avatar,
-                fallback: members[i].name,
-                radius: miniRadius,
-              )),
+                )
+              : AvatarBubble(
+                  dataUrl: members[i].avatar,
+                  fallback: members[i].name,
+                  radius: miniRadius,
+                )),
+        ),
       ));
     }
 
