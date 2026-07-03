@@ -166,6 +166,26 @@ void main() {
       expect(chat.personaId, kExplicitNoPersonaId);
       await store.flushPersist();
     });
+
+    // I-9: the legacy single-persona setter must dissolve a party roster —
+    // effectivePersonaIds prefers a non-empty roster, so leaving it in
+    // place would silently IGNORE the user's single-persona choice.
+    test('setChatPersona on a party chat clears the roster', () async {
+      final store = storeWithPersonas(['a', 'b']);
+      final chat = Chat(
+          id: 'c1',
+          characterIds: const ['ch'],
+          personaId: 'a',
+          personaIds: ['a', 'b']);
+      store.chats.add(chat);
+      store.setChatPersona('c1', 'b');
+      expect(chat.personaId, 'b');
+      expect(chat.personaIds, isEmpty,
+          reason: 'a lingering roster would keep the party active and '
+              'override the explicit single-persona pick');
+      expect(chat.effectivePersonaIds, ['b']);
+      await store.flushPersist();
+    });
   });
 
   group('buildChatPrompt — party mode joint scene', () {

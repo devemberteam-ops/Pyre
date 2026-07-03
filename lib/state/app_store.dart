@@ -3059,6 +3059,10 @@ class AppStore extends ChangeNotifier {
       if (!isLive) personaId = kExplicitNoPersonaId;
     }
     chat.personaId = personaId;
+    // I-9 (2026-07-03): picking a SINGLE persona dissolves any party roster.
+    // effectivePersonaIds prefers a non-empty roster, so leaving it in place
+    // would silently ignore this choice and keep the party active.
+    chat.personaIds = [];
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
     chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
     _bump();
