@@ -3459,6 +3459,15 @@ class _ChatScreenState extends State<ChatScreen> {
     // Wave CX: honour chat.personaId (not the global default).
     final persona = _chatPersona(store, chat);
     final personaName = persona?.name ?? 'the user';
+    // Persona party: the message represents the WHOLE group, so Impersonate
+    // writes for all of them (matches the collective instruction the system
+    // context already carries via _buildTurns). Empty off-party.
+    final personaPartyNames = chat.isPersonaParty
+        ? [
+            for (final id in chat.effectivePersonaIds)
+              store.personaById(id)?.name ?? '',
+          ]
+        : const <String>[];
     final preset = store.activePreset;
     // Impersonate/Guide fix: drop the preset's post-history (char-voice
     // "stay in character") instructions — they contradict the OOC "write as
@@ -3493,6 +3502,7 @@ class _ChatScreenState extends State<ChatScreen> {
         for (final id in chat.characterIds)
           (chat.characterSnapshots[id] ?? store.characterById(id))?.name ?? '',
       ],
+      personaNames: personaPartyNames,
       presetImpersonationPrompt: preset?.impersonationPrompt,
       examplesNudge: examplesNudge,
       outline: outline,

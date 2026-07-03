@@ -207,6 +207,51 @@ void main() {
     });
   });
 
+  // ── Persona party (owner 2026-07: Impersonate "só funciona para ele") —
+  // in a persona PARTY the message represents the whole group, so the OOC
+  // turn must allow every persona to act, not lock to the primary (which
+  // contradicted the collective instruction already in the system context).
+  group('buildImpersonationPrompt — persona party', () {
+    test('>1 persona: writes for the group, any member may act', () {
+      final p = buildImpersonationPrompt(
+        personaName: 'Orion',
+        speakerName: 'Vesna',
+        personaNames: ['Orion', 'Anastasia'],
+      );
+      // The joined label drives the perspective + allowed lines.
+      expect(p, contains("Orion and Anastasia's perspective"));
+      expect(p, contains("Orion and Anastasia's dialogue"));
+      // Explicit group line: one message, either or all of them may act.
+      expect(p, contains('either or all of them'));
+      // The primary-only framing is gone.
+      expect(p, isNot(contains("from Orion's perspective")));
+    });
+
+    test('single persona (or none passed) is byte-identical to before', () {
+      final classic = buildImpersonationPrompt(
+        personaName: 'Ren',
+        speakerName: 'Vesna',
+      );
+      final single = buildImpersonationPrompt(
+        personaName: 'Ren',
+        speakerName: 'Vesna',
+        personaNames: ['Ren'],
+      );
+      expect(single, classic);
+      expect(classic, contains("from Ren's perspective"));
+    });
+
+    test('preset override: {{user}} becomes the joined persona names', () {
+      final p = buildImpersonationPrompt(
+        personaName: 'Orion',
+        speakerName: 'Vesna',
+        personaNames: ['Orion', 'Anastasia'],
+        presetImpersonationPrompt: 'Write as {{user}} replying to {{char}}.',
+      );
+      expect(p, contains('Write as Orion and Anastasia replying to Vesna.'));
+    });
+  });
+
   // ── Guided impersonation prompt assembly (Action 3 "Guide my message") ──
   group('buildImpersonationPrompt', () {
     test('no outline + no perspective = classic Impersonate Me (unchanged)',

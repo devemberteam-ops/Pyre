@@ -1160,6 +1160,7 @@ String buildImpersonationPrompt({
   required String personaName,
   required String speakerName,
   List<String> memberNames = const [],
+  List<String> personaNames = const [],
   String? presetImpersonationPrompt,
   String? outline,
   String examplesNudge = '',
@@ -1174,20 +1175,30 @@ String buildImpersonationPrompt({
   final roster =
       memberNames.map((n) => n.trim()).where((n) => n.isNotEmpty).toList();
   final isGroup = roster.length > 1;
-  String joinWith(String conj) => roster.length == 2
-      ? '${roster[0]} $conj ${roster[1]}'
-      : '${roster.sublist(0, roster.length - 1).join(', ')}, $conj ${roster.last}';
+  String joinNames(List<String> xs, String conj) => xs.length == 2
+      ? '${xs[0]} $conj ${xs[1]}'
+      : '${xs.sublist(0, xs.length - 1).join(', ')}, $conj ${xs.last}';
+  String joinWith(String conj) => joinNames(roster, conj);
+  // Persona party (owner 2026-07: Impersonate "só funciona para ele"): the
+  // user's message represents the WHOLE group, so with >1 persona the OOC
+  // turn writes for all of them — the primary-only framing contradicted the
+  // collective instruction already in the system context (and explicitly
+  // FORBADE the user's own other personas). Single/empty → byte-identical.
+  final personaRoster =
+      personaNames.map((n) => n.trim()).where((n) => n.isNotEmpty).toList();
+  final isPersonaGroup = personaRoster.length > 1;
+  final who = isPersonaGroup ? joinNames(personaRoster, 'and') : personaName;
   // The perspective directive (omitted entirely when no perspective given, so
   // the classic path is unchanged).
   final perspectiveLine = perspective == null
       ? ''
-      : '\n\nWrite it in ${guidePerspectivePhrase(perspective, personaName)}.';
+      : '\n\nWrite it in ${guidePerspectivePhrase(perspective, who)}.';
   // The outline rider (only when the user supplied a draft to expand).
   final outlineRider = hasOutline
-      ? '\n\nEXPAND this rough outline from $personaName into a full, '
-          'in-character message — keep $personaName\'s intent and the beats '
+      ? '\n\nEXPAND this rough outline from $who into a full, '
+          'in-character message — keep $who\'s intent and the beats '
           'below, flesh them out with voice, action, and sensation, but do '
-          'NOT add events $personaName didn\'t intend and do NOT speak or act '
+          'NOT add events $who didn\'t intend and do NOT speak or act '
           'for anyone else:\n"""\n$outlineTrimmed\n"""'
       : '';
 
@@ -1197,7 +1208,7 @@ String buildImpersonationPrompt({
   if (presetImpersonationPrompt != null &&
       presetImpersonationPrompt.trim().isNotEmpty) {
     final base = presetImpersonationPrompt
-        .replaceAll(RegExp(r'\{\{user\}\}', caseSensitive: false), personaName)
+        .replaceAll(RegExp(r'\{\{user\}\}', caseSensitive: false), who)
         .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false),
             isGroup ? roster.join(', ') : speakerName);
     return '$base$outlineRider$perspectiveLine';
@@ -1210,23 +1221,31 @@ String buildImpersonationPrompt({
       ? '${joinWith('or')},'
       : (speakerName.isNotEmpty ? speakerName : 'the narrator');
   final sceneRoster = isGroup
-      ? '\n\nThe scene includes ${joinWith('and')} — $personaName can '
+      ? '\n\nThe scene includes ${joinWith('and')} — $who can '
           'address, react to, or ignore ANY of them, not just one.'
       : '';
+  // Persona party: spell out that this ONE message may carry the whole
+  // group — otherwise the persona-only rules below read as primary-only.
+  final personaGroupLine = isPersonaGroup
+      ? '\n\nThe user plays ALL of these as their own group: $who. This one '
+          'message may include actions, thoughts, and dialogue from either '
+          'or all of them, interacting with each other and the scene.'
+      : '';
   return '[OOC: Drop out of narrator/character voice for ONE reply. '
-      'Write the next message from $personaName\'s perspective '
-      'only — what $personaName would type as their own '
-      'character in this scene.$sceneRoster$outlineRider$perspectiveLine\n\n'
+      'Write the next message from $who\'s perspective '
+      'only — what $who would type as their own '
+      'character${isPersonaGroup ? 's' : ''} in this scene.'
+      '$personaGroupLine$sceneRoster$outlineRider$perspectiveLine\n\n'
       'ALLOWED in this reply:\n'
-      '- $personaName\'s actions, gestures, body language\n'
-      '- $personaName\'s thoughts and sensations\n'
-      '- $personaName\'s dialogue\n\n'
+      '- $who\'s actions, gestures, body language\n'
+      '- $who\'s thoughts and sensations\n'
+      '- $who\'s dialogue\n\n'
       'FORBIDDEN in this reply:\n'
       '- ANY dialogue or action from $narratorLabel or any NPC\n'
       '- World/scene narration of what other people do or '
       'how the environment reacts\n'
-      '- Advancing the scene from anyone except $personaName\n'
-      '- Prefixes like "$personaName:", "(impersonating)", or '
+      '- Advancing the scene from anyone except $who\n'
+      '- Prefixes like "$who:", "(impersonating)", or '
       'meta-commentary\n\n'
       'FORMATTING — match the chat\'s established pattern EXACTLY:\n\n'
       'GOOD example (this is the ONLY shape you produce):\n'
@@ -1243,11 +1262,11 @@ String buildImpersonationPrompt({
       '- Blank line between every action paragraph and every dialogue paragraph. Alternating beats.\n'
       '- Keep it short — one to three of these blocks total.\n'
       '- Reply with the message body only, no preamble, no "[OOC: " framing.\n\n'
-      'CRITICAL — no thinking out loud: output ONLY $personaName\'s '
+      'CRITICAL — no thinking out loud: output ONLY $who\'s '
       'in-character message. Do NOT write any analysis, planning, a '
       '"thinking process", numbered steps, or notes about these '
       'instructions — none of that may ever appear in your reply. '
-      'Begin immediately with $personaName\'s first action or spoken '
+      'Begin immediately with $who\'s first action or spoken '
       'line.$examplesNudge]';
 }
 
