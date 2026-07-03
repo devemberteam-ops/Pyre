@@ -774,4 +774,58 @@ void main() {
       expect(nudge, isNot(contains('voicing  ')));
     });
   });
+
+  // Audit I-1 (2026-07-03): the Fill-In opener is party-of-persona aware —
+  // the persona-side mirror of the char-party opener fix ("a new greeting
+  // still opened as the primary character only").
+  group('buildFillInOpenerPrompt — persona party', () {
+    test('roster replaces the single "User persona" block + joint '
+        'instruction present', () {
+      final orion = Persona(
+          id: 'p1',
+          name: 'Orion',
+          description: 'A curious alien.',
+          createdAt: 0,
+          updatedAt: 0);
+      final ana = Persona(
+          id: 'p2',
+          name: 'Anastasia',
+          description: 'A theatrical vampire queen.',
+          createdAt: 0,
+          updatedAt: 0);
+      final sys = buildFillInOpenerPrompt(
+        responder: Character(
+            id: 'c1', name: 'Sera', description: 'x', createdAt: 0, updatedAt: 0),
+        persona: orion,
+        personaParty: [orion, ana],
+        filledScenario: 'The gates open.',
+        loreHits: const [],
+        presetMainPrompt: '',
+      );
+      expect(sys, contains('--- Orion ---'));
+      expect(sys, contains('--- Anastasia ---'));
+      expect(sys, contains('A theatrical vampire queen.'));
+      expect(sys.toLowerCase(), contains('collective'));
+      // The single-persona block is REPLACED, not doubled.
+      expect(sys, isNot(contains('User persona — Orion')));
+    });
+
+    test('single persona keeps the classic block (byte-identical path)', () {
+      final orion = Persona(
+          id: 'p1',
+          name: 'Orion',
+          description: 'A curious alien.',
+          createdAt: 0,
+          updatedAt: 0);
+      final sys = buildFillInOpenerPrompt(
+        responder: null,
+        persona: orion,
+        filledScenario: 'x',
+        loreHits: const [],
+        presetMainPrompt: '',
+      );
+      expect(sys, contains('User persona — Orion: A curious alien.'));
+      expect(sys.toLowerCase(), isNot(contains('collective')));
+    });
+  });
 }

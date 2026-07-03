@@ -191,7 +191,14 @@ String buildFillInOpenerPrompt({
   required List<LoreEntry> loreHits,
   required String presetMainPrompt,
   String? jointPartyBlock,
+  // Persona party (2026-07-03, audit I-1 — the persona-side mirror of the
+  // char-party opener fix above): with >1 persona the single "User persona"
+  // block is replaced by the SAME joint persona block every ongoing turn
+  // uses, and {{user}} fills with the joined names. Empty = single persona,
+  // byte-identical.
+  List<Persona> personaParty = const [],
 }) {
+  final partyUserName = personaPartyFillName(personaParty);
   final sys = StringBuffer();
   // 1. Active preset main prompt first — it frames tone / register the rest of
   // the chat uses. (datamodel-...-02: {{wiAfter}} no longer advertised, but a
@@ -226,7 +233,12 @@ String buildFillInOpenerPrompt({
       sys.writeln('\nExample dialogue:\n${responder.mesExample.trim()}');
     }
   }
-  if (persona != null) {
+  if (partyUserName != null) {
+    // Persona party: the SAME joint block (every persona's card + the
+    // collective instruction) every ongoing turn uses, so the generated
+    // opener addresses the whole group from the very first message.
+    sys.writeln('\n${buildJointPersonaBlock(personaParty).trim()}');
+  } else if (persona != null) {
     sys.writeln('\nUser persona — ${persona.name}: ${persona.description}');
     if (persona.dialogueExamples.trim().isNotEmpty) {
       sys.writeln(
@@ -262,7 +274,8 @@ String buildFillInOpenerPrompt({
   return fillNamePlaceholders(
     sys.toString().trim(),
     charName: responder?.name,
-    personaName: persona?.name,
+    // Persona party: {{user}} = the joined roster, matching the main path.
+    personaName: partyUserName ?? persona?.name,
   );
 }
 
@@ -4021,7 +4034,19 @@ class _ChatScreenState extends State<ChatScreen> {
                       // happens up here (still synchronously) so the
                       // closing pop has everything it needs.
                       final persona = _chatPersona(store, chat);
-                      final userName = persona?.name ?? 'You';
+                      // Persona party (audit I-1): resolve the roster so the
+                      // opener carries the WHOLE group — scenario {{user}},
+                      // the persona block, and lorebooks all party-aware.
+                      final fillPersonaParty = chat.isPersonaParty
+                          ? [
+                              for (final id in chat.effectivePersonaIds)
+                                store.personaById(id)
+                            ].whereType<Persona>().toList()
+                          : const <Persona>[];
+                      final userName =
+                          personaPartyFillName(fillPersonaParty) ??
+                              persona?.name ??
+                              'You';
                       final filled = scenario
                           .replaceAll('{{char}}',
                               responder?.name ?? 'the character')
@@ -4035,6 +4060,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       final attached = collectBoundLorebooks(
                         chat: chat,
                         persona: persona,
+                        personaParty: fillPersonaParty,
                         lookupBook: store.lorebookById,
                         lookupCharacter: store.characterById,
                         responderId: responderId,
@@ -4048,6 +4074,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       final sys = buildFillInOpenerPrompt(
                         responder: responder,
                         persona: persona,
+                        personaParty: fillPersonaParty,
                         filledScenario: filled,
                         loreHits: loreScan.hits,
                         presetMainPrompt: presetMain,
@@ -4058,6 +4085,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             ? buildJointPartyBlock(
                                 chat: chat,
                                 persona: persona,
+                                personaParty: fillPersonaParty,
                                 lookupCharacter: store.characterById,
                               )
                             : null,
