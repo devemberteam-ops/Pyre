@@ -4642,7 +4642,16 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             const SizedBox(width: 10),
             Expanded(
-              child: Column(
+              // Facilidade (owner 2026-07): tapping the TITLE opens the
+              // Group chat & Lorebooks sheet directly — members + party mode
+              // in one tap instead of kebab → More options → Group chat.
+              // Works for 1:1 chats too (that sheet is where you ADD the
+              // second character, i.e. the gateway to forming a group). The
+              // avatar/cluster keeps its own tap (full image / party photos).
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => showGroupAndLorebooksSheet(context, chat.id),
+                child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -4686,6 +4695,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     ),
                 ],
+                ),
               ),
             ),
           ],

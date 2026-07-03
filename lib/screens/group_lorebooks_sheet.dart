@@ -419,7 +419,27 @@ Future<void> _showAddMember(BuildContext context, String chatId) async {
   );
   if (picked == null) return;
   final c = store.characterById(picked);
-  if (c != null) store.addCharacterToChat(chatId, c);
+  if (c == null) return;
+  final wasSolo = chat.characterIds.length == 1;
+  store.addCharacterToChat(chatId, c);
+  // Facilidade (owner 2026-07): the moment a chat BECOMES a group, offer
+  // Party mode right here — one tap on the snackbar action instead of the
+  // user having to discover the toggle further down this sheet. Only on the
+  // solo→group transition (adding a 3rd+ member re-suggests nothing), and
+  // only when it isn't already on.
+  if (wasSolo && !chat.partyMode && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text(
+            'Group formed! Party mode makes everyone reply in one scene.'),
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(
+          label: 'Enable',
+          onPressed: () => store.setChatPartyMode(chatId, true),
+        ),
+      ),
+    );
+  }
 }
 
 /// Wave CY.18.195: opens the Group chat & Lorebooks sheet. Mirrors

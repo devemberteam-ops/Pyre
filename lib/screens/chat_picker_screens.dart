@@ -95,6 +95,230 @@ Future<void> startNewChatWithPersonaPrompt(
   }
 }
 
+/// Facilidade (owner 2026-07): start a NEW GROUP chat in one flow — pick the
+/// members up front (multi-select, [primary] pre-selected) instead of forming
+/// the group member-by-member after creation. Honours the same
+/// `askPersonaOnNewChat` prompt as [startNewChatWithPersonaPrompt], creates
+/// the chat with EVERY picked member, opens it, and suggests Party mode via
+/// the same snackbar the add-member flow uses.
+Future<void> startNewGroupChat(
+  BuildContext context,
+  Character primary,
+) async {
+  final store = context.read<AppStore>();
+  final memberIds = await Navigator.of(context).push<List<String>>(
+    MaterialPageRoute(
+      builder: (_) => GroupCharacterPickerScreen(primary: primary),
+    ),
+  );
+  if (memberIds == null || memberIds.isEmpty || !context.mounted) return;
+
+  String? personaPick;
+  if (store.chatSettings.askPersonaOnNewChat) {
+    personaPick = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => PersonaPickerScreen(
+          title: 'Persona for the new group chat',
+          subtitle:
+              'Pick the persona to play as. "No persona" means no {{user}} identity for this chat.',
+          showCurrentSelection: false,
+        ),
+      ),
+    );
+    if (personaPick == null || !context.mounted) return; // dismissed
+  }
+
+  final members = [
+    for (final id in memberIds) store.characterById(id),
+  ].whereType<Character>().toList();
+  if (members.isEmpty) return;
+  final fresh = store.startChatWith(members.first);
+  for (final m in members.skip(1)) {
+    store.addCharacterToChat(fresh.id, m);
+  }
+  if (personaPick != null) {
+    store.setChatPersona(
+        fresh.id,
+        personaPick == pickerNoPersonaSentinel
+            ? kExplicitNoPersonaId
+            : personaPick);
+  }
+  if (!context.mounted) return;
+  Navigator.of(context).push(
+    MaterialPageRoute(builder: (_) => ChatScreen(chatId: fresh.id)),
+  );
+  // Party suggestion — same affordance as forming a group via "Add
+  // character to chat". Root-level ScaffoldMessenger, so it shows on top of
+  // the freshly pushed chat.
+  if (members.length > 1) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text(
+            'Group created! Party mode makes everyone reply in one scene.'),
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(
+          label: 'Enable',
+          onPressed: () => store.setChatPartyMode(fresh.id, true),
+        ),
+      ),
+    );
+  }
+}
+
+/// Multi-select character picker for [startNewGroupChat]. Pops with the
+/// ordered member id list ([primary] first, locked), or null if dismissed.
+class GroupCharacterPickerScreen extends StatefulWidget {
+  final Character primary;
+  const GroupCharacterPickerScreen({super.key, required this.primary});
+
+  @override
+  State<GroupCharacterPickerScreen> createState() =>
+      _GroupCharacterPickerScreenState();
+}
+
+class _GroupCharacterPickerScreenState
+    extends State<GroupCharacterPickerScreen> {
+  String _query = '';
+  // Selection order is preserved → it becomes the member order (primary
+  // first; primary is locked on).
+  late final List<String> _selected = [widget.primary.id];
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    final q = _query.trim().toLowerCase();
+    final candidates = store.characters.where((c) {
+      if (q.isEmpty) return true;
+      final hay =
+          '${c.name} ${c.tagline ?? ''} ${c.description}'.toLowerCase();
+      return hay.contains(q);
+    }).toList();
+    final n = _selected.length;
+    return Scaffold(
+      appBar: AppBar(title: const Text('New group chat')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text(
+              'Pick the members. ${widget.primary.name} opens the chat '
+              '(their greeting starts it); everyone joins the scene.',
+              style: TextStyle(
+                color: EmberColors.textMid,
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: TextField(
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search, size: 18),
+                hintText: 'Search characters…',
+                isDense: true,
+              ),
+              onChanged: (v) => setState(() => _query = v),
+            ),
+          ),
+          Expanded(
+            child: candidates.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(32),
+                    child: EmptyState(
+                      icon: Icons.search_off,
+                      title: 'No matches',
+                      subtitle: 'Try a different search term.',
+                    ),
+                  )
+                : ListView.separated(
+                    itemCount: candidates.length,
+                    separatorBuilder: (_, _) =>
+                        Divider(color: EmberColors.stroke, height: 1),
+                    itemBuilder: (_, i) {
+                      final c = candidates[i];
+                      final isPrimary = c.id == widget.primary.id;
+                      return CheckboxListTile(
+                        activeColor: EmberColors.primary,
+                        controlAffinity: ListTileControlAffinity.trailing,
+                        secondary: AvatarBubble(
+                          dataUrl: c.avatar,
+                          fallback: c.name,
+                          radius: 18,
+                        ),
+                        title: Text(c.name),
+                        subtitle: isPrimary
+                            ? Text('Opens the chat',
+                                style: TextStyle(
+                                    color: EmberColors.primary,
+                                    fontSize: 12))
+                            : (c.tagline != null && c.tagline!.isNotEmpty
+                                ? Text(
+                                    c.tagline!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        color: EmberColors.textMid,
+                                        fontSize: 12),
+                                  )
+                                : null),
+                        value: _selected.contains(c.id),
+                        // The primary is locked on — unchecking it would
+                        // orphan the greeting that opens the chat.
+                        onChanged: isPrimary
+                            ? null
+                            : (v) => setState(() {
+                                  if (v == true) {
+                                    _selected.add(c.id);
+                                  } else {
+                                    _selected.remove(c.id);
+                                  }
+                                }),
+                      );
+                    },
+                  ),
+          ),
+          const Divider(height: 1),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      n <= 1
+                          ? 'Just ${widget.primary.name} — a regular 1:1 chat'
+                          : '$n members',
+                      style: TextStyle(
+                        color: n > 1
+                            ? EmberColors.primary
+                            : EmberColors.textMid,
+                        fontSize: 12,
+                        fontWeight:
+                            n > 1 ? FontWeight.w600 : FontWeight.w400,
+                      ),
+                    ),
+                  ),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: EmberColors.primary,
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: () =>
+                        Navigator.pop(context, List<String>.from(_selected)),
+                    child: const Text('Create chat'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Full-screen persona picker. Returns:
 ///   - persona.id  → user picked that persona
 ///   - [pickerNoPersonaSentinel] → user picked "No persona"

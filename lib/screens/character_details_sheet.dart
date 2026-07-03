@@ -46,6 +46,10 @@ class _DetailsSheetBody extends StatelessWidget {
   /// Primary button. Character: "Start chat". Persona: hidden.
   final bool showStartChat;
   final VoidCallback? onStartChat;
+  /// Facilidade (owner 2026-07): optional "start a group chat" action —
+  /// non-null only on the library (not-in-chat) character variant when the
+  /// library has other characters to group with.
+  final VoidCallback? onStartGroupChat;
   final String startChatLabel;
 
   final String editLabel;
@@ -65,6 +69,7 @@ class _DetailsSheetBody extends StatelessWidget {
     required this.lorebookIds,
     required this.showStartChat,
     required this.onStartChat,
+    this.onStartGroupChat,
     required this.startChatLabel,
     required this.editLabel,
     required this.onEdit,
@@ -138,6 +143,19 @@ class _DetailsSheetBody extends StatelessWidget {
                       onPressed: onStartChat,
                     ),
                   ),
+                  // Facilidade (owner 2026-07): start a GROUP chat with this
+                  // character as the opener — multi-select members up front
+                  // instead of adding them one by one after creation. Hidden
+                  // when the caller doesn't offer it (in-chat sheet / persona
+                  // variant / single-character library).
+                  if (onStartGroupChat != null) ...[
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.group_add_outlined, size: 16),
+                      label: const Text('Group'),
+                      onPressed: onStartGroupChat,
+                    ),
+                  ],
                   const SizedBox(width: 8),
                   OutlinedButton.icon(
                     icon: const Icon(Icons.edit_outlined, size: 16),
@@ -269,6 +287,15 @@ class CharacterDetailsSheet extends StatelessWidget {
           startNewChatWithPersonaPrompt(context, c);
         }
       },
+      // Facilidade (owner 2026-07): group chat in one flow. Library variant
+      // only (in-chat the sheet is a snapshot viewer), and only when there is
+      // anyone else to group with.
+      onStartGroupChat: chatId == null && store.characters.length > 1
+          ? () {
+              Navigator.of(context).pop();
+              startNewGroupChat(context, c);
+            }
+          : null,
       editLabel: chatId == null ? 'Edit' : 'Edit (this chat)',
       onEdit: () => _onEditPressed(context, c),
       // Per-chat snapshots aren't a great target for repointing the avatar
