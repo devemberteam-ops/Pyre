@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:pyre/services/resolvers.dart';
 
 void main() {
@@ -185,6 +187,60 @@ void main() {
         r.pngUrl.toString(),
         'https://avatars.charhub.io/avatars/author/my-slug/chara_card_v2.png',
       );
+    });
+
+    // 2026-07-03 (owner report): chub's NEW share links are numeric
+    // (chub.ai/characters/2056572). The page is bot-walled, but the public
+    // gateway API maps id → the canonical author/slug fullPath the CDN
+    // needs. On any gateway failure we fall through to the OLD numeric CDN
+    // path (→ 404 → the existing "Card not found" message).
+    test('chub NUMERIC page url resolves fullPath via the gateway API',
+        () async {
+      final client = MockClient((req) async {
+        expect(req.url.toString(),
+            'https://gateway.chub.ai/api/characters/2056572?full=true');
+        return http.Response(
+          '{"node":{"id":2056572,"fullPath":"Kristine_/medieval-fantasy-world-rp-ae87e4b9"}}',
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+      final r = await resolveCommunityUrl(
+          'https://chub.ai/characters/2056572',
+          client: client);
+      expect(r, isNotNull);
+      expect(r!.source, 'chub');
+      expect(
+        r.pngUrl.toString(),
+        'https://avatars.charhub.io/avatars/Kristine_/medieval-fantasy-world-rp-ae87e4b9/chara_card_v2.png',
+      );
+    });
+
+    test(
+        'chub numeric url falls back to the classic CDN path when the '
+        'gateway fails', () async {
+      final client = MockClient((req) async => http.Response('nope', 500));
+      final r = await resolveCommunityUrl(
+          'https://chub.ai/characters/2056572',
+          client: client);
+      expect(r, isNotNull);
+      expect(
+        r!.pngUrl.toString(),
+        'https://avatars.charhub.io/avatars/2056572/chara_card_v2.png',
+      );
+    });
+
+    test('gateway fullPath with a scheme (hostile value) is ignored',
+        () async {
+      final client = MockClient((req) async =>
+          http.Response('{"node":{"fullPath":"https://evil.com/x"}}', 200));
+      final r = await resolveCommunityUrl(
+          'https://chub.ai/characters/2056572',
+          client: client);
+      // Falls back to the classic numeric CDN path — never a foreign host.
+      expect(r, isNotNull);
+      expect(r!.pngUrl.host, 'avatars.charhub.io');
+      expect(r.pngUrl.toString(), isNot(contains('evil.com')));
     });
 
     test('a hostile botbooru lookalike host is rejected', () async {

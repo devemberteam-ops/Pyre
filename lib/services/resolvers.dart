@@ -15,7 +15,10 @@
 // straight port for the Flutter native side, which can call these without
 // a CORS proxy.
 
+import 'dart:convert';
 import 'dart:typed_data';
+
+import 'package:http/http.dart' as http;
 
 /// What a resolved URL actually downloads. The vast majority of community
 /// links resolve to a CHARACTER (chara_card_v2 PNG / JSON). BotBooru also
@@ -100,7 +103,43 @@ bool isBotbooruLorebookUrl(String input) {
   return false;
 }
 
-Future<ResolvedCard?> resolveCommunityUrl(String input) async {
+/// Chub NEW numeric share links (2026-07: `chub.ai/characters/2056572`): the
+/// page itself is bot-walled (403), but the PUBLIC gateway API maps the
+/// numeric id to the canonical `author/slug` fullPath the CDN needs. Returns
+/// null on any failure or a suspicious value (scheme/host inside it) — the
+/// caller then falls back to the classic numeric CDN path, preserving the
+/// old "Card not found (404)" surface instead of inventing a new error.
+Future<String?> _chubFullPathFromNumericId(
+  String id, {
+  http.Client? client,
+}) async {
+  final c = client ?? http.Client();
+  try {
+    final resp = await c
+        .get(Uri.parse('https://gateway.chub.ai/api/characters/$id?full=true'))
+        .timeout(const Duration(seconds: 12));
+    if (resp.statusCode != 200) return null;
+    final decoded = jsonDecode(resp.body);
+    final full = decoded is Map
+        ? ((decoded['node'] as Map?)?['fullPath'] as String?)
+        : null;
+    final t = full?.trim();
+    if (t == null || t.isEmpty) return null;
+    // Defense: the fullPath must be a bare author/slug path — never a URL
+    // (a hostile/changed API response must not steer the fetch off-host).
+    if (t.contains('://') || t.startsWith('//')) return null;
+    return t;
+  } catch (_) {
+    return null; // timeout / network / bad JSON → classic fallback
+  } finally {
+    if (client == null) c.close();
+  }
+}
+
+Future<ResolvedCard?> resolveCommunityUrl(
+  String input, {
+  http.Client? client,
+}) async {
   final cleaned = input.trim();
   if (cleaned.isEmpty) return null;
   final uri = Uri.tryParse(cleaned);
@@ -174,10 +213,26 @@ Future<ResolvedCard?> resolveCommunityUrl(String input) async {
     final segments = uri.pathSegments;
     final ci = segments.indexOf('characters');
     if (ci >= 0 && ci + 1 < segments.length) {
+      // 2026-07-03 (owner report): chub's NEW share links carry a NUMERIC id
+      // (`/characters/2056572`) instead of `/author/slug`. The CDN only
+      // serves the author/slug form, so resolve the fullPath via the public
+      // gateway first; a null (gateway down / removed card / hostile value)
+      // falls through to the classic numeric path → the CDN 404 → the
+      // existing "Card not found" message.
+      var tail = segments
+          .sublist(ci + 1)
+          .where((s) => s.isNotEmpty)
+          .toList(growable: false);
+      if (tail.length == 1 && RegExp(r'^\d+$').hasMatch(tail.first)) {
+        final full =
+            await _chubFullPathFromNumericId(tail.first, client: client);
+        if (full != null) {
+          tail = full.split('/').where((s) => s.isNotEmpty).toList();
+        }
+      }
       // Keep every segment after /characters/ (covers `/author/slug` AND
       // the rarer `/author-slug-hash` single-segment form).
-      final path = segments
-          .sublist(ci + 1)
+      final path = tail
           .map(Uri.encodeComponent)
           .join('/')
           .replaceAll(RegExp(r'/+$'), '');
