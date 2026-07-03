@@ -1159,13 +1159,24 @@ String guidePerspectivePhrase(GuidePerspective p, String personaName) {
 String buildImpersonationPrompt({
   required String personaName,
   required String speakerName,
+  List<String> memberNames = const [],
   String? presetImpersonationPrompt,
-  String examplesNudge = '',
   String? outline,
+  String examplesNudge = '',
   GuidePerspective? perspective,
 }) {
   final outlineTrimmed = outline?.trim() ?? '';
   final hasOutline = outlineTrimmed.isNotEmpty;
+  // Group awareness (owner 2026-07: "Impersonate Me só está pegando um
+  // personagem"): with >1 member the instruction must name EVERY character —
+  // the old single-speaker framing made the written message engage only the
+  // primary. A single (or empty) roster leaves every string byte-identical.
+  final roster =
+      memberNames.map((n) => n.trim()).where((n) => n.isNotEmpty).toList();
+  final isGroup = roster.length > 1;
+  String joinWith(String conj) => roster.length == 2
+      ? '${roster[0]} $conj ${roster[1]}'
+      : '${roster.sublist(0, roster.length - 1).join(', ')}, $conj ${roster.last}';
   // The perspective directive (omitted entirely when no perspective given, so
   // the classic path is unchanged).
   final perspectiveLine = perspective == null
@@ -1187,15 +1198,25 @@ String buildImpersonationPrompt({
       presetImpersonationPrompt.trim().isNotEmpty) {
     final base = presetImpersonationPrompt
         .replaceAll(RegExp(r'\{\{user\}\}', caseSensitive: false), personaName)
-        .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false), speakerName);
+        .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false),
+            isGroup ? roster.join(', ') : speakerName);
     return '$base$outlineRider$perspectiveLine';
   }
 
-  final narratorLabel = speakerName.isNotEmpty ? speakerName : 'the narrator';
+  // Group: the FORBIDDEN line covers every member ("from A, B, or C, or any
+  // NPC" — the trailing comma keeps the sentence scanning), and an explicit
+  // roster line tells the model the whole party is present to be engaged.
+  final narratorLabel = isGroup
+      ? '${joinWith('or')},'
+      : (speakerName.isNotEmpty ? speakerName : 'the narrator');
+  final sceneRoster = isGroup
+      ? '\n\nThe scene includes ${joinWith('and')} — $personaName can '
+          'address, react to, or ignore ANY of them, not just one.'
+      : '';
   return '[OOC: Drop out of narrator/character voice for ONE reply. '
       'Write the next message from $personaName\'s perspective '
       'only — what $personaName would type as their own '
-      'character in this scene.$outlineRider$perspectiveLine\n\n'
+      'character in this scene.$sceneRoster$outlineRider$perspectiveLine\n\n'
       'ALLOWED in this reply:\n'
       '- $personaName\'s actions, gestures, body language\n'
       '- $personaName\'s thoughts and sensations\n'

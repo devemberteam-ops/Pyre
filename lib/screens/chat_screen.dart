@@ -3485,6 +3485,14 @@ class _ChatScreenState extends State<ChatScreen> {
     final impPrompt = buildImpersonationPrompt(
       personaName: personaName,
       speakerName: speakerName,
+      // Group awareness: name EVERY member so the written message can engage
+      // the whole scene — the single speakerName framing made Impersonate
+      // react to only the primary character. Snapshot-first, like every
+      // other member resolution.
+      memberNames: [
+        for (final id in chat.characterIds)
+          (chat.characterSnapshots[id] ?? store.characterById(id))?.name ?? '',
+      ],
       presetImpersonationPrompt: preset?.impersonationPrompt,
       examplesNudge: examplesNudge,
       outline: outline,

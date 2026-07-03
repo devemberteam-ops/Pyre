@@ -165,6 +165,48 @@ void main() {
     });
   });
 
+  // ── Group awareness (owner 2026-07: "Impersonate Me só está pegando um
+  // personagem") — in a group chat the instruction must name EVERY member,
+  // not just the primary, so the written message can engage the whole scene.
+  group('buildImpersonationPrompt — group chat', () {
+    test('>1 member: forbidden line + scene roster name every member', () {
+      final p = buildImpersonationPrompt(
+        personaName: 'Ren',
+        speakerName: 'Vesna',
+        memberNames: ['Vesna', 'Talia', 'Orin'],
+      );
+      // The scene roster line tells the model everyone is present.
+      expect(p, contains('Vesna, Talia, and Orin'));
+      // The forbidden line covers ALL members, not just the primary.
+      expect(p, contains('Vesna, Talia, or Orin'));
+      expect(p, isNot(contains('from Vesna or any NPC')));
+    });
+
+    test('single member (or none passed) is byte-identical to before', () {
+      final classic = buildImpersonationPrompt(
+        personaName: 'Ren',
+        speakerName: 'Vesna',
+      );
+      final singleRoster = buildImpersonationPrompt(
+        personaName: 'Ren',
+        speakerName: 'Vesna',
+        memberNames: ['Vesna'],
+      );
+      expect(singleRoster, classic);
+      expect(classic, contains('from Vesna or any NPC'));
+    });
+
+    test('preset override: {{char}} becomes the joined member names', () {
+      final p = buildImpersonationPrompt(
+        personaName: 'Ren',
+        speakerName: 'Vesna',
+        memberNames: ['Vesna', 'Talia'],
+        presetImpersonationPrompt: 'Reply to {{char}} as {{user}}.',
+      );
+      expect(p, contains('Reply to Vesna, Talia as Ren.'));
+    });
+  });
+
   // ── Guided impersonation prompt assembly (Action 3 "Guide my message") ──
   group('buildImpersonationPrompt', () {
     test('no outline + no perspective = classic Impersonate Me (unchanged)',
