@@ -4414,6 +4414,22 @@ class _ChatScreenState extends State<ChatScreen> {
     // Wave CK + CX: backdrop resolution uses the chat-bound persona,
     // not the global default.
     final persona = _chatPersona(store, chat);
+    // Group-aware header: a multi-character chat must show WHO is in it, not
+    // just the primary character. Resolve every member (per-chat snapshot
+    // first, then the library — same order as everywhere else) so the app bar
+    // can show the stacked avatar cluster + joined names.
+    final isGroupChat = chat.characterIds.length > 1;
+    final groupMembers = isGroupChat
+        ? [
+            for (final id in chat.characterIds)
+              chat.characterSnapshots[id] ?? store.characterById(id)
+          ].whereType<Character>().toList()
+        : const <Character>[];
+    // Fallback title when the chat is untitled: joined member names for a
+    // group, else the single character's name (unchanged for 1:1 chats).
+    final headerFallback = groupMembers.length > 1
+        ? groupChatHeaderTitle([for (final m in groupMembers) m.name])
+        : (character?.name ?? 'Chat');
     // The chat's bubble opacity drives both message bubbles AND the
     // top/bottom chrome (app bar + input bar) so the character art shows
     // through everywhere instead of being clipped to a narrow band.
@@ -4463,14 +4479,20 @@ class _ChatScreenState extends State<ChatScreen> {
         scrolledUnderElevation: 0,
         title: Row(
           children: [
-            AvatarBubble(
-              dataUrl: character?.avatar,
-              fallback: character?.name ?? '?',
-              radius: 16,
-              tappableLightbox: true,
-              // Non-destructive Recrop: tap shows the full uncropped image.
-              fullImageUrl: character?.avatarOriginal ?? character?.avatar,
-            ),
+            // Group chat: stacked avatar cluster (tap → swipe the party's
+            // photos), mirroring the party scene message. 1:1 chat: the
+            // single tappable avatar (unchanged).
+            if (groupMembers.length > 1)
+              _PartyAvatarCluster(members: groupMembers, radius: 16)
+            else
+              AvatarBubble(
+                dataUrl: character?.avatar,
+                fallback: character?.name ?? '?',
+                radius: 16,
+                tappableLightbox: true,
+                // Non-destructive Recrop: tap shows the full uncropped image.
+                fullImageUrl: character?.avatarOriginal ?? character?.avatar,
+              ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -4478,11 +4500,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Completeness-gaps: show the manual chat title when set,
-                  // else the character name (unchanged behaviour for untitled
-                  // chats). When a title overrides it, the character name moves
-                  // to the subtitle so identity isn't lost.
+                  // else the derived name (joined member names for a group,
+                  // else the single character name). When a title overrides
+                  // it, the derived name moves to the subtitle so identity
+                  // isn't lost.
                   Text(
-                    chat.displayTitle(character?.name ?? 'Chat'),
+                    chat.displayTitle(headerFallback),
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontSize: 16,
@@ -4491,9 +4514,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   if (chat.title != null &&
                       chat.title!.trim().isNotEmpty &&
-                      (character?.name ?? '').isNotEmpty)
+                      headerFallback.isNotEmpty)
                     Text(
-                      character!.name,
+                      headerFallback,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 11,
@@ -4893,6 +4916,14 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 }
+
+/// The app-bar title for an untitled GROUP chat: the members' names joined
+/// with " · " (blank names skipped, empty when none). The header's
+/// `TextOverflow.ellipsis` truncates an over-long roster and the stacked
+/// avatar cluster carries the "+N" overflow visually, so no abbreviation is
+/// baked in here. A 1:1 chat keeps using the single character name.
+String groupChatHeaderTitle(List<String> memberNames) =>
+    memberNames.map((n) => n.trim()).where((n) => n.isNotEmpty).join(' · ');
 
 /// Party mode v1 (2026-07, OWNER DECISION): a stacked "messenger group"
 /// avatar cluster for a party-scene bubble — up to 3 overlapping mini

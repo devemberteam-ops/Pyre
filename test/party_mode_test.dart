@@ -17,7 +17,8 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/models/models.dart';
-import 'package:pyre/screens/chat_screen.dart' show buildFillInOpenerPrompt;
+import 'package:pyre/screens/chat_screen.dart'
+    show buildFillInOpenerPrompt, groupChatHeaderTitle;
 import 'package:pyre/services/chat_api.dart' show ChatTurn;
 import 'package:pyre/services/chat_prompt_builder.dart';
 import 'package:pyre/services/store_backend.dart';
@@ -437,6 +438,27 @@ void main() {
       // The opener's own scenario + output instruction still close it out.
       expect(sys, contains('The party gathers at the forge.'));
       expect(sys, contains('Output ONLY the opening message'));
+    });
+  });
+
+  // Group chat header (owner: "essa informação não é atualizada no header").
+  group('groupChatHeaderTitle', () {
+    test('joins member names with " · "', () {
+      expect(groupChatHeaderTitle(['Aria', 'Bran', 'Cyra']),
+          'Aria · Bran · Cyra');
+    });
+
+    test('skips blank / whitespace names', () {
+      expect(groupChatHeaderTitle(['Aria', '', '  ', 'Cyra']), 'Aria · Cyra');
+    });
+
+    test('single name → just that name', () {
+      expect(groupChatHeaderTitle(['Aria']), 'Aria');
+    });
+
+    test('no names → empty string', () {
+      expect(groupChatHeaderTitle(const []), '');
+      expect(groupChatHeaderTitle(['', '   ']), '');
     });
   });
 
