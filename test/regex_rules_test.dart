@@ -672,4 +672,60 @@ void main() {
       );
     });
   });
+
+  // 2026-07-03 (owner: "vale"): explicit rule ordering. Order is BEHAVIOR
+  // (chained rules feed each other), and sync used to append unseen rules at
+  // the end — two paired devices could run the same rules in different
+  // orders, producing different text (including different prompts). The
+  // order now lives ON the record (sortOrder), so the existing per-record
+  // LWW sync converges it like any other edit.
+  group('regexRulesInOrder + sortOrder', () {
+    test('sorts by sortOrder ascending', () {
+      final a = RegexRule(name: 'a', pattern: 'x')..sortOrder = 2;
+      final b = RegexRule(name: 'b', pattern: 'x')..sortOrder = 0;
+      final c = RegexRule(name: 'c', pattern: 'x')..sortOrder = 1;
+      expect(regexRulesInOrder([a, b, c]).map((r) => r.name).toList(),
+          ['b', 'c', 'a']);
+    });
+
+    test('ties keep LIST position (legacy all-zero rules keep today\'s '
+        'order exactly)', () {
+      final a = RegexRule(name: 'a', pattern: 'x');
+      final b = RegexRule(name: 'b', pattern: 'x');
+      final c = RegexRule(name: 'c', pattern: 'x');
+      expect(regexRulesInOrder([a, b, c]).map((r) => r.name).toList(),
+          ['a', 'b', 'c']);
+    });
+
+    test('applyRegexRules honors sortOrder, not list position', () {
+      // Chained rules where order changes the outcome: a→b then b→c gives
+      // "c"; the reverse gives "b".
+      final aToB = RegexRule(pattern: 'a', flags: 'g', replacement: 'b')
+        ..sortOrder = 0;
+      final bToC = RegexRule(pattern: 'b', flags: 'g', replacement: 'c')
+        ..sortOrder = 1;
+      // LIST order is reversed on purpose — sortOrder must win.
+      expect(
+        applyRegexRules('a', [bToC, aToB],
+            stream: RegexStream.aiOutput, stage: RegexStage.display),
+        'c',
+      );
+    });
+
+    test('sortOrder round-trips through JSON and is omitted when 0', () {
+      final r = RegexRule(pattern: 'x')..sortOrder = 7;
+      final back = RegexRule.fromJson(r.toJson());
+      expect(back.sortOrder, 7);
+
+      final legacy = RegexRule(pattern: 'x');
+      expect(legacy.toJson().containsKey('sortOrder'), isFalse,
+          reason: 'legacy records stay byte-identical until ordered');
+      expect(RegexRule.fromJson({'pattern': 'x'}).sortOrder, 0);
+    });
+
+    test('clone carries sortOrder', () {
+      final r = RegexRule(pattern: 'x')..sortOrder = 5;
+      expect(r.clone().sortOrder, 5);
+    });
+  });
 }

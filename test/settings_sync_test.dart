@@ -18,10 +18,12 @@
 // These tests run on a BARE `AppStore` (NoopBackend, no Flutter bindings) —
 // `syncedSettingsToJson` / `applySyncedSettings` must be pure enough for that.
 
+import 'package:flutter/material.dart' show Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/models/models.dart';
 import 'package:pyre/services/store_backend.dart';
 import 'package:pyre/state/app_store.dart';
+import 'package:pyre/theme.dart';
 
 class _NoopBackend implements StoreBackend {
   @override
@@ -211,6 +213,65 @@ void main() {
       // …but the local-only background survived.
       expect(dest.chatSettings.customBackgroundDataUrl,
           'data:image/png;base64,LOCALBG');
+    });
+  });
+
+  // 2026-07-03 (owner: "sincroniza"): theme, accent, and app text scale ride
+  // the settings unit — bubble colors already synced while the theme they
+  // were tuned for didn't, which could leave paired devices half-matched.
+  group('appearance rides the settings unit', () {
+    test('theme + accent + uiScale round-trip and re-apply the palette', () {
+      final source = AppStore(storage: _NoopBackend());
+      source.setActiveTheme('moonlit');
+      source.setAccentColor(0xFFD46A9E);
+      source.setUiScale(1.15);
+      final payload = source.syncedSettingsToJson();
+
+      final dest = AppStore(storage: _NoopBackend());
+      dest.applySyncedSettings(payload);
+
+      expect(dest.uiPrefs.activeThemeId, 'moonlit');
+      expect(dest.uiPrefs.accentArgb, 0xFFD46A9E);
+      expect(dest.uiPrefs.uiScale, 1.15);
+      // The palette must be LIVE on the receiver, not restart-pending.
+      expect(EmberColors.primary, const Color(0xFFD46A9E));
+    });
+
+    test('appearance setters stamp the settings watermark (so they ship)',
+        () {
+      final store = AppStore(storage: _NoopBackend());
+      expect(store.settingsMtime, 0);
+      store.setActiveTheme('hearth');
+      expect(store.settingsMtime, greaterThan(0),
+          reason: 'without the stamp the change never rides a sync');
+    });
+
+    test('a payload without appearance (older peer) keeps local appearance',
+        () {
+      final dest = AppStore(storage: _NoopBackend());
+      dest.setActiveTheme('moonlit');
+      final localMtime = dest.settingsMtime;
+
+      dest.applySyncedSettings({
+        'mtime': localMtime + 1,
+        'modelSettings': ModelSettings(temperature: 0.5).toJson(),
+      });
+      expect(dest.uiPrefs.activeThemeId, 'moonlit');
+    });
+
+    test('an explicit null accent (key present) clears the override', () {
+      final source = AppStore(storage: _NoopBackend());
+      source.setActiveTheme('ember');
+      source.setAccentColor(null);
+      final payload = source.syncedSettingsToJson();
+
+      final dest = AppStore(storage: _NoopBackend());
+      dest.setAccentColor(0xFF123456);
+      payload['mtime'] = dest.settingsMtime + 1000;
+
+      dest.applySyncedSettings(payload);
+      expect(dest.uiPrefs.accentArgb, isNull);
+      expect(EmberColors.primary, paletteById('ember').primary);
     });
   });
 }

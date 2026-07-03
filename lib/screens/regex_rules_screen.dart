@@ -25,8 +25,10 @@ class RegexRulesScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AppStore>();
-    final rules =
-        store.regexRules.where((r) => !r.deleted).toList(growable: false);
+    // 2026-07-03: shown in RUN order (sortOrder; ties keep list position) —
+    // the same order applyRegexRules executes, so what you see is what runs.
+    final rules = regexRulesInOrder(
+        store.regexRules.where((r) => !r.deleted).toList(growable: false));
     return Scaffold(
       appBar: AppBar(
         title: const Text('Regex (find/replace)'),
@@ -98,63 +100,95 @@ class RegexRulesScreen extends StatelessWidget {
               ),
             )
           else
-            for (final r in rules) ...[
-              Card(
-                child: ListTile(
-                  leading: Icon(Icons.find_replace,
-                      color: EmberColors.textMid),
-                  title: Text(
-                    r.name.isEmpty ? '(unnamed rule)' : r.name,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  subtitle: Text(
-                    _subtitleFor(r),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: EmberColors.textMid),
-                  ),
-                  onTap: () => _openEditor(context, r),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Switch(
-                        value: r.enabled,
-                        onChanged: (v) {
-                          final edited = r.clone()..enabled = v;
-                          context.read<AppStore>().updateRegexRule(edited);
-                        },
-                      ),
-                      PopupMenuButton<String>(
-                        icon: Icon(Icons.more_vert,
+            // 2026-07-03 (owner: "vale"): drag-to-reorder. Rules run top to
+            // bottom and chained rules feed each other, so position is
+            // behavior — the handle makes it explicit and the new order
+            // syncs (sortOrder rides each record's LWW).
+            ReorderableListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              itemCount: rules.length,
+              // onReorderItem (vs deprecated onReorder) already adjusts
+              // newIndex for the removed slot — no manual fix-up.
+              onReorderItem: (oldIndex, newIndex) {
+                final ordered = [for (final r in rules) r.id];
+                final moved = ordered.removeAt(oldIndex);
+                ordered.insert(newIndex, moved);
+                context.read<AppStore>().reorderRegexRules(ordered);
+              },
+              itemBuilder: (context, i) {
+                final r = rules[i];
+                return Padding(
+                  key: ValueKey(r.id),
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Card(
+                    margin: EdgeInsets.zero,
+                    child: ListTile(
+                      leading: ReorderableDragStartListener(
+                        index: i,
+                        child: Icon(Icons.drag_indicator,
                             color: EmberColors.textMid),
-                        onSelected: (choice) async {
-                          if (choice == 'edit') {
-                            _openEditor(context, r);
-                          } else if (choice == 'delete') {
-                            final ok = await confirmDelete(
-                              context,
-                              title: 'Delete rule?',
-                              message:
-                                  'Remove "${r.name}"? This only deletes the '
-                                  'rule — your messages are untouched.',
-                            );
-                            if (ok && context.mounted) {
-                              context.read<AppStore>().removeRegexRule(r.id);
-                            }
-                          }
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'edit', child: Text('Edit')),
-                          PopupMenuItem(
-                              value: 'delete', child: Text('Delete')),
+                      ),
+                      title: Text(
+                        r.name.isEmpty ? '(unnamed rule)' : r.name,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(
+                        _subtitleFor(r),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: EmberColors.textMid),
+                      ),
+                      onTap: () => _openEditor(context, r),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Switch(
+                            value: r.enabled,
+                            onChanged: (v) {
+                              final edited = r.clone()..enabled = v;
+                              context
+                                  .read<AppStore>()
+                                  .updateRegexRule(edited);
+                            },
+                          ),
+                          PopupMenuButton<String>(
+                            icon: Icon(Icons.more_vert,
+                                color: EmberColors.textMid),
+                            onSelected: (choice) async {
+                              if (choice == 'edit') {
+                                _openEditor(context, r);
+                              } else if (choice == 'delete') {
+                                final ok = await confirmDelete(
+                                  context,
+                                  title: 'Delete rule?',
+                                  message:
+                                      'Remove "${r.name}"? This only deletes '
+                                      'the rule — your messages are '
+                                      'untouched.',
+                                );
+                                if (ok && context.mounted) {
+                                  context
+                                      .read<AppStore>()
+                                      .removeRegexRule(r.id);
+                                }
+                              }
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                  value: 'edit', child: Text('Edit')),
+                              PopupMenuItem(
+                                  value: 'delete', child: Text('Delete')),
+                            ],
+                          ),
                         ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
-              const SizedBox(height: 8),
-            ],
+                );
+              },
+            ),
         ],
       ),
     );

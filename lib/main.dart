@@ -949,7 +949,15 @@ class _RootShellState extends State<RootShell> {
     //      the rail doesn't crowd out content. The toggle is
     //      preserved; expanding the window restores wide mode.
     final width = MediaQuery.of(context).size.width;
-    final useWideRail = _isDesktop &&
+    // 2026-07-03 (owner: "habilita"): a desktop-BROWSER PWA used to render
+    // the raw phone UI stretched across the whole monitor with no option.
+    // A WIDE web viewport now behaves exactly like desktop (480px centered
+    // column by default, NavigationRail when the wide toggle is on). A
+    // phone-sized web viewport keeps the plain mobile layout — the fixed
+    // 480px column would overflow a ~390px screen.
+    final desktopLike =
+        _isDesktop || (kIsWeb && width >= _kPhoneContentMaxWidth + 80);
+    final useWideRail = desktopLike &&
         store.uiPrefs.desktopWideLayout &&
         width >= _kWideLayoutThreshold;
 
@@ -1032,7 +1040,7 @@ class _RootShellState extends State<RootShell> {
     final wantsFull = store.wantsFullWidthContent &&
         store.uiPrefs.activeTab == 'discover';
     final scaffold = Scaffold(
-      body: _isDesktop
+      body: desktopLike
           ? (wantsFull
               ? indexedScreens
               : Row(
@@ -1045,7 +1053,7 @@ class _RootShellState extends State<RootShell> {
                   ],
                 ))
           : indexedScreens,
-      bottomNavigationBar: _isDesktop
+      bottomNavigationBar: desktopLike
           ? Row(
               children: [
                 const Spacer(),

@@ -111,9 +111,14 @@ class ChatText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base =
-        (baseStyle ?? TextStyle(color: EmberColors.textHigh, height: 1.4))
-            .copyWith(fontSize: 15);
+    // 2026-07-03 review (L2): only default the size when the caller didn't
+    // set one — the unconditional copyWith(fontSize: 15) silently clobbered
+    // any sized baseStyle (a latent trap; bubble text-size works via
+    // MediaQuery textScaler, which is unaffected either way).
+    final provided = baseStyle ?? TextStyle(color: EmberColors.textHigh, height: 1.4);
+    final base = provided.fontSize == null
+        ? provided.copyWith(fontSize: 15)
+        : provided;
     final visible = _cleaned();
     if (visible.isEmpty) {
       return Text('…', style: TextStyle(color: EmberColors.textDim));

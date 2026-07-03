@@ -8,10 +8,11 @@
 // whole-app rebuild that re-applies the scale. This screen is the future home
 // for related display settings.
 //
-// Also hosts the desktop-only "Wide desktop layout" toggle (relocated here
-// from DesktopShortcutsScreen — it's a display preference, so it belongs
-// next to text size). Gated to desktop builds via [_isDesktop]; on mobile /
-// web the card simply isn't built.
+// Also hosts the "Wide desktop layout" toggle (relocated here from
+// DesktopShortcutsScreen — it's a display preference, so it belongs next to
+// text size). Gated via [_isDesktopLike]: desktop builds AND web (a
+// desktop-browser PWA shares the desktop responsive layout since
+// 2026-07-03); on mobile builds the card simply isn't built.
 
 import 'dart:io' show Platform;
 
@@ -23,11 +24,13 @@ import '../models/models.dart' show UiPrefs;
 import '../state/app_store.dart';
 import '../theme.dart';
 
-/// True on Windows / Linux / macOS desktop builds. Web is explicitly false
-/// (Platform isn't available there). Used to gate the wide-layout toggle,
-/// which only affects the desktop responsive layout.
-bool get _isDesktop {
-  if (kIsWeb) return false;
+/// True where the wide-layout preference has any effect: desktop builds AND
+/// web (2026-07-03 — a desktop-browser PWA now shares the desktop responsive
+/// layout; on a phone-sized web viewport the toggle is harmlessly inert,
+/// exactly like a narrow desktop window). Platform isn't available on web,
+/// so check kIsWeb first.
+bool get _isDesktopLike {
+  if (kIsWeb) return true;
   return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 }
 
@@ -42,9 +45,9 @@ class DisplaySettingsScreen extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
         children: [
           const _DisplayCard(),
-          // Desktop-only: the wide-layout preference. Hidden entirely on
-          // mobile / web, where it has no effect.
-          if (_isDesktop) ...const [
+          // Desktop + web: the wide-layout preference. Hidden on mobile
+          // builds, where it has no effect.
+          if (_isDesktopLike) ...const [
             SizedBox(height: 12),
             _DesktopLayoutCard(),
           ],

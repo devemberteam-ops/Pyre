@@ -3326,9 +3326,37 @@ class AppStore extends ChangeNotifier {
 
   RegexRule addRegexRule(RegexRule r) {
     r.mtime = DateTime.now().millisecondsSinceEpoch;
+    // 2026-07-03: a new/imported rule lands at the END of the run order.
+    // (Restore/sync bypass this method, so explicit orders survive intact.)
+    var maxOrder = -1;
+    for (final x in regexRules) {
+      if (!x.deleted && x.sortOrder > maxOrder) maxOrder = x.sortOrder;
+    }
+    r.sortOrder = maxOrder + 1;
     regexRules.add(r);
     _bump();
     return r;
+  }
+
+  /// 2026-07-03 (owner: "vale"): explicit user ordering via drag-reorder.
+  /// Order is BEHAVIOR (chained rules feed each other) and must CONVERGE
+  /// across paired devices — sortOrder lives ON each record, so this just
+  /// assigns positions and stamps mtime on the rules that moved; the
+  /// existing per-record LWW sync carries the rest.
+  void reorderRegexRules(List<String> orderedIds) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final byId = {for (final r in regexRules) r.id: r};
+    var changed = false;
+    for (var i = 0; i < orderedIds.length; i++) {
+      final r = byId[orderedIds[i]];
+      if (r == null) continue;
+      if (r.sortOrder != i) {
+        r.sortOrder = i;
+        r.mtime = now;
+        changed = true;
+      }
+    }
+    if (changed) _bump();
   }
 
   /// Import-path variant of [addRegexRule] (2026-07-03 review): every import
@@ -3424,6 +3452,15 @@ class AppStore extends ChangeNotifier {
       'scriptSettings': scriptSettings.toJson(),
       'guideSettings': guideSettings.toJson(),
       'chatSettings': chatJson,
+      // 2026-07-03 (owner: "sincroniza"): appearance identity — theme,
+      // accent, and app text scale ride the unit so paired devices look the
+      // same (bubble colors already synced while the theme they were tuned
+      // for didn't). The chat background image stays device-local (above).
+      'appearance': {
+        'activeThemeId': uiPrefs.activeThemeId,
+        'accentArgb': uiPrefs.accentArgb,
+        'uiScale': uiPrefs.uiScale,
+      },
       // Pointers may legitimately be null (no override) — encode as null.
       'activeProviderId': activeProviderId,
       'creatorProviderId': creatorProviderId,
@@ -3473,6 +3510,28 @@ class AppStore extends ChangeNotifier {
       final localBg = chatSettings.customBackgroundDataUrl;
       chatSettings = ChatSettings.fromJson(cs)
         ..customBackgroundDataUrl = localBg;
+    }
+
+    // 2026-07-03: appearance (theme/accent/uiScale). Key-absent = older peer
+    // → keep local. An explicit null accent (key present) clears the
+    // override. The palette is re-applied so the change is LIVE on the
+    // receiver, not restart-pending.
+    final ap = asMap(j['appearance']);
+    if (ap != null) {
+      final theme = ap['activeThemeId'];
+      if (theme is String && theme.isNotEmpty) {
+        uiPrefs.activeThemeId = theme;
+      }
+      if (ap.containsKey('accentArgb')) {
+        final acc = ap['accentArgb'];
+        uiPrefs.accentArgb = acc is num ? acc.toInt() : null;
+      }
+      final scale = ap['uiScale'];
+      if (scale is num) uiPrefs.uiScale = scale.toDouble();
+      EmberColors.applyTheme(
+        themeId: uiPrefs.activeThemeId,
+        accentArgb: uiPrefs.accentArgb,
+      );
     }
 
     // Provider ROLE pointers are DEVICE-LOCAL. Adopt a pointer only when the
@@ -3639,6 +3698,7 @@ class AppStore extends ChangeNotifier {
         value.clamp(UiPrefs.kUiScaleMin, UiPrefs.kUiScaleMax);
     if (uiPrefs.uiScale == clamped) return;
     uiPrefs.uiScale = clamped;
+    _touchSettings(); // 2026-07-03: appearance rides the settings sync unit
     _bump();
   }
 
@@ -3653,6 +3713,7 @@ class AppStore extends ChangeNotifier {
       themeId: uiPrefs.activeThemeId,
       accentArgb: uiPrefs.accentArgb,
     );
+    _touchSettings(); // 2026-07-03: appearance rides the settings sync unit
     _bump();
   }
 
@@ -3667,6 +3728,7 @@ class AppStore extends ChangeNotifier {
       themeId: uiPrefs.activeThemeId,
       accentArgb: uiPrefs.accentArgb,
     );
+    _touchSettings(); // 2026-07-03: appearance rides the settings sync unit
     _bump();
   }
 
