@@ -50,20 +50,26 @@ Future<void> startNewChatWithPersonaPrompt(
   bool replace = false,
 }) async {
   final store = context.read<AppStore>();
+  // Dead-context fix (2026-07-03, review HIGH): callers like the character
+  // details SHEET pop themselves before calling this, so `context` (the
+  // sheet's element) is disposed by the time an awaited picker returns —
+  // `context.mounted` goes false and the flow silently died. Capture the
+  // long-lived NavigatorState up front and gate on ITS mounted instead.
+  final navigator = Navigator.of(context);
   if (!store.chatSettings.askPersonaOnNewChat) {
     final fresh = store.startChatWith(primary);
-    if (!context.mounted) return;
+    if (!navigator.mounted) return;
     final route = MaterialPageRoute(
       builder: (_) => ChatScreen(chatId: fresh.id),
     );
     if (replace) {
-      Navigator.of(context).pushReplacement(route);
+      navigator.pushReplacement(route);
     } else {
-      Navigator.of(context).push(route);
+      navigator.push(route);
     }
     return;
   }
-  final picked = await Navigator.of(context).push<String>(
+  final picked = await navigator.push<String>(
     MaterialPageRoute(
       builder: (_) => PersonaPickerScreen(
         title: 'Persona for new chat with ${primary.name}',
@@ -77,21 +83,20 @@ Future<void> startNewChatWithPersonaPrompt(
       ),
     ),
   );
-  if (!context.mounted || picked == null) return;
+  if (!navigator.mounted || picked == null) return;
   final fresh = store.startChatWith(primary);
   if (picked == pickerNoPersonaSentinel) {
     store.setChatPersona(fresh.id, kExplicitNoPersonaId);
   } else {
     store.setChatPersona(fresh.id, picked);
   }
-  if (!context.mounted) return;
   final route = MaterialPageRoute(
     builder: (_) => ChatScreen(chatId: fresh.id),
   );
   if (replace) {
-    Navigator.of(context).pushReplacement(route);
+    navigator.pushReplacement(route);
   } else {
-    Navigator.of(context).push(route);
+    navigator.push(route);
   }
 }
 
@@ -106,16 +111,24 @@ Future<void> startNewGroupChat(
   Character primary,
 ) async {
   final store = context.read<AppStore>();
-  final memberIds = await Navigator.of(context).push<List<String>>(
+  // Dead-context fix (2026-07-03, review HIGH): the ONLY call site (the
+  // character details sheet) pops itself before calling this, so `context`
+  // is disposed ~250ms in — every `context.mounted` gate went false the
+  // moment the picker returned and the flow silently created NOTHING.
+  // Capture the long-lived navigator + messenger up front; gate on
+  // `navigator.mounted`, never on the dead originating context.
+  final navigator = Navigator.of(context);
+  final messenger = ScaffoldMessenger.of(context);
+  final memberIds = await navigator.push<List<String>>(
     MaterialPageRoute(
       builder: (_) => GroupCharacterPickerScreen(primary: primary),
     ),
   );
-  if (memberIds == null || memberIds.isEmpty || !context.mounted) return;
+  if (memberIds == null || memberIds.isEmpty || !navigator.mounted) return;
 
   String? personaPick;
   if (store.chatSettings.askPersonaOnNewChat) {
-    personaPick = await Navigator.of(context).push<String>(
+    personaPick = await navigator.push<String>(
       MaterialPageRoute(
         builder: (_) => PersonaPickerScreen(
           title: 'Persona for the new group chat',
@@ -125,7 +138,7 @@ Future<void> startNewGroupChat(
         ),
       ),
     );
-    if (personaPick == null || !context.mounted) return; // dismissed
+    if (personaPick == null || !navigator.mounted) return; // dismissed
   }
 
   final members = [
@@ -143,15 +156,15 @@ Future<void> startNewGroupChat(
             ? kExplicitNoPersonaId
             : personaPick);
   }
-  if (!context.mounted) return;
-  Navigator.of(context).push(
+  if (!navigator.mounted) return;
+  navigator.push(
     MaterialPageRoute(builder: (_) => ChatScreen(chatId: fresh.id)),
   );
   // Party suggestion — same affordance as forming a group via "Add
   // character to chat". Root-level ScaffoldMessenger, so it shows on top of
   // the freshly pushed chat.
   if (members.length > 1) {
-    ScaffoldMessenger.of(context).showSnackBar(
+    messenger.showSnackBar(
       SnackBar(
         content: const Text(
             'Group created! Party mode makes everyone reply in one scene.'),

@@ -78,6 +78,61 @@ void main() {
     expect(popped, ['ca', 'cc', 'cb']); // primary first, then tap order
   });
 
+  testWidgets(
+      'REGRESSION: startNewGroupChat survives its launching sheet being '
+      'popped (the real call site pops the details sheet first)', (tester) async {
+    final store = AppStore(storage: _NoopBackend());
+    final a = _char('ca', 'Sera');
+    final b = _char('cb', 'Talia');
+    store.characters.addAll([a, b]);
+    // Skip the persona prompt so the flow is: picker → create → open chat.
+    store.chatSettings.askPersonaOnNewChat = false;
+
+    await tester.pumpWidget(ChangeNotifierProvider<AppStore>.value(
+      value: store,
+      child: MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () => showModalBottomSheet<void>(
+                context: context,
+                builder: (sheetCtx) => ElevatedButton(
+                  // EXACT shape of character_details_sheet's onStartGroupChat:
+                  // pop the sheet, then start the flow from the sheet's own
+                  // (now dying) context.
+                  onPressed: () {
+                    Navigator.of(sheetCtx).pop();
+                    startNewGroupChat(sheetCtx, a);
+                  },
+                  child: const Text('group'),
+                ),
+              ),
+              child: const Text('open sheet'),
+            ),
+          ),
+        ),
+      ),
+    ));
+
+    await tester.tap(find.text('open sheet'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('group'));
+    await tester.pumpAndSettle(); // sheet pops + picker pushes
+
+    // The picker must be up (primary locked). Add Talia and create.
+    expect(find.text('New group chat'), findsOneWidget);
+    await tester.tap(find.text('Talia'));
+    await tester.pump();
+    await tester.tap(find.text('Create chat'));
+    await tester.pumpAndSettle();
+
+    // THE bug: with a dead context the flow silently bailed — no chat.
+    expect(store.chats.length, 1,
+        reason: 'the group chat must be created even though the launching '
+            'sheet was popped');
+    expect(store.chats.first.characterIds, ['ca', 'cb']);
+  });
+
   testWidgets('group picker with just the primary reads as a 1:1 chat',
       (tester) async {
     final store = AppStore(storage: _NoopBackend());

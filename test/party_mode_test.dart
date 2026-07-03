@@ -21,6 +21,7 @@ import 'package:pyre/screens/chat_screen.dart'
     show buildFillInOpenerPrompt, groupChatHeaderTitle, personaPartyFillName;
 import 'package:pyre/services/chat_api.dart' show ChatTurn;
 import 'package:pyre/services/chat_prompt_builder.dart';
+import 'package:pyre/services/lorebook_inject.dart';
 import 'package:pyre/services/store_backend.dart';
 import 'package:pyre/state/app_store.dart';
 
@@ -641,6 +642,52 @@ void main() {
         persona('Kael', 'x', examples: '{{user}}: For the crown!'),
       ]);
       expect(block, contains('For the crown!'));
+    });
+  });
+
+  // Audit I-2 (2026-07-03): EVERY roster persona's bound lorebooks inject —
+  // previously only the primary's did (silent lore loss in a persona party).
+  group('collectBoundLorebooks — persona party', () {
+    test('a book bound to a NON-primary party persona is collected', () {
+      final book = Lorebook(id: 'lb1', name: 'B-book', entries: []);
+      final a = Persona(
+          id: 'pa', name: 'A', description: 'x', createdAt: 0, updatedAt: 0);
+      final b = Persona(
+          id: 'pb',
+          name: 'B',
+          description: 'x',
+          lorebookIds: ['lb1'],
+          createdAt: 0,
+          updatedAt: 0);
+      final chat =
+          Chat(id: 'c', characterIds: const [], personaIds: ['pa', 'pb']);
+      final books = collectBoundLorebooks(
+        chat: chat,
+        persona: a, // primary — does NOT carry the book
+        personaParty: [a, b],
+        lookupBook: (id) => id == 'lb1' ? book : null,
+        lookupCharacter: (_) => null,
+      );
+      expect(books.map((x) => x.id), contains('lb1'));
+    });
+
+    test('empty roster keeps the classic single-persona behavior', () {
+      final book = Lorebook(id: 'lb1', name: 'A-book', entries: []);
+      final a = Persona(
+          id: 'pa',
+          name: 'A',
+          description: 'x',
+          lorebookIds: ['lb1'],
+          createdAt: 0,
+          updatedAt: 0);
+      final chat = Chat(id: 'c', characterIds: const []);
+      final books = collectBoundLorebooks(
+        chat: chat,
+        persona: a,
+        lookupBook: (id) => id == 'lb1' ? book : null,
+        lookupCharacter: (_) => null,
+      );
+      expect(books.map((x) => x.id), contains('lb1'));
     });
   });
 

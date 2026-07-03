@@ -69,6 +69,11 @@ List<Lorebook> collectBoundLorebooks({
   required Lorebook? Function(String id) lookupBook,
   required Character? Function(String id) lookupCharacter,
   String? responderId,
+  // Persona party (2026-07-03, audit I-2): EVERY roster persona contributes
+  // its bound books — the same "every member contributes" contract the
+  // characters below have always had. Empty = classic single [persona],
+  // byte-identical off-party.
+  List<Persona> personaParty = const [],
 }) {
   // Wave CD: per-chat attached books are ALWAYS additive — the user
   // explicitly attached them to this chat, the disabled-inherited list
@@ -76,8 +81,9 @@ List<Lorebook> collectBoundLorebooks({
   // subject to the override.
   final disabled = chat.disabledInheritedLorebookIds.toSet();
   final ids = <String>{...chat.attachedLorebookIds};
-  if (persona != null) {
-    for (final id in persona.lorebookIds) {
+  final personas = personaParty.isNotEmpty ? personaParty : [?persona];
+  for (final p in personas) {
+    for (final id in p.lorebookIds) {
       if (!disabled.contains(id)) ids.add(id);
     }
   }

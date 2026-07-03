@@ -277,7 +277,17 @@ String buildJointPartyBlock({
   required Chat chat,
   required Persona? persona,
   required Character? Function(String id) lookupCharacter,
+  // Persona party: when the user's side is a group, {{user}} inside member
+  // cards and the "never act for X" line must name the WHOLE roster — the
+  // same joined value the rest of the prompt uses. Empty = single persona,
+  // byte-identical.
+  List<Persona> personaParty = const [],
 }) {
+  final partyNames = personaParty
+      .map((p) => p.name.trim())
+      .where((n) => n.isNotEmpty)
+      .toList();
+  final joinedUser = partyNames.length > 1 ? partyNames.join(', ') : null;
   final buf = StringBuffer();
   // Per-member macro fill (owner decision 2026-07, ST "Join" parity):
   // cards routinely use {{char}} SELF-referentially inside their own
@@ -286,7 +296,7 @@ String buildJointPartyBlock({
   // NOT to the chat's primary/responder (which is what the global
   // name-fill pass would do to any leftovers). {{user}} resolves to the
   // persona exactly like everywhere else.
-  final memberUserName = persona?.name ?? 'You';
+  final memberUserName = joinedUser ?? persona?.name ?? 'You';
   String fillForMember(String s, String memberName) => s
       .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false), memberName)
       .replaceAll(
@@ -327,7 +337,7 @@ String buildJointPartyBlock({
   // after every member's card. First draft — tune freely; it is the ONLY
   // place party mode's narration framing lives.
   // -----------------------------------------------------------------
-  final userName = persona?.name ?? 'You';
+  final userName = joinedUser ?? persona?.name ?? 'You';
   buf.writeln(
     'You are narrating a group scene featuring the characters described '
     'above. Voice each character in their own distinct manner as the '
@@ -450,6 +460,7 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   final attached = collectBoundLorebooks(
     chat: chat,
     persona: persona,
+    personaParty: inputs.personaParty,
     lookupBook: inputs.lookupBook,
     lookupCharacter: inputs.lookupCharacter,
     responderId: inputs.responderId,
@@ -500,6 +511,7 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
         chat: chat,
         persona: persona,
         lookupCharacter: inputs.lookupCharacter,
+        personaParty: inputs.personaParty,
       );
 
   // Resolve template tokens used by preset prompts (SillyTavern's standard
@@ -852,10 +864,13 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   for (final m in windowed) {
     if (m.id == inputs.inFlightMessageId) continue;
     // Wave CY.18.157: substitute {{user}}/{{char}} in the message BODY too.
+    // Persona party: {{user}} = the joined roster (personaUserName), the ONE
+    // canonical value everywhere in the prompt — derives to the single
+    // persona's name off-party, so classic chats are byte-identical.
     final txt = fillNamePlaceholders(
       m.text,
       charName: character?.name,
-      personaName: persona?.name,
+      personaName: personaUserName,
     );
     switch (m.kind) {
       case MessageKind.user:
@@ -1007,10 +1022,13 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // arms). The note is name-filled by the pass below like every other turn.
   final guidedTurns = injectGuide(turns, inputs.guideNote, inputs.guidePosition);
 
+  // Persona party: the final global pass fills {{user}} with the SAME joined
+  // roster the marker fill used — one canonical value across the whole
+  // prompt (derives to the single persona's name off-party, byte-identical).
   String nameFill(String s) => fillNamePlaceholders(
         s,
         charName: character?.name,
-        personaName: persona?.name,
+        personaName: personaUserName,
       );
   final filledTurns = [
     // Preserve imageDataUrls — history turns can carry inline images for

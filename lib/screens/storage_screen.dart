@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -225,13 +226,19 @@ class _StorageScreenState extends State<StorageScreen> {
           ),
           const SizedBox(height: 16),
           // Wave CY.18.214: Developer / Diagnostics — opt-in raw LLM
-          // request+response log (export-only, no in-app viewer in v1).
-          // OFF by default. When ON, every real LLM call is appended to a
-          // local JSONL the user can export to debug a session (or hand to
-          // an agent). NEVER contains the API key (it rides the auth
-          // header, not the request body).
-          _LlmDebugLogCard(),
-          const SizedBox(height: 16),
+          // request+response log. OFF by default. When ON, every real LLM
+          // call is appended to a local JSONL, readable in-app via "View
+          // log" or exportable. NEVER contains the API key (it rides the
+          // auth header, not the request body).
+          //
+          // Web audit 2026-07-03 (LOW): the log is deliberately inert in a
+          // browser (record() no-ops on kIsWeb — no local file system), so
+          // showing the card there promises a capability that can't work.
+          // Hide it on web instead of teasing a forever-empty viewer.
+          if (!kIsWeb) ...[
+            _LlmDebugLogCard(),
+            const SizedBox(height: 16),
+          ],
           // Wave CY.18.191: wrap the bare button in a card with a
           // description so users can distinguish it from the factory
           // reset in Backup & Restore. Copy only — no logic change.

@@ -2313,6 +2313,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final attachedBookCount = collectBoundLorebooks(
       chat: chat,
       persona: persona,
+      personaParty: personaParty,
       lookupBook: store.lorebookById,
       lookupCharacter: store.characterById,
       responderId: responderId,
