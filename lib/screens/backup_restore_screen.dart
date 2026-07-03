@@ -1008,126 +1008,137 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     s.creatorPresets.insert(0, buildLockedDefaultCreatorPreset());
     s.activeCreatorPresetId ??= lockedDefaultCreatorPresetId;
 
-    // Wave CY.18.42: reference integrity sweep. A backup can carry
-    // `activePersonaId`, `activeProviderId`, etc. pointing at ids that
-    // weren't included in (or got filtered out of) the restored
-    // collections. Leaving those dangling crashes downstream code
-    // (chat screen tries to resolve the persona, gets null, blanks
-    // out the chat header — at best). Null out any id that doesn't
-    // actually resolve to an item that survived the restore.
-    if (s.activeProviderId != null &&
-        !s.providers.any((p) => p.id == s.activeProviderId)) {
-      s.activeProviderId = null;
-    }
-    if (s.creatorProviderId != null &&
-        !s.providers.any((p) => p.id == s.creatorProviderId)) {
-      s.creatorProviderId = null;
-    }
-    if (s.visionProviderId != null &&
-        !s.providers.any((p) => p.id == s.visionProviderId)) {
-      s.visionProviderId = null;
-    }
-    if (s.impersonateProviderId != null &&
-        !s.providers.any((p) => p.id == s.impersonateProviderId)) {
-      s.impersonateProviderId = null;
-    }
-    if (s.guideProviderId != null &&
-        !s.providers.any((p) => p.id == s.guideProviderId)) {
-      s.guideProviderId = null;
-    }
-    if (s.activePersonaId != null &&
-        !s.personas.any((p) => p.id == s.activePersonaId)) {
-      s.activePersonaId = null;
-    }
-    if (s.activePresetId != null &&
-        !s.presets.any((p) => p.id == s.activePresetId)) {
-      s.activePresetId = lockedDefaultPresetId;
-    }
-    if (s.activeCreatorPresetId != null &&
-        !s.creatorPresets.any((p) => p.id == s.activeCreatorPresetId)) {
-      s.activeCreatorPresetId = lockedDefaultCreatorPresetId;
-    }
-    if (s.activeCreatorSessionId != null &&
-        !s.creatorSessions
-            .any((cs) => cs.id == s.activeCreatorSessionId)) {
-      s.activeCreatorSessionId = null;
-    }
+    // Waves CY.18.42/43: reference integrity sweep — extracted to the
+    // top-level [pruneDanglingBackupRefs] (2026-07-03) so the rules are
+    // unit-testable (test/backup_integrity_sweep_test.dart).
+    pruneDanglingBackupRefs(s);
 
-    // Wave CY.18.43: deeper integrity sweep — sub-references inside
-    // collections. Wave CY.18.42 only swept top-level singletons
-    // (`activeProviderId`, etc.) but a backup can also contain:
-    //   - chat.personaId / chat.presetId pointing at items that
-    //     weren't included
-    //   - chat.message.characterId pointing at a character missing
-    //     from this backup (group-chat attribution silently breaks)
-    //   - Character.lorebookIds / Persona.lorebookIds with dangling
-    //     book ids (chat injection silently skips them)
-    //   - Chat.attachedLorebookIds / disabledInheritedLorebookIds
-    //     with dangling ids (inheritance behaviour goes sideways)
-    //   - Chat.characterIds containing ids missing from
-    //     characterSnapshots OR from the characters collection
-    //
-    // Each dangling id either gets nulled (single-value refs) or
-    // filtered out of its list (multi-value refs). Lossy on purpose:
-    // the alternative is the chat opening to a blank header / no
-    // injection / no attribution and the user not knowing why.
-    final providerIds = s.providers.map((p) => p.id).toSet();
-    final characterIds = s.characters.map((c) => c.id).toSet();
-    final personaIds = s.personas.map((p) => p.id).toSet();
-    final lorebookIds = s.lorebooks.map((b) => b.id).toSet();
-    final presetIds = s.presets.map((p) => p.id).toSet();
+    s.notifyAndPersist();
+  }
+}
 
-    for (final c in s.characters) {
-      c.lorebookIds
-          .removeWhere((id) => !lorebookIds.contains(id));
-    }
-    for (final p in s.personas) {
-      p.lorebookIds
-          .removeWhere((id) => !lorebookIds.contains(id));
-    }
-    for (final chat in s.chats) {
-      // characterIds — keep only ones we still have in the library
-      // OR that have a snapshot frozen on this chat (a snapshot is
-      // self-contained, the library entry is optional).
-      chat.characterIds.removeWhere((id) =>
-          !characterIds.contains(id) &&
-          !chat.characterSnapshots.containsKey(id));
-      // Snapshot map: prune entries whose id was dropped above.
-      chat.characterSnapshots
-          .removeWhere((id, _) => !chat.characterIds.contains(id));
-      // personaId — null if missing.
-      if (chat.personaId != null &&
-          !personaIds.contains(chat.personaId)) {
-        chat.personaId = null;
+// ---------------------------------------------------------------------------
+// Waves CY.18.42/43: reference integrity sweep. A backup can carry ids
+// pointing at items that weren't included in (or got filtered out of) the
+// restored collections. Leaving those dangling crashes downstream code
+// (chat screen tries to resolve the persona, gets null, blanks out the chat
+// header — at best). Single-value refs get nulled, multi-value refs get
+// filtered. Lossy on purpose: the alternative is the chat opening to a blank
+// header / no injection / no attribution and the user not knowing why.
+//
+// Top-level (2026-07-03) so the rules are unit-testable without pumping a
+// widget — see test/backup_integrity_sweep_test.dart.
+
+/// Null/filter every reference in [s] that no longer resolves after a
+/// restore. Does NOT notify/persist — the caller does.
+void pruneDanglingBackupRefs(AppStore s) {
+  // ── Wave CY.18.42: top-level singletons. ─────────────────────────────
+  if (s.activeProviderId != null &&
+      !s.providers.any((p) => p.id == s.activeProviderId)) {
+    s.activeProviderId = null;
+  }
+  if (s.creatorProviderId != null &&
+      !s.providers.any((p) => p.id == s.creatorProviderId)) {
+    s.creatorProviderId = null;
+  }
+  if (s.visionProviderId != null &&
+      !s.providers.any((p) => p.id == s.visionProviderId)) {
+    s.visionProviderId = null;
+  }
+  if (s.impersonateProviderId != null &&
+      !s.providers.any((p) => p.id == s.impersonateProviderId)) {
+    s.impersonateProviderId = null;
+  }
+  if (s.guideProviderId != null &&
+      !s.providers.any((p) => p.id == s.guideProviderId)) {
+    s.guideProviderId = null;
+  }
+  if (s.activePersonaId != null &&
+      !s.personas.any((p) => p.id == s.activePersonaId)) {
+    s.activePersonaId = null;
+  }
+  if (s.activePresetId != null &&
+      !s.presets.any((p) => p.id == s.activePresetId)) {
+    s.activePresetId = lockedDefaultPresetId;
+  }
+  if (s.activeCreatorPresetId != null &&
+      !s.creatorPresets.any((p) => p.id == s.activeCreatorPresetId)) {
+    s.activeCreatorPresetId = lockedDefaultCreatorPresetId;
+  }
+  if (s.activeCreatorSessionId != null &&
+      !s.creatorSessions.any((cs) => cs.id == s.activeCreatorSessionId)) {
+    s.activeCreatorSessionId = null;
+  }
+
+  // ── Wave CY.18.43: sub-references inside collections. ────────────────
+  final characterIds = s.characters.map((c) => c.id).toSet();
+  final personaIds = s.personas.map((p) => p.id).toSet();
+  final lorebookIds = s.lorebooks.map((b) => b.id).toSet();
+  final presetIds = s.presets.map((p) => p.id).toSet();
+
+  for (final c in s.characters) {
+    c.lorebookIds.removeWhere((id) => !lorebookIds.contains(id));
+  }
+  for (final p in s.personas) {
+    p.lorebookIds.removeWhere((id) => !lorebookIds.contains(id));
+  }
+  for (final chat in s.chats) {
+    // characterIds — keep only ones we still have in the library OR that
+    // have a snapshot frozen on this chat (a snapshot is self-contained,
+    // the library entry is optional).
+    chat.characterIds.removeWhere((id) =>
+        !characterIds.contains(id) &&
+        !chat.characterSnapshots.containsKey(id));
+    // Snapshot map: prune entries whose id was dropped above.
+    chat.characterSnapshots
+        .removeWhere((id, _) => !chat.characterIds.contains(id));
+    // Persona-party roster (2026-07-03 / I-3): prune dangling members,
+    // mirroring setChatPersonaParty's collapse rule (>1 live → party stays
+    // with personaId re-anchored to the first live member, exactly 1 →
+    // collapse to a classic single-persona chat, 0 → the singular rule
+    // below decides). The sentinel is never legitimate INSIDE a roster
+    // (the setter filters it on entry), so it counts as dangling here.
+    if (chat.personaIds.isNotEmpty) {
+      final live = [
+        for (final id in chat.personaIds)
+          if (id != kExplicitNoPersonaId && personaIds.contains(id)) id
+      ];
+      if (live.length > 1) {
+        chat.personaIds = live;
+        chat.personaId = live.first;
+      } else {
+        chat.personaIds = [];
+        if (live.isNotEmpty) chat.personaId = live.first;
       }
-      // presetId — null if missing (chat falls back to the active
-      // preset / locked default at runtime).
-      if (chat.presetId != null &&
-          !presetIds.contains(chat.presetId)) {
-        chat.presetId = null;
-      }
-      // Lorebook bindings — filter dangling ids in both lists.
-      chat.attachedLorebookIds
-          .removeWhere((id) => !lorebookIds.contains(id));
-      chat.disabledInheritedLorebookIds
-          .removeWhere((id) => !lorebookIds.contains(id));
-      // Per-message characterId references (group chat attribution).
-      for (final m in chat.messages) {
-        if (m.characterId != null && m.characterId!.isNotEmpty) {
-          final stillResolves = characterIds.contains(m.characterId) ||
-              chat.characterSnapshots.containsKey(m.characterId);
-          if (!stillResolves) {
-            m.characterId = null;
-          }
+    }
+    // personaId — null if missing. The explicit-no-persona sentinel is NOT
+    // dangling: it never resolves by design, and nulling it would silently
+    // flip "no persona" into "inherit the global active persona" on every
+    // restore (pre-2026-07-03 bug).
+    if (chat.personaId != null &&
+        chat.personaId != kExplicitNoPersonaId &&
+        !personaIds.contains(chat.personaId)) {
+      chat.personaId = null;
+    }
+    // presetId — null if missing (chat falls back to the active preset /
+    // locked default at runtime).
+    if (chat.presetId != null && !presetIds.contains(chat.presetId)) {
+      chat.presetId = null;
+    }
+    // Lorebook bindings — filter dangling ids in both lists.
+    chat.attachedLorebookIds.removeWhere((id) => !lorebookIds.contains(id));
+    chat.disabledInheritedLorebookIds
+        .removeWhere((id) => !lorebookIds.contains(id));
+    // Per-message characterId references (group chat attribution).
+    for (final m in chat.messages) {
+      if (m.characterId != null && m.characterId!.isNotEmpty) {
+        final stillResolves = characterIds.contains(m.characterId) ||
+            chat.characterSnapshots.containsKey(m.characterId);
+        if (!stillResolves) {
+          m.characterId = null;
         }
       }
     }
-    // Unused locals guard — `providerIds` is computed for symmetry /
-    // future extension (provider override fields on chats / sessions
-    // aren't currently per-collection but might land here later).
-    providerIds.length;
-
-    s.notifyAndPersist();
   }
 }
 
