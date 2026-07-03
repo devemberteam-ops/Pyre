@@ -104,6 +104,69 @@ void main() {
     });
   });
 
+  group('AppStore.setChatPersonaParty', () {
+    AppStore storeWithPersonas(List<String> ids) {
+      final store = AppStore(storage: _NoopBackend());
+      for (final id in ids) {
+        store.personas.add(Persona(
+            id: id, name: id, description: 'x', createdAt: 0, updatedAt: 0));
+      }
+      return store;
+    }
+
+    test('>1 live persona → a party (personaIds set, primary = first)',
+        () async {
+      final store = storeWithPersonas(['a', 'b']);
+      final chat = Chat(id: 'c1', characterIds: const ['ch']);
+      store.chats.add(chat);
+      store.setChatPersonaParty('c1', ['a', 'b']);
+      expect(chat.personaIds, ['a', 'b']);
+      expect(chat.personaId, 'a');
+      expect(chat.isPersonaParty, isTrue);
+      expect(chat.mtime, greaterThan(0));
+      await store.flushPersist();
+    });
+
+    test('exactly 1 → collapses to a single-persona chat (no party)',
+        () async {
+      final store = storeWithPersonas(['a', 'b']);
+      final chat = Chat(
+          id: 'c1', characterIds: const ['ch'], personaIds: ['a', 'b']);
+      store.chats.add(chat);
+      store.setChatPersonaParty('c1', ['a']);
+      expect(chat.personaIds, isEmpty);
+      expect(chat.personaId, 'a');
+      expect(chat.isPersonaParty, isFalse);
+      await store.flushPersist();
+    });
+
+    test('drops deleted / duplicate / sentinel ids', () async {
+      final store = storeWithPersonas(['a', 'b']);
+      store.personas.add(Persona(
+          id: 'dead',
+          name: 'dead',
+          description: 'x',
+          deleted: true,
+          createdAt: 0,
+          updatedAt: 0));
+      final chat = Chat(id: 'c1', characterIds: const ['ch']);
+      store.chats.add(chat);
+      store.setChatPersonaParty('c1', ['a', 'a', 'dead', 'b']);
+      expect(chat.personaIds, ['a', 'b']); // deduped, live only
+      await store.flushPersist();
+    });
+
+    test('empty selection → explicit no-persona', () async {
+      final store = storeWithPersonas(['a']);
+      final chat = Chat(id: 'c1', characterIds: const ['ch'], personaId: 'a');
+      store.chats.add(chat);
+      store.setChatPersonaParty('c1', const []);
+      expect(chat.personaIds, isEmpty);
+      expect(chat.personaId, kExplicitNoPersonaId);
+      await store.flushPersist();
+    });
+  });
+
   group('buildChatPrompt — party mode joint scene', () {
     test(
         'partyMode true + >1 member assembles ALL member cards + the joint '

@@ -3050,6 +3050,35 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
+  /// Persona party (2026-07): set the roster of the user's active personas for
+  /// a chat. Filters to LIVE (non-deleted) ids, order-preserving + deduped.
+  /// - >1 live → a persona PARTY (`personaIds` set; `personaId` = first, so the
+  ///   backdrop + the builder's `persona != null` gate stay sane).
+  /// - exactly 1 → collapses to the classic single-persona chat.
+  /// - 0 → explicit "no persona".
+  /// Bumps mtime so the choice syncs like every other per-chat setting.
+  void setChatPersonaParty(String chatId, List<String> personaIds) {
+    final chat = _chatById(chatId);
+    if (chat == null) return;
+    final seen = <String>{};
+    final live = <String>[];
+    for (final id in personaIds) {
+      if (id == kExplicitNoPersonaId) continue;
+      if (!seen.add(id)) continue;
+      if (personas.any((p) => p.id == id && !p.deleted)) live.add(id);
+    }
+    if (live.length > 1) {
+      chat.personaIds = live;
+      chat.personaId = live.first;
+    } else {
+      chat.personaIds = [];
+      chat.personaId = live.isNotEmpty ? live.first : kExplicitNoPersonaId;
+    }
+    chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
+    chat.mtime = chat.updatedAt;
+    _bump();
+  }
+
   /// Mega-audit 2026-06-05 (F1): single funnel for editing per-chat
   /// SUB-STATE that lives inside [Chat] but is mutated outside the
   /// dedicated message/member setters — memory checkpoints, Live Sheet
