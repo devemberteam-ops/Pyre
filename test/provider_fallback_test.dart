@@ -65,4 +65,45 @@ void main() {
       expect(clean, isNull);
     });
   });
+
+  // Web-send fix (2026-07-03): a paired WEB profile has no local providers by
+  // design (the hub proxies with its OWN), but the send-path gates demand a
+  // non-null provider — the synthetic hub-proxy provider satisfies them.
+  group('effectiveActiveProvider (web hub-proxy fallback)', () {
+    test('a resolved local provider always wins (any platform)', () {
+      final local = _p('mine');
+      expect(
+          effectiveActiveProvider(local: local, isWeb: true, isPaired: true),
+          same(local));
+      expect(
+          effectiveActiveProvider(
+              local: local, isWeb: false, isPaired: false),
+          same(local));
+    });
+
+    test('web + paired + no local → the synthetic hub proxy', () {
+      final r =
+          effectiveActiveProvider(local: null, isWeb: true, isPaired: true);
+      expect(r, isNotNull);
+      expect(r!.id, '__hub_proxy__');
+      expect(r.name, 'PC (paired)');
+    });
+
+    test(
+        'web UNPAIRED → null (the pairing screen is the fix, not a ghost '
+        'provider)', () {
+      expect(
+          effectiveActiveProvider(local: null, isWeb: true, isPaired: false),
+          isNull);
+    });
+
+    test('native → null, byte-identical to the old getter', () {
+      expect(
+          effectiveActiveProvider(local: null, isWeb: false, isPaired: true),
+          isNull);
+      expect(
+          effectiveActiveProvider(local: null, isWeb: false, isPaired: false),
+          isNull);
+    });
+  });
 }

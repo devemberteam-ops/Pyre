@@ -47,3 +47,30 @@ ApiProvider? pickCleanAlternative({
   }
   return null;
 }
+
+/// Web + paired-to-a-hub: browser chats stream through the hub's
+/// `/llm/stream` and the HOST proxies with its OWN provider — the browser
+/// needs no local provider record (1.1.2 even deliberately omits providerId
+/// from the proxy body). But every send-path gate demands a non-null
+/// provider, so a fresh web profile died with "No provider configured"
+/// before ever reaching the proxy. This synthetic satisfies the gate + the
+/// proxy's kind-based timeout heuristics only; it never enters `providers`,
+/// never persists, never syncs.
+ApiProvider hubProxyProvider() => ApiProvider(
+      id: '__hub_proxy__',
+      name: 'PC (paired)',
+    );
+
+/// Pure seam for [AppStore.activeProvider]'s web fallback (kIsWeb is a
+/// compile-time const, so the branch itself can't be driven in VM tests —
+/// this function can). Native behavior is untouched: a resolved local
+/// provider always wins, and off-web the fallback never fires.
+ApiProvider? effectiveActiveProvider({
+  required ApiProvider? local,
+  required bool isWeb,
+  required bool isPaired,
+}) {
+  if (local != null) return local;
+  if (isWeb && isPaired) return hubProxyProvider();
+  return null;
+}

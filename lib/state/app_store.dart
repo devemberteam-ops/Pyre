@@ -15,6 +15,7 @@ import '../services/attachment_store.dart';
 import '../services/chat_api.dart' show warmUpProvider;
 import '../services/example_seed.dart';
 import '../services/live_sheet.dart' show ensureLiveSheetSeed;
+import '../services/lan_client.dart';
 import '../services/provider_fallback.dart';
 import '../services/regex_rules.dart';
 import '../services/secure_keys.dart';
@@ -1600,11 +1601,24 @@ class AppStore extends ChangeNotifier {
   // Providers
 
   ApiProvider? get activeProvider {
-    if (activeProviderId == null) return null;
-    for (final p in providers) {
-      if (p.id == activeProviderId) return p;
+    ApiProvider? local;
+    if (activeProviderId != null) {
+      for (final p in providers) {
+        if (p.id == activeProviderId) {
+          local = p;
+          break;
+        }
+      }
     }
-    return null;
+    // Web + paired: fall back to the synthetic hub-proxy provider so every
+    // send-path gate passes and the chat streams via the host's /llm/stream
+    // (the host uses its OWN provider — see effectiveActiveProvider). Native
+    // behavior is byte-identical (fallback never fires off-web).
+    return effectiveActiveProvider(
+      local: local,
+      isWeb: kIsWeb,
+      isPaired: LanClient.instance.isPaired,
+    );
   }
 
   // ── Wave CY.18.99: smart provider fallback ─────────────────────────
