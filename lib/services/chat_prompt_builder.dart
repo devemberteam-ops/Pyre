@@ -89,8 +89,15 @@ class ChatPromptInputs {
   final Character? character;
 
   /// The active persona for this chat (honours `chat.personaId`), or null
-  /// for an explicit no-persona chat.
+  /// for an explicit no-persona chat. In a persona party this is the PRIMARY
+  /// persona (still drives the backdrop + any single-persona fallback).
   final Persona? persona;
+
+  /// Persona party (2026-07): the FULL roster of the user's active personas.
+  /// When it holds >1, the user's side is a GROUP — the persona block becomes
+  /// [buildJointPersonaBlock] and `{{user}}` resolves to the joined names.
+  /// Empty / single leaves every existing single-persona prompt byte-identical.
+  final List<Persona> personaParty;
 
   /// The active chat preset (`store.activePreset`), or null.
   final Preset? preset;
@@ -181,6 +188,7 @@ class ChatPromptInputs {
     required this.chat,
     required this.character,
     required this.persona,
+    this.personaParty = const [],
     required this.preset,
     required this.responderId,
     required this.beatsCap,
@@ -359,6 +367,47 @@ String buildPartyContinueNudge({
       '$userName. Output only the continuation, no preamble.)';
 }
 
+/// Persona party (2026-07, OWNER DECISION): the joint block describing the
+/// user's OWN group of personas, injected where a single persona's card would
+/// go — the user-side mirror of [buildJointPartyBlock]. Each persona
+/// contributes its name + description (+ dialogue examples), then ONE
+/// owner-tunable collective instruction frames the user's messages as the
+/// group's shared action. An empty roster returns '' so the single-persona
+/// path stays byte-identical.
+String buildJointPersonaBlock(List<Persona> personas) {
+  final active = personas.where((p) => p.name.trim().isNotEmpty).toList();
+  if (active.isEmpty) return '';
+  final buf = StringBuffer();
+  for (final p in active) {
+    buf.writeln('--- ${p.name} ---');
+    if (p.description.trim().isNotEmpty) {
+      buf.writeln('\n${p.description.trim()}');
+    }
+    if (p.dialogueExamples.trim().isNotEmpty) {
+      buf.writeln("\n${p.name}'s dialogue style (examples — match this "
+          "cadence when writing or quoting ${p.name}):");
+      buf.writeln(p.dialogueExamples.trim());
+    }
+    buf.writeln();
+  }
+  // -----------------------------------------------------------------
+  // OWNER-TUNABLE: the collective instruction — the "soul" of persona party.
+  // It frames the user's side as a GROUP whose messages are the party's
+  // shared action (owner decision: "a mensagem representa o grupo todo").
+  // First draft; tune freely — this is the ONLY place persona-party's
+  // framing lives.
+  // -----------------------------------------------------------------
+  final names = active.map((p) => p.name).join(', ');
+  buf.writeln(
+    'The user plays a group of characters: $names. The user\'s messages '
+    'represent this group\'s collective actions and dialogue — read from '
+    'each message which member acts or speaks, and treat the group as present '
+    'together in the scene. Never take over, speak, act, think, or decide for '
+    'this group; it is the user\'s party.',
+  );
+  return buf.toString();
+}
+
 ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   final chat = inputs.chat;
   final character = inputs.character;
@@ -426,6 +475,20 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // `{{description}}` et al.) and the marker-less `injectCardFallback` path
   // need it.
   final isPartyScene = inputs.partyMode && chat.characterIds.length > 1;
+  // Persona party (2026-07): the user's side is a GROUP. When active, the
+  // persona card becomes the joint block and `{{user}}` resolves to the joined
+  // names. Both derived values equal the single-persona values when NOT a
+  // party, so every existing prompt stays byte-identical.
+  final isPersonaParty = inputs.personaParty.length > 1;
+  final personaBlockText = isPersonaParty
+      ? buildJointPersonaBlock(inputs.personaParty)
+      : (persona?.description ?? '');
+  final personaUserName = isPersonaParty
+      ? inputs.personaParty
+          .map((p) => p.name)
+          .where((n) => n.trim().isNotEmpty)
+          .join(', ')
+      : (persona?.name ?? 'You');
 
   // Party mode: every member's card, clearly delimited, followed by the
   // OWNER-TUNABLE joint-scene instruction — see the top-level
@@ -481,14 +544,14 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
             .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false),
                 'Narrator')
             .replaceAll(RegExp(r'\{\{user\}\}', caseSensitive: false),
-                persona?.name ?? 'You')
+                personaUserName)
             .replaceAll(RegExp(r'\{\{description\}\}', caseSensitive: false),
                 jointPartyBlock().trim())
             .replaceAll(
                 RegExp(r'\{\{personality\}\}', caseSensitive: false), '')
             .replaceAll(RegExp(r'\{\{scenario\}\}', caseSensitive: false), '')
             .replaceAll(RegExp(r'\{\{persona\}\}', caseSensitive: false),
-                persona?.description ?? '')
+                personaBlockText)
             .replaceAll(
                 RegExp(r'\{\{mesExample\}\}', caseSensitive: false), '')
             .replaceAll(RegExp(r'\{\{wiBefore\}\}', caseSensitive: false),
@@ -498,7 +561,7 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
             .replaceAll(RegExp(r'\{\{char\}\}', caseSensitive: false),
                 character?.name ?? '')
             .replaceAll(RegExp(r'\{\{user\}\}', caseSensitive: false),
-                persona?.name ?? 'You')
+                personaUserName)
             .replaceAll(RegExp(r'\{\{description\}\}', caseSensitive: false),
                 character?.description ?? '')
             .replaceAll(RegExp(r'\{\{personality\}\}', caseSensitive: false),
@@ -506,7 +569,7 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
             .replaceAll(RegExp(r'\{\{scenario\}\}', caseSensitive: false),
                 character?.scenario ?? '')
             .replaceAll(RegExp(r'\{\{persona\}\}', caseSensitive: false),
-                persona?.description ?? '')
+                personaBlockText)
             .replaceAll(RegExp(r'\{\{mesExample\}\}', caseSensitive: false),
                 character?.mesExample ?? '')
             .replaceAll(RegExp(r'\{\{wiBefore\}\}', caseSensitive: false),
@@ -613,16 +676,23 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     ));
     if (persona != null) {
       final personaBuf = StringBuffer();
-      personaBuf.writeln(
-        '\nThe user appears as "${persona.name}". ${persona.description}',
-      );
-      // Wave CX.1: surface persona's dialogue examples (user's voice).
-      if (persona.dialogueExamples.trim().isNotEmpty) {
+      if (isPersonaParty) {
+        // Persona party: the whole roster + collective instruction replaces
+        // the single "The user appears as X" line (same marker-less slot).
         personaBuf.writeln(
-          '\n${persona.name}\'s dialogue style (examples — match this cadence when '
-          'writing or quoting ${persona.name}):',
+            '\n${buildJointPersonaBlock(inputs.personaParty).trimRight()}');
+      } else {
+        personaBuf.writeln(
+          '\nThe user appears as "${persona.name}". ${persona.description}',
         );
-        personaBuf.writeln(persona.dialogueExamples.trim());
+        // Wave CX.1: surface persona's dialogue examples (user's voice).
+        if (persona.dialogueExamples.trim().isNotEmpty) {
+          personaBuf.writeln(
+            '\n${persona.name}\'s dialogue style (examples — match this cadence when '
+            'writing or quoting ${persona.name}):',
+          );
+          personaBuf.writeln(persona.dialogueExamples.trim());
+        }
       }
       segments.add(PromptSegment(
           PromptSegmentKind.persona, personaBuf.toString().trimRight()));

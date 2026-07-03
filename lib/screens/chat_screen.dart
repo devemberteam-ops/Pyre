@@ -2156,7 +2156,20 @@ class _ChatScreenState extends State<ChatScreen> {
         : (chat.characterSnapshots[responderId] ??
             store.characterById(responderId));
     // Wave CX: honour chat.personaId, not the global default.
-    final persona = _chatPersona(store, chat);
+    final basePersona = _chatPersona(store, chat);
+    // Persona party: resolve the FULL roster of the user's active personas.
+    // Empty unless the chat is actually a persona party, so single-persona
+    // chats pass [] and the assembled prompt stays byte-identical.
+    final personaParty = chat.isPersonaParty
+        ? [
+            for (final id in chat.effectivePersonaIds) store.personaById(id)
+          ].whereType<Persona>().toList()
+        : const <Persona>[];
+    // In a party the primary persona is the first roster member (drives the
+    // backdrop + the builder's `persona != null` gate); otherwise the single
+    // chat persona, unchanged.
+    final persona =
+        personaParty.isNotEmpty ? personaParty.first : basePersona;
     final preset = store.activePreset;
 
     // Motor Fase 1 (Slice A / Tier-1 #9): the number of BOUND books, only
@@ -2218,6 +2231,7 @@ class _ChatScreenState extends State<ChatScreen> {
       chat: chat,
       character: character,
       persona: persona,
+      personaParty: personaParty,
       preset: preset,
       responderId: responderId,
       beatsCap: store.scriptSettings.beatsCap,

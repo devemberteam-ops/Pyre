@@ -888,6 +888,14 @@ class Chat {
   List<String> characterIds;
   Map<String, Character> characterSnapshots; // frozen per chat
   String? personaId;
+  /// Persona party (2026-07): the roster of the user's OWN personas active in
+  /// this chat. When it holds >1 id the user's side is a GROUP — every
+  /// persona's card feeds the prompt (via `buildJointPersonaBlock`) and the
+  /// user's messages represent the group's collective action. Empty / single
+  /// means the classic single-persona chat (see [effectivePersonaIds]).
+  /// Defaults to empty and is omitted from `toJson` when empty, so every
+  /// existing chat stays byte-identical.
+  List<String> personaIds;
   List<String> attachedLorebookIds;
   /// Wave CD: book ids that come from a character or persona binding
   /// but the user has DISABLED for THIS specific chat. Used by
@@ -986,6 +994,7 @@ class Chat {
     required this.characterIds,
     Map<String, Character>? characterSnapshots,
     this.personaId,
+    List<String>? personaIds,
     List<String>? attachedLorebookIds,
     List<String>? disabledInheritedLorebookIds,
     this.presetId,
@@ -1016,6 +1025,7 @@ class Chat {
     this.title,
     this.partyMode = false,
   })  : characterSnapshots = characterSnapshots ?? {},
+        personaIds = personaIds ?? [],
         attachedLorebookIds = attachedLorebookIds ?? [],
         disabledInheritedLorebookIds = disabledInheritedLorebookIds ?? [],
         messages = messages ?? [],
@@ -1027,6 +1037,18 @@ class Chat {
 
   String? get primaryCharacterId =>
       characterIds.isNotEmpty ? characterIds.first : null;
+
+  /// The persona ids that actually apply to this chat: the explicit
+  /// [personaIds] roster when set, else the single [personaId] (so existing
+  /// single-persona chats keep working with no migration), else empty.
+  List<String> get effectivePersonaIds => personaIds.isNotEmpty
+      ? personaIds
+      : (personaId != null ? [personaId!] : const []);
+
+  /// True when the user's side is a GROUP (more than one active persona) —
+  /// drives the joint-persona prompt block + the "message = whole group"
+  /// framing. A single (or no) persona is the classic path.
+  bool get isPersonaParty => effectivePersonaIds.length > 1;
 
   /// The user-facing chat title: the manual [title] when set, else the
   /// caller-supplied derived [fallback] (e.g. the character name or
@@ -1077,6 +1099,7 @@ class Chat {
       characterIds: _jStringList(j['characterIds']),
       characterSnapshots: snaps,
       personaId: j['personaId'] as String?,
+      personaIds: _jStringList(j['personaIds']),
       attachedLorebookIds: _jStringList(j['attachedLorebookIds']),
       disabledInheritedLorebookIds:
           _jStringList(j['disabledInheritedLorebookIds']),
@@ -1165,6 +1188,9 @@ class Chat {
         // Party mode: only persist when on, so every chat that never touched
         // this feature (the overwhelming default) stays byte-clean.
         if (partyMode) 'partyMode': true,
+        // Persona party: only persist the roster when actually set, so every
+        // single-persona chat stays byte-clean.
+        if (personaIds.isNotEmpty) 'personaIds': personaIds,
       };
 }
 

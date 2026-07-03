@@ -441,6 +441,146 @@ void main() {
     });
   });
 
+  // Persona party end-to-end: personaParty flows through the REAL builder into
+  // the assembled turns (fallback / marker-less path), and a single persona
+  // keeps the classic "The user appears as X" line (byte-neutral branch).
+  group('buildChatPrompt — persona party', () {
+    Character char() => Character(
+          id: 'pp-char',
+          name: 'Sera',
+          description: 'A quiet blacksmith.',
+          createdAt: 0,
+          updatedAt: 0,
+        );
+    Persona persona(String id, String name, String desc) =>
+        Persona(id: id, name: name, description: desc, createdAt: 0, updatedAt: 0);
+    Message userMsg() => Message(
+          id: 'pp-m1',
+          kind: MessageKind.user,
+          variants: const ['We enter the hall.'],
+          createdAt: 0,
+          mtime: 0,
+        );
+
+    test('persona party assembles the joint persona block + collective '
+        'instruction, not the single "appears as" line', () {
+      final a = persona('pp-a', 'Kael', 'A wandering swordsman.');
+      final b = persona('pp-b', 'Mira', 'A sharp-tongued mage.');
+      final c = char();
+      final chat = Chat(
+        id: 'pp-chat',
+        characterIds: [c.id],
+        characterSnapshots: {c.id: c},
+        personaIds: [a.id, b.id],
+        messages: [userMsg()],
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        character: c,
+        persona: a, // primary
+        personaParty: [a, b],
+        preset: null, // fallback / marker-less path
+        responderId: c.id,
+        beatsCap: 3,
+        lookupCharacter: _charLookup([c]),
+        lookupBook: (_) => null,
+        inFlightMessageId: null,
+      );
+      final text = _serialize(buildChatPrompt(inputs).turns);
+      // Both personas' cards present.
+      expect(text, contains('Kael'));
+      expect(text, contains('A wandering swordsman.'));
+      expect(text, contains('Mira'));
+      expect(text, contains('A sharp-tongued mage.'));
+      // The collective instruction fired, naming the roster.
+      expect(text, contains('Kael, Mira'));
+      expect(text.toLowerCase(), contains('collective'));
+      // The single-persona line is REPLACED, not doubled.
+      expect(text, isNot(contains('The user appears as "Kael".')));
+    });
+
+    test('single persona (no party) keeps the classic "appears as" line', () {
+      final a = persona('pp-a', 'Kael', 'A wandering swordsman.');
+      final c = char();
+      final chat = Chat(
+        id: 'pp-chat-single',
+        characterIds: [c.id],
+        characterSnapshots: {c.id: c},
+        personaId: a.id,
+        messages: [userMsg()],
+        createdAt: 0,
+        updatedAt: 0,
+      );
+      final inputs = ChatPromptInputs(
+        chat: chat,
+        character: c,
+        persona: a,
+        // personaParty defaults to [] → single-persona path, byte-neutral.
+        preset: null,
+        responderId: c.id,
+        beatsCap: 3,
+        lookupCharacter: _charLookup([c]),
+        lookupBook: (_) => null,
+        inFlightMessageId: null,
+      );
+      final text = _serialize(buildChatPrompt(inputs).turns);
+      expect(text, contains('The user appears as "Kael".'));
+      expect(text.toLowerCase(), isNot(contains('collective')));
+    });
+  });
+
+  // Persona party (owner 2026-07): the user's side is a GROUP — every persona
+  // card feeds the prompt + a collective instruction frames the user's
+  // messages as the whole group's action ("a mensagem representa o grupo").
+  group('buildJointPersonaBlock', () {
+    Persona persona(String name, String desc, {String examples = ''}) =>
+        Persona(
+          id: 'p-$name',
+          name: name,
+          description: desc,
+          dialogueExamples: examples,
+        );
+
+    test('empty roster → empty string (single-persona path stays byte-clean)',
+        () {
+      expect(buildJointPersonaBlock(const []), '');
+    });
+
+    test('includes every persona name + description, delimited', () {
+      final block = buildJointPersonaBlock([
+        persona('Kael', 'A wandering swordsman.'),
+        persona('Mira', 'A sharp-tongued mage.'),
+      ]);
+      expect(block, contains('--- Kael ---'));
+      expect(block, contains('A wandering swordsman.'));
+      expect(block, contains('--- Mira ---'));
+      expect(block, contains('A sharp-tongued mage.'));
+    });
+
+    test('collective instruction names the group + frames msgs as the group',
+        () {
+      final block = buildJointPersonaBlock([
+        persona('Kael', 'x'),
+        persona('Mira', 'y'),
+      ]);
+      // roster named in the instruction
+      expect(block, contains('Kael, Mira'));
+      // frames the user's message as the whole group's action
+      expect(block.toLowerCase(), contains('collective'));
+      // never takes over the user's group
+      expect(block.toLowerCase(), contains('never'));
+    });
+
+    test('surfaces dialogue examples when present', () {
+      final block = buildJointPersonaBlock([
+        persona('Kael', 'x', examples: '{{user}}: For the crown!'),
+      ]);
+      expect(block, contains('For the crown!'));
+    });
+  });
+
   // Group chat header (owner: "essa informação não é atualizada no header").
   group('groupChatHeaderTitle', () {
     test('joins member names with " · "', () {
