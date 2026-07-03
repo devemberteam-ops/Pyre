@@ -1231,6 +1231,31 @@ String buildImpersonationPrompt({
           'message may include actions, thoughts, and dialogue from either '
           'or all of them, interacting with each other and the scene.'
       : '';
+  // Group formatting (owner live-test 2026-07: falas vieram SEM aspas e
+  // coladas na ação — sem separação visual fala/ação, sem atribuição). The
+  // strongest lever against a sloppy model is a CONCRETE example in the
+  // roster's own names: one name-anchored action paragraph + one QUOTED
+  // dialogue paragraph per member. Attribution rides adjacency (the action
+  // names the actor right before their line). Single persona → the classic
+  // example, byte-identical.
+  final goodExample = isPersonaGroup
+      ? '*${personaRoster[0]} glances at the door, leaning forward.*\n\n'
+          '"Did you hear that?"\n\n'
+          '*${personaRoster[1]} crosses their arms, unimpressed.*\n\n'
+          '"It was nothing. Keep your voice down."\n\n'
+      : '*She crosses her arms, eyes narrowing.*\n\n'
+          '"You really expect me to believe that?"\n\n'
+          '*Her foot taps once, twice, against the floorboard.*\n\n';
+  final groupFormatRules = isPersonaGroup
+      ? '- Each member gets their OWN beats: an action paragraph naming '
+          'them, then their quoted dialogue. NEVER merge two members into '
+          'one paragraph.\n'
+          '- EVERY spoken line sits inside double quotes — bare/unquoted '
+          'dialogue is forbidden.\n'
+      : '';
+  final lengthRule = isPersonaGroup
+      ? '- Keep it tight — about one action + one dialogue beat per member.\n'
+      : '- Keep it short — one to three of these blocks total.\n';
   return '[OOC: Drop out of narrator/character voice for ONE reply. '
       'Write the next message from $who\'s perspective '
       'only — what $who would type as their own '
@@ -1249,9 +1274,7 @@ String buildImpersonationPrompt({
       'meta-commentary\n\n'
       'FORMATTING — match the chat\'s established pattern EXACTLY:\n\n'
       'GOOD example (this is the ONLY shape you produce):\n'
-      '*She crosses her arms, eyes narrowing.*\n\n'
-      '"You really expect me to believe that?"\n\n'
-      '*Her foot taps once, twice, against the floorboard.*\n\n'
+      '$goodExample'
       'BAD examples (NEVER produce these):\n'
       '- "*She crosses her arms.* You really expect me to believe that? *Her foot taps.*"  ← asterisks engulfing dialogue\n'
       '- She crosses her arms, narrowing her eyes. "You really expect me to believe that?"  ← actions without asterisks\n'
@@ -1260,7 +1283,8 @@ String buildImpersonationPrompt({
       '- EVERY spoken line is its own paragraph, wrapped in double quotes only — no asterisks around it.\n'
       '- Every action / body language / inner thought is its own paragraph, wrapped in *…* only — no dialogue inside the stars.\n'
       '- Blank line between every action paragraph and every dialogue paragraph. Alternating beats.\n'
-      '- Keep it short — one to three of these blocks total.\n'
+      '$groupFormatRules'
+      '$lengthRule'
       '- Reply with the message body only, no preamble, no "[OOC: " framing.\n\n'
       'CRITICAL — no thinking out loud: output ONLY $who\'s '
       'in-character message. Do NOT write any analysis, planning, a '

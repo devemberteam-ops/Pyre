@@ -250,6 +250,27 @@ void main() {
       );
       expect(p, contains('Write as Orion and Anastasia replying to Vesna.'));
     });
+
+    test(
+        'group formatting: GOOD example uses the REAL roster names, quoted '
+        'dialogue per member, no-merge + no-bare-dialogue rules', () {
+      final p = buildImpersonationPrompt(
+        personaName: 'Orion',
+        speakerName: 'Vesna',
+        personaNames: ['Orion', 'Anastasia'],
+      );
+      // The example is built from the actual roster, one beat each:
+      // a name-anchored action paragraph + a QUOTED dialogue paragraph.
+      expect(p, contains('*Orion glances at the door, leaning forward.*'));
+      expect(p, contains('"Did you hear that?"'));
+      expect(p, contains('*Anastasia crosses their arms, unimpressed.*'));
+      expect(p, contains('"It was nothing. Keep your voice down."'));
+      // Group-specific hard rules.
+      expect(p, contains('NEVER merge two members into one paragraph'));
+      expect(p, contains('bare/unquoted dialogue is forbidden'));
+      // The single-persona example ("She crosses her arms") is replaced.
+      expect(p, isNot(contains('*She crosses her arms, eyes narrowing.*')));
+    });
   });
 
   // ── Guided impersonation prompt assembly (Action 3 "Guide my message") ──
