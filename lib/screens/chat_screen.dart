@@ -503,7 +503,15 @@ class _ChatScreenState extends State<ChatScreen> {
       case ChatBackgroundSource.none:
         return null;
       case ChatBackgroundSource.custom:
-        return customUrl;
+        // 2026-07-03 review (H3): the settings sync deliberately strips the
+        // custom image (it's a large data-url), so a PEER device can receive
+        // source=custom with no local image — which used to blank the whole
+        // backdrop. Fall back to the character avatar (the app's default
+        // look) instead of nothing; the real custom image still wins when it
+        // exists locally.
+        return customUrl ??
+            character?.avatarOriginal ??
+            character?.avatar;
       case ChatBackgroundSource.personaAvatar:
         // Fall back to character avatar if the persona has no image —
         // better than leaving the chat naked and inconsistent.
@@ -1314,10 +1322,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
     _streamMessageId = assistantId;
     final pinnedVariant = _streamVariantIndex;
-    // Thread the in-flight one-shot guide (if any). It survives a smart-
-    // fallback retry of the SAME turn (we keep `_inFlightGuide` set across
-    // retries) and is cleared once the turn settles in `_finishGeneration`-
-    // style cleanup below.
+    // Thread the in-flight one-shot guide (if any). Lifecycle (2026-07-03,
+    // comment made honest): it survives every SAME-TURN re-entry — smart-
+    // fallback retries, context-recovery recursion, and the post-error
+    // snackbar Retry (which is why the ERROR paths deliberately do NOT
+    // clear it) — and is spent when the turn truly settles: a clean finish
+    // with no fallback card offered, the card's "Keep" dismissal, or a
+    // user Stop. The next Send always overwrites it from `_armedGuide`
+    // (possibly to null) as the final backstop.
     //
     // Slice D-3: `_contextTrimWindow` is null on the first attempt against
     // THIS provider (so `_buildTurns`'s own pre-trim read against the
@@ -1627,7 +1639,13 @@ class _ChatScreenState extends State<ChatScreen> {
     unawaited(LlmDebugLog.instance
         .trace('ltm.auto: dispatching (fallbackEligible=$eligible)'));
     _runAutoMemoryChain();
-    if (!eligible) return;
+    if (!eligible) {
+      // Turn settled clean with no fallback card → the one-shot guide is
+      // spent. (Kept through error paths so snackbar-Retry / card re-runs
+      // still carry it — see the lifecycle note in _runGenerationInto.)
+      _inFlightGuide = null;
+      return;
+    }
     final failed = _fallbackChain[_fallbackIndex];
     final next = _fallbackChain[_fallbackIndex + 1];
     ApiProvider? clean;
@@ -1717,7 +1735,11 @@ class _ChatScreenState extends State<ChatScreen> {
       onTryNext: () => _retryWithNextCandidate(useClean: false),
       onTryClean:
           pf.clean == null ? null : () => _retryWithNextCandidate(useClean: true),
-      onKeep: () => setState(() => _pendingFallback = null),
+      onKeep: () => setState(() {
+        _pendingFallback = null;
+        // Keeping the reply settles the turn — the one-shot guide is spent.
+        _inFlightGuide = null;
+      }),
     );
   }
 
@@ -2531,6 +2553,9 @@ class _ChatScreenState extends State<ChatScreen> {
     // so this doesn't change what text Stop sees/keeps).
     _settleStreamingNotifier();
     _clearPendingFallback(); // audit C1
+    // User-terminal: stopping the stream settles the turn — the one-shot
+    // guide is spent (a later Retry after a Stop is a fresh decision).
+    _inFlightGuide = null;
     // Wave CY.7: if the user tapped Stop BEFORE any tokens arrived,
     // the assistant message we pre-created is just dead UI (the
     // "Generating…" placeholder stayed forever). Remove it. If even
@@ -3497,14 +3522,21 @@ class _ChatScreenState extends State<ChatScreen> {
     // model an explicit nudge to match them. The examples are already
     // in the system prompt via _buildTurns, but pointing at them in
     // the OOC line dramatically improves voice-matching consistency.
-    final hasPersonaExamples =
-        persona?.dialogueExamples.trim().isNotEmpty ?? false;
-    final examplesNudge = hasPersonaExamples
-        ? '\n\nMatch $personaName\'s dialogue cadence and voice from the '
-            '"$personaName\'s dialogue style" examples shown in your '
-            'system context. Same diction, same sentence length, same '
-            'kind of action beats.'
-        : '';
+    // 2026-07-03: persona-party aware — every roster member WITH examples is
+    // named (buildJointPersonaBlock already emits each member's style block);
+    // the primary-only nudge was the same family as the personaNames bug.
+    final nudgeNames = chat.isPersonaParty
+        ? [
+            for (final id in chat.effectivePersonaIds)
+              if (store.personaById(id)?.dialogueExamples.trim().isNotEmpty ??
+                  false)
+                store.personaById(id)?.name ?? '',
+          ]
+        : [
+            if (persona?.dialogueExamples.trim().isNotEmpty ?? false)
+              personaName,
+          ];
+    final examplesNudge = buildExamplesNudge(nudgeNames);
     final impPrompt = buildImpersonationPrompt(
       personaName: personaName,
       speakerName: speakerName,
@@ -3575,8 +3607,12 @@ class _ChatScreenState extends State<ChatScreen> {
           _keepAliveStop(); // Wave BM
           if (mounted) {
             setState(() => _generating = false);
+            // 2026-07-03: name the action the user actually tapped — a
+            // "Guide my message" failure used to blame Impersonate.
             messenger.showSnackBar(
-              SnackBar(content: Text('Impersonate failed: $e')),
+              SnackBar(
+                  content: Text(
+                      '${isGuided ? "Guide" : "Impersonate"} failed: $e')),
             );
           }
         },
@@ -3625,7 +3661,9 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (mounted) setState(() => _generating = false);
       messenger.showSnackBar(
-        SnackBar(content: Text('Impersonate failed: $e')),
+        SnackBar(
+            content:
+                Text('${isGuided ? "Guide" : "Impersonate"} failed: $e')),
       );
     }
   }

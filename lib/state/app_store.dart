@@ -2651,6 +2651,13 @@ class AppStore extends ChangeNotifier {
     scriptSettings = ScriptSettings.fromJson(const <String, dynamic>{});
     guideSettings = GuideSettings.fromJson(const <String, dynamic>{});
     uiPrefs = UiPrefs.fromJson(const <String, dynamic>{});
+    // 2026-07-03 review (H2): re-apply the palette WITH the fresh prefs —
+    // without this the OLD theme/accent stayed live until an app restart
+    // while uiPrefs already claimed the defaults.
+    EmberColors.applyTheme(
+      themeId: uiPrefs.activeThemeId,
+      accentArgb: uiPrefs.accentArgb,
+    );
     seenOnboarding = false;
     exampleContentSeeded = false;
     defaultRegexRulesSeeded = false;
@@ -3322,6 +3329,20 @@ class AppStore extends ChangeNotifier {
     regexRules.add(r);
     _bump();
     return r;
+  }
+
+  /// Import-path variant of [addRegexRule] (2026-07-03 review): every import
+  /// mints a fresh id, so re-importing the same file used to stack N
+  /// equivalent enabled copies that all ran. Skips the add when a live
+  /// EQUIVALENT rule already exists; returns true when actually added.
+  /// The editor's explicit "save" keeps using [addRegexRule] — a user
+  /// duplicating a rule on purpose is not an import.
+  bool addRegexRuleIfNew(RegexRule r) {
+    final dup =
+        regexRules.any((x) => !x.deleted && regexRulesEquivalent(x, r));
+    if (dup) return false;
+    addRegexRule(r);
+    return true;
   }
 
   void updateRegexRule(RegexRule r) {

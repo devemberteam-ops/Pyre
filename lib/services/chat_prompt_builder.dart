@@ -1153,6 +1153,36 @@ String guidePerspectivePhrase(GuidePerspective p, String personaName) {
   }
 }
 
+/// PURE assembly of the persona-dialogue-examples nudge appended to the
+/// impersonation instruction (Wave CX.1, extracted + made persona-party-aware
+/// 2026-07-03). [names] = every persona in play that actually HAS dialogue
+/// examples — the `"Name's dialogue style"` blocks are already in the system
+/// context (single persona via the classic persona segment, party via
+/// [buildJointPersonaBlock], which emits one block per member).
+///
+/// A single name produces output byte-identical to the original hardcoded
+/// nudge; empty produces ''. Multiple names reference EVERY member's style
+/// block — the primary-only nudge was the same bug family as the
+/// personaNames impersonate fix (the model matched one member's voice and
+/// blended the rest).
+String buildExamplesNudge(List<String> names) {
+  final active =
+      names.map((n) => n.trim()).where((n) => n.isNotEmpty).toList();
+  if (active.isEmpty) return '';
+  if (active.length == 1) {
+    final n = active.first;
+    return '\n\nMatch $n\'s dialogue cadence and voice from the '
+        '"$n\'s dialogue style" examples shown in your '
+        'system context. Same diction, same sentence length, same '
+        'kind of action beats.';
+  }
+  final refs = active.map((n) => '"$n\'s dialogue style"').join(' and ');
+  return '\n\nMatch each persona\'s dialogue cadence and voice from the '
+      '$refs examples shown in your system context — every member speaks '
+      'in their own voice. Same diction, same sentence length, same kind '
+      'of action beats as each member\'s examples.';
+}
+
 /// PURE assembly of the IMPERSONATION instruction turn ("Impersonate me" and
 /// its guided upgrade "Guide my message"). This is the verbatim move of the
 /// default-prompt string that lived inline in `chat_screen._impersonateMe`,

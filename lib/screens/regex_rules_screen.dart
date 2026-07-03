@@ -210,13 +210,28 @@ class RegexRulesScreen extends StatelessWidget {
                 'script object, an array of scripts, or {regexScripts: […]}).')));
         return;
       }
+      // 2026-07-03 review: skip equivalents (re-importing a file used to
+      // stack duplicate rules that all ran) and surface rules the parser
+      // imported DISABLED (ST-disabled or unsupported ST placements like
+      // world-info/reasoning scripts).
+      var added = 0;
+      var skipped = 0;
+      var disabledCount = 0;
       for (final r in parsed) {
-        store.addRegexRule(r);
+        if (store.addRegexRuleIfNew(r)) {
+          added++;
+          if (!r.enabled) disabledCount++;
+        } else {
+          skipped++;
+        }
       }
-      messenger.showSnackBar(SnackBar(
-        content: Text(
-            'Imported ${parsed.length} rule${parsed.length == 1 ? "" : "s"}.'),
-      ));
+      final parts = <String>[
+        'Imported $added rule${added == 1 ? "" : "s"}',
+        if (skipped > 0) '$skipped duplicate${skipped == 1 ? "" : "s"} skipped',
+        if (disabledCount > 0)
+          '$disabledCount imported disabled (review before enabling)',
+      ];
+      messenger.showSnackBar(SnackBar(content: Text('${parts.join(' · ')}.')));
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Import failed: $e')));
     }
@@ -289,6 +304,21 @@ class _RegexRuleEditorScreenState extends State<RegexRuleEditorScreen> {
 
   void _onChanged() => setState(() {});
 
+  /// 2026-07-03 review: inline validity feedback for the Find box. The
+  /// APPLY engine deliberately no-ops an invalid pattern (never crash a
+  /// render), which made a typo'd rule indistinguishable from "no match" —
+  /// it failed silently forever. Empty box → no error (the save gate has
+  /// its own message).
+  String? _findErrorText() {
+    final raw = _find.text;
+    if (raw.trim().isEmpty) return null;
+    final lit = parseRegexLiteral(raw);
+    if (lit.pattern.isEmpty) return 'Pattern is empty.';
+    return regexPatternIsValid(lit.pattern, lit.flags)
+        ? null
+        : 'Invalid regex — this rule would never match anything.';
+  }
+
   /// Build the in-progress rule from the current form fields (for preview /
   /// save). Always targets BOTH stages here so the live preview reflects the
   /// pattern regardless of the affects* toggles; the preview passes the chosen
@@ -320,6 +350,21 @@ class _RegexRuleEditorScreenState extends State<RegexRuleEditorScreen> {
 
   void _save() {
     final lit = parseRegexLiteral(_find.text);
+    // 2026-07-03 review: an empty pattern saves a dead rule and an invalid
+    // one no-ops forever — stop at the door with a clear message instead.
+    if (lit.pattern.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content:
+              Text('Add a Find pattern first — an empty rule never fires.')));
+      return;
+    }
+    if (!regexPatternIsValid(lit.pattern, lit.flags)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Fix the Find pattern — it isn\'t a valid regex, so the rule '
+              'would never fire.')));
+      return;
+    }
     final trims = _trim.text
         .split('\n')
         .map((s) => s.trim())
@@ -398,12 +443,13 @@ class _RegexRuleEditorScreenState extends State<RegexRuleEditorScreen> {
           const SizedBox(height: 14),
           TextField(
             controller: _find,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Find',
               helperText: 'A regex. Accepts /pattern/flags or a raw pattern. '
                   'Flags: i (ignore case), g (replace all), m (multiline), '
                   's (dot matches newline).',
               helperMaxLines: 3,
+              errorText: _findErrorText(),
             ),
             style: const TextStyle(fontFamily: 'monospace'),
             maxLines: null,

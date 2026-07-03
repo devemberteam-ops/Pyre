@@ -571,4 +571,105 @@ void main() {
       );
     });
   });
+
+  // 2026-07-03 review: ST placements other than user-input(1)/ai-output(2)
+  // — slash commands (3), world info (5), reasoning (6) — used to silently
+  // import as "both streams, enabled": a World-Info-only script became a
+  // rule rewriting every chat message. They now import DISABLED (shape
+  // kept, so the user can inspect and opt in consciously).
+  group('parseStRegexScript — unsupported placement', () {
+    test('world-info-only placement imports disabled', () {
+      final r = parseStRegexScript({
+        'scriptName': 'wi only',
+        'findRegex': '/foo/g',
+        'replaceString': 'bar',
+        'placement': [5],
+      });
+      expect(r, isNotNull);
+      expect(r!.enabled, isFalse,
+          reason: 'a stream Pyre does not have must not silently become '
+              '"rewrite every message"');
+    });
+
+    test('known placement still imports enabled + stream-scoped', () {
+      final r = parseStRegexScript({
+        'scriptName': 'ai',
+        'findRegex': '/foo/',
+        'placement': [2],
+      });
+      expect(r!.enabled, isTrue);
+      expect(r.streams, [RegexStream.aiOutput]);
+    });
+
+    test('mixed known+unknown keeps the known stream and stays enabled', () {
+      final r = parseStRegexScript({
+        'findRegex': '/foo/',
+        'placement': [2, 5],
+      });
+      expect(r!.enabled, isTrue);
+      expect(r.streams, [RegexStream.aiOutput]);
+    });
+
+    test('empty/absent placement keeps the ST default: both streams, enabled',
+        () {
+      final r = parseStRegexScript({'findRegex': '/foo/'});
+      expect(r!.enabled, isTrue);
+      expect(r.streams, [RegexStream.userInput, RegexStream.aiOutput]);
+    });
+
+    test('explicitly disabled stays disabled regardless of placement', () {
+      final r = parseStRegexScript({
+        'findRegex': '/foo/',
+        'placement': [2],
+        'disabled': true,
+      });
+      expect(r!.enabled, isFalse);
+    });
+  });
+
+  // 2026-07-03 review: every import mints a fresh id, so re-importing the
+  // same file used to double every rule (N enabled copies all running).
+  // Equivalence = the behavior-bearing fields.
+  group('regexRulesEquivalent', () {
+    RegexRule mk({
+      String pattern = 'a',
+      String flags = 'g',
+      String replacement = 'b',
+      bool display = true,
+      bool prompt = true,
+      List<RegexStream>? streams,
+    }) =>
+        RegexRule(
+          pattern: pattern,
+          flags: flags,
+          replacement: replacement,
+          affectsDisplay: display,
+          affectsPrompt: prompt,
+          streams: streams,
+        );
+
+    test('same behavior fields → equivalent (ids differ)', () {
+      expect(regexRulesEquivalent(mk(), mk()), isTrue);
+    });
+
+    test('any behavior field differing → not equivalent', () {
+      expect(regexRulesEquivalent(mk(), mk(pattern: 'x')), isFalse);
+      expect(regexRulesEquivalent(mk(), mk(flags: 'gi')), isFalse);
+      expect(regexRulesEquivalent(mk(), mk(replacement: 'c')), isFalse);
+      expect(regexRulesEquivalent(mk(), mk(prompt: false)), isFalse);
+      expect(
+          regexRulesEquivalent(mk(), mk(streams: [RegexStream.aiOutput])),
+          isFalse);
+    });
+
+    test('stream ORDER does not matter', () {
+      expect(
+        regexRulesEquivalent(
+          mk(streams: [RegexStream.userInput, RegexStream.aiOutput]),
+          mk(streams: [RegexStream.aiOutput, RegexStream.userInput]),
+        ),
+        isTrue,
+      );
+    });
+  });
 }

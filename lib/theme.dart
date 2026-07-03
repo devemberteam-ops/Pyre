@@ -204,6 +204,21 @@ class EmberColors {
 }
 
 // ============================================================================
+// Accent-aware foreground
+// ============================================================================
+
+/// Foreground (text/icon) color that stays readable ON [accent] — white for
+/// the app's dark/mid accents, near-black for genuinely light ones
+/// (2026-07-03 review M2: the hardcoded white `onPrimary` washed out on the
+/// Sunflower / Sky / Seafoam accent swatches).
+///
+/// The 0.5 luminance threshold deliberately keeps every BUILT-IN palette
+/// primary on white (Ember ≈0.32, Moonlit ≈0.41, Hearth ≈0.44), so existing
+/// themes render byte-identically — guarded by theme_palette_test.dart.
+Color foregroundOnAccent(Color accent) =>
+    accent.computeLuminance() > 0.5 ? Colors.black87 : Colors.white;
+
+// ============================================================================
 // ThemeData builder — palette-driven, called on every rebuild
 // ============================================================================
 
@@ -217,9 +232,11 @@ ThemeData emberTheme() {
   final base = ThemeData.dark(useMaterial3: true);
   final scheme = ColorScheme.dark(
     primary: EmberColors.primary,
-    onPrimary: Colors.white,
+    // Accent-aware (2026-07-03): white on dark/mid accents (all built-ins),
+    // dark on light accent overrides like Sunflower/Sky/Seafoam.
+    onPrimary: foregroundOnAccent(EmberColors.primary),
     secondary: EmberColors.primaryDim,
-    onSecondary: Colors.white,
+    onSecondary: foregroundOnAccent(EmberColors.primaryDim),
     surface: EmberColors.bgPanel,
     onSurface: EmberColors.textHigh,
     error: EmberColors.danger,
@@ -271,7 +288,7 @@ ThemeData emberTheme() {
     elevatedButtonTheme: ElevatedButtonThemeData(
       style: ElevatedButton.styleFrom(
         backgroundColor: EmberColors.primary,
-        foregroundColor: Colors.white,
+        foregroundColor: foregroundOnAccent(EmberColors.primary),
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),

@@ -379,4 +379,35 @@ void main() {
           contains('Ren'));
     });
   });
+
+  // 2026-07-03 review: the examples nudge must cover EVERY persona in a
+  // persona party — it used to name only the primary (same family as the
+  // personaNames impersonate bug; one shared path covers Impersonate AND
+  // Guide my message). Single-name output stays byte-identical to the
+  // original hardcoded nudge.
+  group('buildExamplesNudge', () {
+    test('no personas with examples → no nudge', () {
+      expect(buildExamplesNudge(const []), '');
+      expect(buildExamplesNudge(const ['', '  ']), '');
+    });
+
+    test('single persona → byte-identical to the original nudge', () {
+      expect(
+        buildExamplesNudge(const ['Ren']),
+        '\n\nMatch Ren\'s dialogue cadence and voice from the '
+        '"Ren\'s dialogue style" examples shown in your '
+        'system context. Same diction, same sentence length, same '
+        'kind of action beats.',
+      );
+    });
+
+    test('persona party → every member with examples is named', () {
+      final nudge = buildExamplesNudge(const ['Orion', 'Anastasia']);
+      expect(nudge, contains('"Orion\'s dialogue style"'));
+      expect(nudge, contains('"Anastasia\'s dialogue style"'));
+      expect(nudge, contains('own voice'),
+          reason: 'the group nudge must ask for per-member voices, not a '
+              'single blended one');
+    });
+  });
 }

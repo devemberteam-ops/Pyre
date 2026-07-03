@@ -975,7 +975,17 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
           MemorySettings.fromJson(mem.cast<String, dynamic>());
     }
     final ui = raw['uiPrefs'];
-    if (ui is Map) s.uiPrefs = UiPrefs.fromJson(ui.cast<String, dynamic>());
+    if (ui is Map) {
+      s.uiPrefs = UiPrefs.fromJson(ui.cast<String, dynamic>());
+      // 2026-07-03 review (H1): re-apply the palette from the RESTORED
+      // prefs. Without this the restored uiScale kicked in on the same
+      // notify but the theme/accent stayed stale until an app restart —
+      // visibly inconsistent ("text grew, colors didn't change").
+      EmberColors.applyTheme(
+        themeId: s.uiPrefs.activeThemeId,
+        accentArgb: s.uiPrefs.accentArgb,
+      );
+    }
 
     // F3: restore regex rules, folders, the three extra settings singletons,
     // and the botbooru profile (MERGE — only keys present in the file apply).

@@ -227,8 +227,9 @@ Future<void> _runBackupImport(
 
     for (final r in plan.regexRules) {
       try {
-        store.addRegexRule(r);
-        addedRegex++;
+        // 2026-07-03 review: equivalence-dedup — re-running the same bulk
+        // import used to stack duplicate rules that all ran.
+        if (store.addRegexRuleIfNew(r)) addedRegex++;
       } catch (_) {}
     }
 
@@ -435,7 +436,7 @@ StRouteResult _addRouted(AppStore store, StRouteResult r) {
         store.addLorebook(r.lorebook!);
       case StArtifact.regex:
         for (final rule in r.regexRules!) {
-          store.addRegexRule(rule);
+          store.addRegexRuleIfNew(rule); // 2026-07-03: dedup re-imports
         }
       case StArtifact.preset:
         store.addPreset(r.preset!);

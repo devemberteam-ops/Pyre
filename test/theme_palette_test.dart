@@ -5,6 +5,7 @@
 // All of these are PURE (no Flutter widgets, no disk, no providers) and can
 // run in a bare Dart test runner.
 
+import 'package:flutter/material.dart' show Color, Colors;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/theme.dart';
 import 'package:pyre/models/models.dart' show UiPrefs;
@@ -181,6 +182,32 @@ void main() {
     test('fromJson tolerates bad accentArgb type (non-int → null)', () {
       final prefs = UiPrefs.fromJson({'accentArgb': 'red'});
       expect(prefs.accentArgb, isNull);
+    });
+  });
+
+  // ─── foregroundOnAccent ──────────────────────────────────────────────────
+  // 2026-07-03 review (M2): the theme hardcoded WHITE for onPrimary and
+  // button foregrounds, which washes out on the light accent swatches
+  // (Sunflower / Sky / Seafoam). The luminance-aware picker flips those to a
+  // dark foreground while keeping every BUILT-IN palette byte-identical.
+
+  group('foregroundOnAccent', () {
+    test('every built-in palette primary/primaryDim keeps WHITE '
+        '(byte-identity with the pre-fix look)', () {
+      for (final p in kCuratedPalettes) {
+        expect(foregroundOnAccent(p.primary), Colors.white,
+            reason: '${p.id} primary must not change appearance');
+        expect(foregroundOnAccent(p.primaryDim), Colors.white,
+            reason: '${p.id} primaryDim must not change appearance');
+      }
+    });
+
+    test('light accent swatches flip to a dark foreground', () {
+      for (final argb in [0xFFFFC84A, 0xFF6EC6FF, 0xFF80CBC4]) {
+        expect(foregroundOnAccent(Color(argb)), isNot(Colors.white),
+            reason:
+                '0x${argb.toRadixString(16)} is light — white text washes out');
+      }
     });
   });
 }

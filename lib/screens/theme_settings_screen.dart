@@ -319,7 +319,10 @@ class _AccentSwatch extends StatelessWidget {
           ),
         ),
         child: selected
-            ? Icon(Icons.check, size: 16, color: EmberColors.textHigh)
+            // 2026-07-03 review (L3): accent swatches include light hues
+            // (Sunflower/Sky/Seafoam) where the cream check was invisible —
+            // pick the readable foreground per swatch.
+            ? Icon(Icons.check, size: 16, color: foregroundOnAccent(color))
             : null,
       ),
     );
