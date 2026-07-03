@@ -3533,6 +3533,12 @@ class _ChatScreenState extends State<ChatScreen> {
         preset: store.activePreset,
         messages: turns,
         debugTag: 'chat', // Wave CY.18.214 diagnostics tag
+        // Persona party (QoL mirror): an impersonation covering N personas
+        // needs room for everyone's beats — same max_tokens scaling the
+        // character party's scene replies get. 1 persona → no-op.
+        partyMemberCount: personaPartyNames.length > 1
+            ? personaPartyNames.length
+            : 1,
       ).listen(
         (chunk) {
           _streamBuffer += chunk;
@@ -4579,6 +4585,15 @@ class _ChatScreenState extends State<ChatScreen> {
     // Wave CK + CX: backdrop resolution uses the chat-bound persona,
     // not the global default.
     final persona = _chatPersona(store, chat);
+    // Persona party (QoL mirror 2026-07): resolve the user's persona roster
+    // once per build — drives the "as ..." header label, the user-side
+    // avatar cluster, and the {{user}} display-fill in every bubble. Empty
+    // for a classic single-persona chat (all consumers fall back).
+    final personaPartyMembers = chat.isPersonaParty
+        ? [
+            for (final id in chat.effectivePersonaIds) store.personaById(id)
+          ].whereType<Persona>().toList()
+        : const <Persona>[];
     // Group-aware header: a multi-character chat must show WHO is in it, not
     // just the primary character. Resolve every member (per-chat snapshot
     // first, then the library — same order as everywhere else) so the app bar
@@ -4648,7 +4663,9 @@ class _ChatScreenState extends State<ChatScreen> {
             // photos), mirroring the party scene message. 1:1 chat: the
             // single tappable avatar (unchanged).
             if (groupMembers.length > 1)
-              _PartyAvatarCluster(members: groupMembers, radius: 16)
+              _PartyAvatarCluster(
+                  members: partyEntriesFromCharacters(groupMembers),
+                  radius: 16)
             else
               AvatarBubble(
                 dataUrl: character?.avatar,
@@ -4704,7 +4721,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   // attached — empty subtitle would just waste space.
                   if (persona != null)
                     Text(
-                      'as ${persona.name}',
+                      // Persona party: show the whole roster you play as.
+                      'as ${personaPartyFillName(personaPartyMembers) ?? persona.name}',
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 11,
@@ -4881,6 +4899,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         showSpeakerName: chat.characterIds.length > 1,
                         isPartySceneMessage: isPartySceneMessage,
                         partyMembers: partyMembers,
+                        personaParty: personaPartyMembers,
                         isLast: isLast,
                         isEditing: _editingMessageId == m.id,
                         isSelecting: _selectingMessageId == m.id,
@@ -5100,6 +5119,42 @@ class _ChatScreenState extends State<ChatScreen> {
 String groupChatHeaderTitle(List<String> memberNames) =>
     memberNames.map((n) => n.trim()).where((n) => n.isNotEmpty).join(' · ');
 
+/// Persona party (QoL mirror 2026-07): the name `{{user}}` fills with ON
+/// SCREEN. With >1 persona it is the joined roster names — the SAME ", "
+/// join `buildChatPrompt` sends to the model, so a greeting card's
+/// "Hello {{user}}" reads identically in the bubble and in the prompt.
+/// Null when not a party (callers fall back to the single persona's name).
+String? personaPartyFillName(List<Persona> personaParty) {
+  if (personaParty.length <= 1) return null;
+  final names = personaParty
+      .map((p) => p.name.trim())
+      .where((n) => n.isNotEmpty)
+      .toList();
+  return names.length > 1 ? names.join(', ') : null;
+}
+
+/// One circle of a [_PartyAvatarCluster] — the name/avatar/full-image triple
+/// the cluster needs, decoupled from the model type so BOTH a character
+/// party (Character members) and a persona party (the user's own Personas)
+/// render through the same widget.
+typedef PartyAvatarEntry = ({
+  String name,
+  String? avatar,
+  String? avatarOriginal,
+});
+
+/// Adapter: characters → cluster entries.
+List<PartyAvatarEntry> partyEntriesFromCharacters(List<Character> members) => [
+      for (final m in members)
+        (name: m.name, avatar: m.avatar, avatarOriginal: m.avatarOriginal),
+    ];
+
+/// Adapter: personas → cluster entries (persona-party mirror).
+List<PartyAvatarEntry> partyEntriesFromPersonas(List<Persona> members) => [
+      for (final m in members)
+        (name: m.name, avatar: m.avatar, avatarOriginal: m.avatarOriginal),
+    ];
+
 /// Party mode v1 (2026-07, OWNER DECISION): a stacked "messenger group"
 /// avatar cluster for a party-scene bubble — up to 3 overlapping mini
 /// portraits (the classic 2-3 circle stack), reusing [AvatarBubble] per
@@ -5109,7 +5164,7 @@ String groupChatHeaderTitle(List<String> memberNames) =>
 /// footprint as the normal single avatar ([radius] * 2 square) so bubble
 /// layout doesn't shift between a single-responder message and a scene one.
 class _PartyAvatarCluster extends StatelessWidget {
-  final List<Character> members;
+  final List<PartyAvatarEntry> members;
   final double radius;
 
   const _PartyAvatarCluster({required this.members, required this.radius});
@@ -5282,6 +5337,13 @@ class _MessageBubble extends StatefulWidget {
   /// joined-names header and the stacked avatar cluster. Empty otherwise.
   final List<Character> partyMembers;
 
+  /// Persona party (QoL mirror 2026-07): the user's full persona roster.
+  /// With >1 the USER side mirrors the party affordances — stacked avatar
+  /// cluster (tap → swipe the group's photos) and `{{user}}` display-fill
+  /// resolving to the joined names (matching what the prompt sends). Empty
+  /// for a classic single-persona chat.
+  final List<Persona> personaParty;
+
   const _MessageBubble({
     required this.message,
     required this.character,
@@ -5295,6 +5357,7 @@ class _MessageBubble extends StatefulWidget {
     this.showSpeakerName = false,
     this.isPartySceneMessage = false,
     this.partyMembers = const <Character>[],
+    this.personaParty = const <Persona>[],
     this.onRegenerate,
     this.onBranchUser,
     this.onSelectVariant,
@@ -5405,7 +5468,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
                         _fillNamePlaceholders(
                           m.text,
                           charName: widget.character?.name,
-                          personaName: widget.persona?.name,
+                          personaName:
+                                        personaPartyFillName(
+                                                widget.personaParty) ??
+                                            widget.persona?.name,
                         ),
                         style: TextStyle(
                           color: EmberColors.textMid,
@@ -5594,7 +5660,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
                               _fillNamePlaceholders(
                                 m.text,
                                 charName: widget.character?.name,
-                                personaName: widget.persona?.name,
+                                personaName:
+                                        personaPartyFillName(
+                                                widget.personaParty) ??
+                                            widget.persona?.name,
                               ),
                               style: TextStyle(
                                 color: EmberColors.textHigh,
@@ -5689,7 +5758,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
                                       _fillNamePlaceholders(
                                         liveText,
                                         charName: widget.character?.name,
-                                        personaName: widget.persona?.name,
+                                        personaName:
+                                        personaPartyFillName(
+                                                widget.personaParty) ??
+                                            widget.persona?.name,
                                       ),
                                       widget.regexRules,
                                       stream: isUserSide
@@ -5721,7 +5793,10 @@ class _MessageBubbleState extends State<_MessageBubble> {
                                   _fillNamePlaceholders(
                                     m.text,
                                     charName: widget.character?.name,
-                                    personaName: widget.persona?.name,
+                                    personaName:
+                                        personaPartyFillName(
+                                                widget.personaParty) ??
+                                            widget.persona?.name,
                                   ),
                                   widget.regexRules,
                                   stream: isUserSide
@@ -5741,19 +5816,28 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final persona = widget.persona;
     // OOC and Scene are user-authored — show the persona avatar on the right,
     // same as a normal user message. Never show the character avatar for them.
+    // Persona party (QoL mirror 2026-07): with >1 persona the user side gets
+    // the SAME stacked cluster the party scene has (tap → swipe the group's
+    // photos), instead of just the primary persona's portrait.
     final avatar = isUserSide
-        ? AvatarBubble(
-            dataUrl: persona?.avatar,
-            fallback: persona?.name ?? 'U',
-            radius: 16,
-            tappableLightbox: true,
-            // Non-destructive Recrop: tap shows the full uncropped image.
-            fullImageUrl: persona?.avatarOriginal ?? persona?.avatar,
-          )
+        ? (widget.personaParty.length > 1
+            ? _PartyAvatarCluster(
+                members: partyEntriesFromPersonas(widget.personaParty),
+                radius: 16)
+            : AvatarBubble(
+                dataUrl: persona?.avatar,
+                fallback: persona?.name ?? 'U',
+                radius: 16,
+                tappableLightbox: true,
+                // Non-destructive Recrop: tap shows the full uncropped image.
+                fullImageUrl: persona?.avatarOriginal ?? persona?.avatar,
+              ))
         : (widget.isPartySceneMessage
             // Party mode (OWNER DECISION 2026-07): a stacked mini-avatar
             // cluster instead of one portrait — see `_PartyAvatarCluster`.
-            ? _PartyAvatarCluster(members: widget.partyMembers, radius: 16)
+            ? _PartyAvatarCluster(
+                members: partyEntriesFromCharacters(widget.partyMembers),
+                radius: 16)
             : AvatarBubble(
                 dataUrl: widget.character?.avatar,
                 fallback: widget.character?.name ?? '?',

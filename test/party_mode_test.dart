@@ -18,7 +18,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/models/models.dart';
 import 'package:pyre/screens/chat_screen.dart'
-    show buildFillInOpenerPrompt, groupChatHeaderTitle;
+    show buildFillInOpenerPrompt, groupChatHeaderTitle, personaPartyFillName;
 import 'package:pyre/services/chat_api.dart' show ChatTurn;
 import 'package:pyre/services/chat_prompt_builder.dart';
 import 'package:pyre/services/store_backend.dart';
@@ -641,6 +641,28 @@ void main() {
         persona('Kael', 'x', examples: '{{user}}: For the crown!'),
       ]);
       expect(block, contains('For the crown!'));
+    });
+  });
+
+  // Persona party QoL mirror: {{user}} on screen + the "as ..." header label
+  // resolve to the joined roster names — the SAME ", " join the prompt sends.
+  group('personaPartyFillName', () {
+    Persona p(String name) => Persona(
+        id: 'p-$name', name: name, description: 'x', createdAt: 0, updatedAt: 0);
+
+    test('2+ personas → joined with ", " (matches the prompt fill)', () {
+      expect(personaPartyFillName([p('Orion'), p('Anastasia')]),
+          'Orion, Anastasia');
+    });
+
+    test('single / empty roster → null (caller falls back to the primary)',
+        () {
+      expect(personaPartyFillName([p('Orion')]), isNull);
+      expect(personaPartyFillName(const []), isNull);
+    });
+
+    test('blank names filtered — a roster that collapses to one → null', () {
+      expect(personaPartyFillName([p('Orion'), p('  ')]), isNull);
     });
   });
 
