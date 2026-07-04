@@ -17,7 +17,6 @@ import 'backup_restore_screen.dart';
 import 'botbooru_profile_screen.dart';
 import 'character_creator_screen.dart';
 import 'chat_settings_screen.dart';
-import 'lorebooks_screen.dart';
 import 'theme_settings_screen.dart';
 import 'about_pyre_screen.dart';
 import 'desktop_shortcuts_screen.dart';
@@ -83,10 +82,10 @@ class MoreScreen extends StatelessWidget {
           ]),
           const SizedBox(height: 12),
           // Wave CY.18.193: Presets + Long-term Memory moved INTO Chat
-          // Settings (a hub). Wave CY.18.202: Lorebooks moved BACK out
-          // to this main menu — it's a content library, not a chat
-          // setting. Card2 = Character Creator + Chat Settings +
-          // Lorebooks.
+          // Settings (a hub). 2026-07-03 (Gui): Lorebooks left More for
+          // good — they now live in the library tab as a third segment
+          // next to Characters + Personas (content, not a setting).
+          // Card2 = Character Creator + Chat Settings.
           _MoreCard(rows: [
             // Wave CY.18.32: consolidated "Character Creator prompt"
             // + "Character Creator help" into a single entry that
@@ -109,14 +108,6 @@ class MoreScreen extends StatelessWidget {
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(
                     builder: (_) => const ChatSettingsScreen()),
-              ),
-            ),
-            // Wave CY.18.202: Lorebooks returned to the More main menu
-            // (was inside Chat Settings since Wave 193).
-            _MoreRow(
-              label: 'Lorebooks',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const LorebooksScreen()),
               ),
             ),
           ]),

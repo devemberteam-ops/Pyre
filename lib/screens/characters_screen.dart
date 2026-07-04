@@ -37,6 +37,7 @@ import 'character_details_sheet.dart';
 import 'character_edit_screen.dart';
 import 'chat_picker_screens.dart';
 import 'chat_screen.dart';
+import 'lorebooks_screen.dart' show LorebookList, editLorebook, importLorebookFile;
 import 'persona_editor.dart';
 
 class CharactersScreen extends StatefulWidget {
@@ -109,13 +110,25 @@ class _CharactersScreenState extends State<CharactersScreen> {
     // defeating the gate — so the screen reads the store instead and lets the
     // gate govern its rebuilds.
     final store = context.read<AppStore>();
-    final segment = store.uiPrefs.charactersSegment == 'personas' ? 1 : 0;
+    // 2026-07-03 (Gui): Lorebooks moved out of More into this library —
+    // they're content like characters and personas, not a setting.
+    final segment = switch (store.uiPrefs.charactersSegment) {
+      'personas' => 1,
+      'lorebooks' => 2,
+      _ => 0,
+    };
     final charCount = store.characters.length;
     final personaCount = store.personas.length;
+    final loreCount =
+        store.lorebooks.where((b) => !b.hidden && !b.deleted).length;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(segment == 0 ? 'Characters' : 'Personas'),
+        title: Text(switch (segment) {
+          1 => 'Personas',
+          2 => 'Lorebooks',
+          _ => 'Characters',
+        }),
         actions: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -135,12 +148,16 @@ class _CharactersScreenState extends State<CharactersScreen> {
               segments: [
                 ButtonSegment(value: 0, label: Text('Characters ($charCount)')),
                 ButtonSegment(value: 1, label: Text('Personas ($personaCount)')),
+                ButtonSegment(value: 2, label: Text('Lorebooks ($loreCount)')),
               ],
               selected: {segment},
               showSelectedIcon: false,
               onSelectionChanged: (s) {
-                store.setCharactersSegment(
-                    s.first == 0 ? 'characters' : 'personas');
+                store.setCharactersSegment(switch (s.first) {
+                  1 => 'personas',
+                  2 => 'lorebooks',
+                  _ => 'characters',
+                });
                 _setQueryNow('');
               },
               style: ButtonStyle(
@@ -163,8 +180,11 @@ class _CharactersScreenState extends State<CharactersScreen> {
               // tab the user was on before.
               focusNode: _searchFocus,
               decoration: InputDecoration(
-                hintText:
-                    segment == 0 ? 'Search Character' : 'Search Persona',
+                hintText: switch (segment) {
+                  1 => 'Search Persona',
+                  2 => 'Search Lorebook',
+                  _ => 'Search Character',
+                },
                 prefixIcon: const Icon(Icons.search, size: 18),
                 isDense: true,
               ),
@@ -172,9 +192,11 @@ class _CharactersScreenState extends State<CharactersScreen> {
             ),
           ),
           Expanded(
-            child: segment == 0
-                ? _CharacterList(store: store, query: _query)
-                : _PersonaList(store: store, query: _query),
+            child: switch (segment) {
+              1 => _PersonaList(store: store, query: _query),
+              2 => LorebookList(store: store, query: _query),
+              _ => _CharacterList(store: store, query: _query),
+            },
           ),
         ],
       ),
@@ -184,10 +206,72 @@ class _CharactersScreenState extends State<CharactersScreen> {
   Future<void> _onAdd(BuildContext context, int segment) async {
     if (segment == 0) {
       await _showImportSourceSheet(context);
-    } else {
+    } else if (segment == 1) {
       await _showPersonaAddSheet(context);
+    } else {
+      await _showLorebookAddSheet(context);
     }
   }
+}
+
+/// Lorebook add chooser — "Build with AI" (opens the lorebook-mode Creator)
+/// vs "Create manually" (the classic entry editor) vs import. Mirrors the
+/// persona add sheet, so all three library segments create things the same
+/// way. (2026-07-03, Gui: lorebook AI creation lives HERE now, not as a
+/// third choice inside the main Creator's chooser.)
+Future<void> _showLorebookAddSheet(BuildContext context) async {
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: EmberColors.bgPanel,
+    builder: (sheet) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: Icon(Icons.auto_awesome, color: EmberColors.primary),
+            title: const Text('Build with AI assistant'),
+            subtitle: Text(
+              'Describe the world or topic and the AI drafts keyword-'
+              'triggered entries you can review before saving.',
+              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+            ),
+            onTap: () {
+              Navigator.pop(sheet);
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) =>
+                    const CharacterAssistantScreen(lorebookMode: true),
+              ));
+            },
+          ),
+          ListTile(
+            leading: Icon(Icons.edit_note, color: EmberColors.primary),
+            title: const Text('Create manually'),
+            subtitle: Text(
+              'Name the book, then add keyword-triggered entries yourself.',
+              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+            ),
+            onTap: () {
+              Navigator.pop(sheet);
+              editLorebook(context, null);
+            },
+          ),
+          Divider(color: EmberColors.stroke, height: 1),
+          ListTile(
+            leading: const Icon(Icons.file_upload_outlined),
+            title: const Text('Import from JSON'),
+            subtitle: Text(
+              'Pick a SillyTavern World Info / lorebook JSON from your device.',
+              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+            ),
+            onTap: () async {
+              Navigator.pop(sheet);
+              await importLorebookFile(context);
+            },
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 /// Persona add chooser — "Build with AI" (opens the persona-mode

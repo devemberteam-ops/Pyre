@@ -799,8 +799,10 @@ class _HowItWorksCard extends StatelessWidget {
               '"supernatural school", "free-use city"), not a '
               'single character.'),
           HowItWorksBlock.bullet(
-              '**Lorebook** — a set of World Info entries (keyword-'
-              'triggered lore) built right here in the canvas.'),
+              '**Lorebooks** aren\'t a starting choice here anymore — create '
+              'them from the Lorebooks section of your library (Create → '
+              'Build with AI). Character sessions can still draft lorebook '
+              'entries for the card as you go.'),
           HowItWorksBlock.paragraph(
               '**Edit with AI** isn\'t a starting choice — it\'s how you '
               'open an EXISTING character or persona back into the Creator '

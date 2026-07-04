@@ -2,7 +2,7 @@
 //
 // Two import sources land here:
 //
-//   1. Standalone JSON file picked from More → Lorebooks → Import.
+//   1. Standalone JSON file picked from the library’s Lorebooks section → Import.
 //      Accepted shapes: bare chara_card_v2 `character_book` object
 //      (entries as an array), SillyTavern's standalone World Info export
 //      (entries as an object keyed by uid, ST field names), or Pyre's own

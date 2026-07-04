@@ -133,11 +133,19 @@ class CharacterAssistantScreen extends StatefulWidget {
   /// persona mode regardless of [personaMode].
   final String? editingPersonaId;
 
+  /// 2026-07-03 (Gui): Lorebooks moved into the library next to Characters
+  /// and Personas, and lorebook AI creation launches from THERE (mirroring
+  /// [personaMode]) instead of being a third choice inside the main
+  /// Creator's chooser. When true, opens a fresh session in LOREBOOK mode,
+  /// skipping the character/scenario chooser.
+  final bool lorebookMode;
+
   const CharacterAssistantScreen({
     super.key,
     this.editingCharacterId,
     this.personaMode = false,
     this.editingPersonaId,
+    this.lorebookMode = false,
   });
 
   @override
@@ -204,19 +212,22 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
   /// finally reads it back (it sits as the first assistant turn).
   /// Keeping it short and choice-focused — the deeper flow detail comes
   /// in the follow-up greeting once the mode is locked.
+  // 2026-07-03 (Gui): the lorebook bullet left this chooser — standalone
+  // lorebook AI creation now launches from the library's Lorebooks section
+  // (Create → Build with AI), like the persona creator does from Personas.
   static const String _greeting =
-      "Hey — I'm Pyre's Creator. I can build three things with "
+      "Hey — I'm Pyre's Creator. I can build two things with "
       "you:\n\n"
       "  • **A character** — one persona for roleplay: name, look, "
       "voice, personality, and the contradictions that make them feel "
       "real.\n"
       "  • **A scenario** — a whole setting with a narrator that voices "
       "its NPCs, built around the world, the cast, and the opening "
-      "scene.\n"
-      "  • **A lorebook** — world info entries with trigger keys, "
-      "reference material, and editable drafts.\n\n"
+      "scene.\n\n"
       "Pick one below — I focus on one at a time, since each path needs "
-      "a different build flow.\n\n"
+      "a different build flow. (Looking for a lorebook? Create one from "
+      "the Lorebooks section of your library — and I can still draft "
+      "lorebook entries for a character while we build them.)\n\n"
       "**Heads-up on timing:** once you say go, I write the whole card "
       "over a few automatic passes — usually a few minutes depending on "
       "your provider. The app isn't frozen, it's working; keep it open or "
@@ -444,6 +455,28 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       s.flow = 'freeform';
       store.updateCreatorSessionMessages(s.id, [
         CreatorMessage(role: 'assistant', content: _personaCreateGreeting),
+      ]);
+      setState(() {
+        _sessionId = s.id;
+        _showCanvas = false; // chat-first (Wave 114)
+      });
+      return;
+    }
+
+    // 2026-07-03 (Gui): lorebook AI creation launched from the library's
+    // Lorebooks section (like the persona creator) — fresh session locked to
+    // lorebook mode, same canvas seed `_chooseMode('lorebook')` applies.
+    if (widget.lorebookMode) {
+      final s = store.newCreatorSession();
+      s.mode = 'lorebook';
+      s.flow = 'freeform';
+      store.updateCreatorSessionCanvas(s.id, {
+        ...s.canvas,
+        _canvasLorebookNameKey: 'New lorebook',
+        _canvasLorebookEntriesKey: const <Map<String, dynamic>>[],
+      });
+      store.updateCreatorSessionMessages(s.id, [
+        CreatorMessage(role: 'assistant', content: _lorebookFreeformGreeting),
       ]);
       setState(() {
         _sessionId = s.id;
@@ -4646,7 +4679,6 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
                             _ModeChoiceRow(
                               onPickCharacter: () => _chooseMode('character'),
                               onPickScenario: () => _chooseMode('scenario'),
-                              onPickLorebook: () => _chooseMode('lorebook'),
                             ),
                           // Wave CY.18.101: stage-2 flow picker removed —
                           // _chooseMode locks freeform directly.
@@ -5871,13 +5903,16 @@ class _LoreMetaPill extends StatelessWidget {
 // only emits this widget while `session.mode == null`).
 
 class _ModeChoiceRow extends StatelessWidget {
+  // 2026-07-03 (Gui): the "Build a lorebook" choice moved out of this
+  // chooser — standalone lorebook AI creation now launches from the
+  // library's Lorebooks section (CharacterAssistantScreen(lorebookMode:
+  // true)), mirroring how the persona creator launches from Personas.
+  // Character/persona sessions can still start EMBEDDED lorebook drafts.
   final VoidCallback onPickCharacter;
   final VoidCallback onPickScenario;
-  final VoidCallback onPickLorebook;
   const _ModeChoiceRow({
     required this.onPickCharacter,
     required this.onPickScenario,
-    required this.onPickLorebook,
   });
 
   @override
@@ -5903,14 +5938,6 @@ class _ModeChoiceRow extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             ),
             onPressed: onPickScenario,
-          ),
-          OutlinedButton.icon(
-            icon: const Icon(Icons.library_books_outlined, size: 18),
-            label: const Text('Build a lorebook'),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            ),
-            onPressed: onPickLorebook,
           ),
         ],
       ),

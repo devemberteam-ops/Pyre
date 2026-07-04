@@ -1719,7 +1719,7 @@ class Lorebook {
   String description;
   List<LoreEntry> entries;
   /// Wave CA: when true, this lorebook does NOT appear in the
-  /// management UI (More → Lorebooks). It only exists to back an
+  /// management UI (the library’s Lorebooks section). It only exists to back an
   /// "embedded" import — the user picked "keep embedded only" when
   /// importing a card with `character_book` — so the book is bound
   /// to the character it came with but isn't listed for reuse.

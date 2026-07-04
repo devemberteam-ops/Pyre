@@ -1059,7 +1059,8 @@ class _LorebookAttachPickerScreenState
                       icon: Icons.menu_book_outlined,
                       title: 'No lorebooks available',
                       subtitle:
-                          'Create or import lorebooks from More → Lorebooks.',
+                          'Create or import lorebooks from the Lorebooks '
+                          'section of the Characters tab.',
                     ),
                   )
                 : ListView.separated(

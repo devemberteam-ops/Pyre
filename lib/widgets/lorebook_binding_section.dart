@@ -49,8 +49,9 @@ Future<bool?> askEmbeddedChoice(BuildContext context) {
           ),
           SizedBox(height: 12),
           Text(
-            'Shared: visible in More → Lorebooks and reusable across '
-            'multiple cards. Also travels on export when bound.',
+            'Shared: visible in the library\'s Lorebooks section and '
+            'reusable across multiple cards. Also travels on export when '
+            'bound.',
             style: TextStyle(fontSize: 13),
           ),
         ],
@@ -218,7 +219,7 @@ class LorebookBindingSection extends StatelessWidget {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
             content: Text(
-                'You don\'t have any lorebooks yet. Make one in More → Lorebooks (or ask the AI Creator to "Build a lorebook"), then come back to bind it.')),
+                'You don\'t have any lorebooks yet. Make one in the Lorebooks section of the Characters tab, then come back to bind it.')),
       );
       return;
     }

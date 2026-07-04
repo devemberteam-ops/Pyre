@@ -235,7 +235,8 @@ List<Widget> _buildLorebookSections(
     widgets.add(Padding(
       padding: EdgeInsets.symmetric(vertical: 12),
       child: Text(
-        'No lorebooks created. Go to More → Lorebooks to add one.',
+        'No lorebooks created. Add one from the Lorebooks section of the '
+        'Characters tab.',
         style: TextStyle(color: EmberColors.textMid, fontSize: 13),
       ),
     ));

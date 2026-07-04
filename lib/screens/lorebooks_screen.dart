@@ -15,57 +15,63 @@ import '../widgets/empty_state.dart';
 import '../widgets/lorebook_binding_section.dart'
     show LorebookUsedBySection, askEmbeddedChoice;
 
-class LorebooksScreen extends StatelessWidget {
-  const LorebooksScreen({super.key});
+// 2026-07-03 (Gui): Lorebooks moved OUT of More and into the library next to
+// Characters and Personas — they're content, not a setting. The standalone
+// LorebooksScreen scaffold is gone; [LorebookList] is the segment body the
+// library tab embeds (with search), and the create/import actions
+// ([editLorebook] / [importLorebookFile]) are driven from the tab's Create
+// button. LorebookEditScreen and the kebab below are unchanged.
+class LorebookList extends StatelessWidget {
+  final AppStore store;
+  final String query;
+  const LorebookList({super.key, required this.store, this.query = ''});
 
   @override
   Widget build(BuildContext context) {
-    final store = context.watch<AppStore>();
     // Wave CA: hide books with hidden=true from the management list.
     // They were created via the "embedded only" choice on character
     // import and live solely to back that character's bound list; we
     // still show their count in the empty-state copy so the user
     // doesn't think their card lost its lore.
-    final visibleBooks = store.lorebooks
+    final q = query.trim().toLowerCase();
+    final allVisible = store.lorebooks
         .where((b) => !b.hidden && !b.deleted)
         .toList(growable: false);
-    final hiddenCount = store.lorebooks.length - visibleBooks.length;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Lorebooks'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.file_upload_outlined),
-            tooltip: 'Import from JSON',
-            onPressed: () => _importLorebookFile(context),
-          ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: 'New lorebook',
-            onPressed: () => _editLorebook(context, null),
-          ),
-        ],
-      ),
-      body: visibleBooks.isEmpty
-          ? EmptyState(
-              icon: Icons.menu_book_outlined,
-              title: 'No lorebooks yet',
-              subtitle: hiddenCount > 0
-                  ? 'You have $hiddenCount embedded lorebook${hiddenCount == 1 ? "" : "s"} '
-                      'bound to characters (kept out of this list to reduce '
-                      'clutter — they still inject in chat). Create or import '
-                      'a new one to add it here.'
-                  : 'Lorebooks let you attach world info or facts that get injected into the chat when keywords are mentioned — useful for keeping the AI consistent about places, factions, lore, etc.',
-              ctaLabel: 'Create',
-              ctaIcon: Icons.add,
-              onCta: () => _editLorebook(context, null),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              itemCount: visibleBooks.length,
-              separatorBuilder: (context, index) => const SizedBox(height: 8),
-              itemBuilder: (context, i) {
-                final l = visibleBooks[i];
+    final visibleBooks = q.isEmpty
+        ? allVisible
+        : allVisible
+            .where((b) =>
+                '${b.name} ${b.description}'.toLowerCase().contains(q))
+            .toList(growable: false);
+    final hiddenCount = store.lorebooks.length - allVisible.length;
+    if (allVisible.isEmpty) {
+      return EmptyState(
+        icon: Icons.menu_book_outlined,
+        title: 'No lorebooks yet',
+        subtitle: hiddenCount > 0
+            ? 'You have $hiddenCount embedded lorebook${hiddenCount == 1 ? "" : "s"} '
+                'bound to characters (kept out of this list to reduce '
+                'clutter — they still inject in chat). Create or import '
+                'a new one to add it here.'
+            : 'Lorebooks let you attach world info or facts that get injected into the chat when keywords are mentioned — useful for keeping the AI consistent about places, factions, lore, etc.',
+        ctaLabel: 'Create',
+        ctaIcon: Icons.add,
+        onCta: () => editLorebook(context, null),
+      );
+    }
+    if (visibleBooks.isEmpty) {
+      return const EmptyState(
+        icon: Icons.search_off,
+        title: 'No matches',
+        subtitle: 'Nothing matches your search.',
+      );
+    }
+    return ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        itemCount: visibleBooks.length,
+        separatorBuilder: (context, index) => const SizedBox(height: 8),
+        itemBuilder: (context, i) {
+          final l = visibleBooks[i];
                 return Card(
                   child: ListTile(
                     leading: Icon(Icons.menu_book_outlined,
@@ -125,9 +131,7 @@ class LorebooksScreen extends StatelessWidget {
                     ),
                   ),
                 );
-              },
-            ),
-    );
+        });
   }
 }
 
@@ -156,7 +160,7 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
             title: const Text('Rename / describe'),
             onTap: () {
               Navigator.pop(sheet);
-              _editLorebook(context, l);
+              editLorebook(context, l);
             },
           ),
           ListTile(
@@ -369,8 +373,10 @@ Future<void> _embedIntoCard(
 }
 
 // (2026-07-03, owner decision: the standalone AI lorebook creator was removed
-// — the main AI Creator's "Build a lorebook" canvas mode is the one AI path.
-// Manual creation, entry editing, import and Copy-as-new all remain here.)
+// — the Creator's lorebook canvas mode is the one AI path, launched from the
+// library's Lorebooks section via Create → Build with AI
+// (CharacterAssistantScreen(lorebookMode: true)). Manual creation, entry
+// editing, import and Copy-as-new all remain here.)
 
 /// Wave CA: import a lorebook from a JSON file picked off device storage.
 /// Accepts a few related shapes (see [tryParseLorebookJson]):
@@ -379,7 +385,7 @@ Future<void> _embedIntoCard(
 ///   - SillyTavern World Info — standalone export `{entries: {uid: …}}`
 ///     (object keyed by uid) or the array form `{entries: [...]}`
 ///   - Pyre's own Lorebook.toJson round-trip
-Future<void> _importLorebookFile(BuildContext context) async {
+Future<void> importLorebookFile(BuildContext context) async {
   final store = context.read<AppStore>();
   final messenger = ScaffoldMessenger.of(context);
   try {
@@ -431,7 +437,7 @@ Future<void> _importLorebookFile(BuildContext context) async {
   }
 }
 
-Future<void> _editLorebook(BuildContext context, Lorebook? existing) async {
+Future<void> editLorebook(BuildContext context, Lorebook? existing) async {
   final store = context.read<AppStore>();
   final nameCtl =
       TextEditingController(text: existing?.name ?? 'New lorebook');
