@@ -125,12 +125,6 @@ class ApiConnectionsScreen extends StatelessWidget {
                       final active = p.id == store.activeProviderId;
                       final isCreator = p.id == store.creatorProviderId;
                       final isVision = p.id == store.visionProviderId;
-                      // 2026-07-03: Impersonate/Guide pins rendered no badge,
-                      // so the at-a-glance "which provider does what" contract
-                      // broke for exactly the two newest routes.
-                      final isImpersonate =
-                          p.id == store.impersonateProviderId;
-                      final isGuide = p.id == store.guideProviderId;
                       final initial = p.name.isNotEmpty
                           ? p.name.characters.first.toUpperCase()
                           : '?';
@@ -181,20 +175,6 @@ class ApiConnectionsScreen extends StatelessWidget {
                                 _ProviderBadge(
                                   label: 'VISION',
                                   color: const Color(0xFF6FBEFF),
-                                ),
-                              ],
-                              if (isImpersonate) ...[
-                                const SizedBox(width: 6),
-                                _ProviderBadge(
-                                  label: 'IMPERSONATE',
-                                  color: const Color(0xFF8BE28B),
-                                ),
-                              ],
-                              if (isGuide) ...[
-                                const SizedBox(width: 6),
-                                _ProviderBadge(
-                                  label: 'GUIDE',
-                                  color: const Color(0xFFD79BFF),
                                 ),
                               ],
                             ],
@@ -370,8 +350,6 @@ class _CreatorProviderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final creatorId = store.creatorProviderId;
     final visionId = store.visionProviderId;
-    final impersonateId = store.impersonateProviderId;
-    final guideId = store.guideProviderId;
     return Card(
       color: EmberColors.bgElevated,
       child: Padding(
@@ -393,12 +371,10 @@ class _CreatorProviderCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'By default every call uses your active chat provider. '
-              'Pin a different one here for specific features — e.g. '
-              'DeepSeek for chat and creator text, Qwen-VL only for '
-              'image analysis, or a cleaner model for impersonation. '
-              'Vision falls back to creator → chat; Guide falls back to '
-              'Impersonate → chat.',
+              'By default every call uses your active chat provider. Pin a '
+              'different one here for the Creator or for image analysis — '
+              'e.g. DeepSeek for chat and creator text, Qwen-VL only for '
+              'vision. Vision falls back to creator → chat.',
               style: TextStyle(
                   color: EmberColors.textMid, fontSize: 11, height: 1.4),
             ),
@@ -473,77 +449,9 @@ class _CreatorProviderCard extends StatelessWidget {
               ],
               onChanged: (id) => store.setVisionProvider(id),
             ),
-            const SizedBox(height: 14),
-            // Impersonate provider — used by "Impersonate me" (writing the
-            // user's own message). A cleaner / reasoning-off model here dodges
-            // refusals a safety-tuned chat model can throw on impersonation.
-            const Padding(
-              padding: EdgeInsets.only(bottom: 4),
-              child: Text(
-                'IMPERSONATE',
-                style: TextStyle(
-                  color: Color(0xFF8BE28B),
-                  fontWeight: FontWeight.w700,
-                  fontSize: 10,
-                  letterSpacing: 1.2,
-                ),
-              ),
-            ),
-            DropdownButtonFormField<String?>(
-              initialValue: impersonateId,
-              decoration: const InputDecoration(
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 8),
-              ),
-              items: [
-                const DropdownMenuItem<String?>(
-                  value: null,
-                  child: Text('Same as chat provider'),
-                ),
-                for (final p in store.providers)
-                  DropdownMenuItem<String?>(
-                    value: p.id,
-                    child: Text(p.name),
-                  ),
-              ],
-              onChanged: (id) => store.setImpersonateProvider(id),
-            ),
-            const SizedBox(height: 14),
-            // Guide provider — used by "Guide my message" (expanding your
-            // outline into your message). Falls back to impersonate → chat.
-            const Padding(
-              padding: EdgeInsets.only(bottom: 4),
-              child: Text(
-                'GUIDE',
-                style: TextStyle(
-                  color: Color(0xFFD79BFF),
-                  fontWeight: FontWeight.w700,
-                  fontSize: 10,
-                  letterSpacing: 1.2,
-                ),
-              ),
-            ),
-            DropdownButtonFormField<String?>(
-              initialValue: guideId,
-              decoration: const InputDecoration(
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 8),
-              ),
-              items: [
-                const DropdownMenuItem<String?>(
-                  value: null,
-                  child: Text('Same as impersonate provider'),
-                ),
-                for (final p in store.providers)
-                  DropdownMenuItem<String?>(
-                    value: p.id,
-                    child: Text(p.name),
-                  ),
-              ],
-              onChanged: (id) => store.setGuideProvider(id),
-            ),
+            // 2026-07-03 (Gui): the IMPERSONATE + GUIDE routes were cut —
+            // they're the same text generation as chat, so a dedicated model
+            // wasn't worth the two extra dropdowns. Both use the chat provider.
           ],
         ),
       ),

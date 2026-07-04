@@ -1,8 +1,8 @@
-// Feature (A): per-function provider routing for Impersonate + Guide.
-// impersonateProviderId / guideProviderId mirror creatorProviderId /
-// visionProviderId — they persist, ride the LWW settings unit, are stripped at
-// cross-device boundaries (device-local, 1.1.2), and clear on provider delete.
-// This locks the getter fallbacks + every sync touchpoint.
+// 2026-07-03 (Gui): the dedicated Impersonate + Guide provider ROUTES were
+// cut — they're the same text generation as chat, so a per-function pin
+// wasn't worth the UI. Both getters now always resolve to the chat provider.
+// (The impersonateProviderId / guideProviderId fields are kept dormant so old
+// data / sync payloads don't error; no UI writes them anymore.)
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/services/store_backend.dart';
@@ -20,98 +20,26 @@ class _NoopBackend implements StoreBackend {
 void main() {
   AppStore freshStore() => AppStore(storage: _NoopBackend());
 
-  group('per-function provider routing (A)', () {
-    test('impersonateProvider falls back to the active chat provider', () {
+  group('impersonate/guide routing cut — both use the chat provider', () {
+    test('with nothing set, both resolve to the active chat provider', () {
       final s = freshStore();
       final chat = s.addProvider(name: 'Chat');
       s.setActiveProvider(chat.id);
-      expect(s.impersonateProviderId, isNull);
       expect(s.impersonateProvider?.id, chat.id);
-    });
-
-    test('impersonateProvider returns the pinned override', () {
-      final s = freshStore();
-      final chat = s.addProvider(name: 'Chat');
-      final clean = s.addProvider(name: 'Clean');
-      s.setActiveProvider(chat.id);
-      s.setImpersonateProvider(clean.id);
-      expect(s.impersonateProvider?.id, clean.id);
-    });
-
-    test('guideProvider falls back impersonate → active', () {
-      final s = freshStore();
-      final chat = s.addProvider(name: 'Chat');
-      final clean = s.addProvider(name: 'Clean');
-      final guide = s.addProvider(name: 'Guide');
-      s.setActiveProvider(chat.id);
-      // nothing set → follows active
       expect(s.guideProvider?.id, chat.id);
-      // impersonate set, guide unset → follows impersonate
-      s.setImpersonateProvider(clean.id);
-      expect(s.guideProvider?.id, clean.id);
-      // guide pinned → guide
-      s.setGuideProvider(guide.id);
-      expect(s.guideProvider?.id, guide.id);
     });
 
-    test('removeProvider clears the impersonate + guide overrides', () {
+    test('a dormant pinned pointer is IGNORED — still the chat provider', () {
       final s = freshStore();
       final chat = s.addProvider(name: 'Chat');
-      final clean = s.addProvider(name: 'Clean');
+      final other = s.addProvider(name: 'Other');
       s.setActiveProvider(chat.id);
-      s.setImpersonateProvider(clean.id);
-      s.setGuideProvider(clean.id);
-      s.removeProvider(clean.id);
-      expect(s.impersonateProviderId, isNull);
-      expect(s.guideProviderId, isNull);
-    });
-
-    test('synced settings carry both pointers; strip removes them', () {
-      final s = freshStore();
-      final chat = s.addProvider(name: 'Chat');
-      final clean = s.addProvider(name: 'Clean');
-      s.setActiveProvider(chat.id);
-      s.setImpersonateProvider(clean.id);
-      s.setGuideProvider(clean.id);
-
-      final j = s.syncedSettingsToJson();
-      expect(j['impersonateProviderId'], clean.id);
-      expect(j['guideProviderId'], clean.id);
-
-      final stripped = withoutProviderRolePointers(j);
-      expect(stripped.containsKey('impersonateProviderId'), isFalse);
-      expect(stripped.containsKey('guideProviderId'), isFalse);
-    });
-
-    test('applySyncedSettings adopts both on a newer mtime', () {
-      final s = freshStore();
-      final chat = s.addProvider(name: 'Chat');
-      final clean = s.addProvider(name: 'Clean');
-      s.setActiveProvider(chat.id);
-      s.setImpersonateProvider(clean.id);
-      s.setGuideProvider(clean.id);
-      final j = Map<String, dynamic>.of(s.syncedSettingsToJson())
-        ..['mtime'] = (s.syncedSettingsToJson()['mtime'] as int) + 5000;
-
-      final s2 = freshStore();
-      s2.applySyncedSettings(j);
-      expect(s2.impersonateProviderId, clean.id);
-      expect(s2.guideProviderId, clean.id);
-    });
-
-    test('a STRIPPED record preserves the local override (containsKey guard)',
-        () {
-      final s = freshStore();
-      s.setImpersonateProvider('local-imp');
-      s.setGuideProvider('local-guide');
-
-      // A non-native peer record omits the pointers; an absent key must NOT
-      // null the local selection even on a newer mtime.
-      final stripped = withoutProviderRolePointers(s.syncedSettingsToJson())
-        ..['mtime'] = 9999999999999;
-      s.applySyncedSettings(stripped);
-      expect(s.impersonateProviderId, 'local-imp');
-      expect(s.guideProviderId, 'local-guide');
+      // Simulate an old value persisted before the cut (public field; no
+      // setter exists anymore). The getter must ignore it.
+      s.impersonateProviderId = other.id;
+      s.guideProviderId = other.id;
+      expect(s.impersonateProvider?.id, chat.id);
+      expect(s.guideProvider?.id, chat.id);
     });
   });
 

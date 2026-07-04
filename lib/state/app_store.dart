@@ -1751,43 +1751,18 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
-  /// Feature (A): provider for "Impersonate me". Falls back to the chat
-  /// provider when no impersonate-specific override is set.
-  ApiProvider? get impersonateProvider {
-    if (impersonateProviderId == null) return activeProvider;
-    for (final p in providers) {
-      if (p.id == impersonateProviderId) return p;
-    }
-    // ID points to a deleted provider — fall back to active.
-    return activeProvider;
-  }
+  /// Provider for "Impersonate me". 2026-07-03 (Gui): the dedicated
+  /// Impersonate + Guide provider routes were CUT — they were marginal
+  /// (impersonate/guide are the same text generation as chat) and bloated the
+  /// per-function routing card. Both now always use the chat provider. The
+  /// `impersonateProviderId` / `guideProviderId` fields are dormant (no UI
+  /// writes them; kept only so old data / sync payloads don't error) — a
+  /// future cleanup can drop them from the model + settings unit entirely.
+  ApiProvider? get impersonateProvider => activeProvider;
 
-  /// Pass null to clear the override (impersonate will reuse the chat provider).
-  void setImpersonateProvider(String? id) {
-    impersonateProviderId = id;
-    _touchSettings(); // SYNC W3: role pointer rides the LWW settings unit.
-    _bump();
-  }
-
-  /// Feature (A): provider for "Guide my message". Falls back to the
-  /// impersonate provider (then the chat provider) — guide-my-message is an
-  /// impersonation variant, so the impersonate override covers it unless the
-  /// user pins guide separately.
-  ApiProvider? get guideProvider {
-    if (guideProviderId == null) return impersonateProvider;
-    for (final p in providers) {
-      if (p.id == guideProviderId) return p;
-    }
-    return impersonateProvider;
-  }
-
-  /// Pass null to clear the override (guide will reuse the impersonate
-  /// provider, which itself falls back to chat).
-  void setGuideProvider(String? id) {
-    guideProviderId = id;
-    _touchSettings(); // SYNC W3: role pointer rides the LWW settings unit.
-    _bump();
-  }
+  /// Provider for "Guide my message" — also the chat provider now (see
+  /// [impersonateProvider]).
+  ApiProvider? get guideProvider => activeProvider;
 
   /// Record that the user dismissed the "update available" notice for [version]
   /// (launch snackbar or More-footer pill). Suppresses BOTH surfaces until a
