@@ -1307,6 +1307,12 @@ class Preset {
   String? impersonationPrompt;
   /// Optional override for the "Continue" affordance.
   String? continueNudgePrompt;
+  /// 2026-07-04 (Gui approved): "Start reply with" — forces the model's
+  /// reply to BEGIN with this text (supports {{char}}/{{user}} macros).
+  /// Sent as a trailing assistant turn (Anthropic-native assistant prefix;
+  /// most local/RP OpenAI-compatible backends continue it too). Empty/null =
+  /// byte-identical requests.
+  String? startReplyWith;
   double? temperature;
   double? topP;
   int? topK;
@@ -1316,6 +1322,15 @@ class Preset {
   double? minP;
   double? topA;
   double? repetitionPenalty;
+  /// 2026-07-04 (Gui approved): DRY anti-repetition (llama.cpp / KoboldCpp /
+  /// TabbyAPI / some OpenRouter routes). Null = not sent.
+  double? dryMultiplier;
+  double? dryBase;
+  int? dryAllowedLength;
+  /// 2026-07-04 (Gui approved): words the model must not produce. Sent under
+  /// the names local RP backends accept (`banned_strings` TabbyAPI,
+  /// `bad_words` vLLM, `banned_tokens` KoboldCpp). Empty = not sent.
+  List<String> bannedWords;
   bool locked;
   /// Pyre 1.1 (Prompt Manager): optional modular prompt blocks. When EMPTY
   /// (every preset today) the preset is FLAT and assembles to
@@ -1338,6 +1353,7 @@ class Preset {
     this.postHistoryInstructions = '',
     this.impersonationPrompt,
     this.continueNudgePrompt,
+    this.startReplyWith,
     this.temperature,
     this.topP,
     this.topK,
@@ -1347,6 +1363,10 @@ class Preset {
     this.minP,
     this.topA,
     this.repetitionPenalty,
+    this.dryMultiplier,
+    this.dryBase,
+    this.dryAllowedLength,
+    this.bannedWords = const [],
     this.locked = false,
     this.promptBlocks = const [],
     this.source,
@@ -1366,6 +1386,7 @@ class Preset {
             (j['postHistoryInstructions'] as String?) ?? '',
         impersonationPrompt: j['impersonationPrompt'] as String?,
         continueNudgePrompt: j['continueNudgePrompt'] as String?,
+        startReplyWith: j['startReplyWith'] as String?,
         temperature: (j['temperature'] as num?)?.toDouble(),
         topP: (j['topP'] as num?)?.toDouble(),
         topK: _jInt(j['topK']),
@@ -1375,6 +1396,10 @@ class Preset {
         minP: (j['minP'] as num?)?.toDouble(),
         topA: (j['topA'] as num?)?.toDouble(),
         repetitionPenalty: (j['repetitionPenalty'] as num?)?.toDouble(),
+        dryMultiplier: (j['dryMultiplier'] as num?)?.toDouble(),
+        dryBase: (j['dryBase'] as num?)?.toDouble(),
+        dryAllowedLength: _jInt(j['dryAllowedLength']),
+        bannedWords: _jStringList(j['bannedWords']),
         locked: (j['locked'] as bool?) ?? false,
         // Pyre 1.1: missing key (every legacy preset) → flat (no blocks).
         promptBlocks: (j['promptBlocks'] as List?)
@@ -1395,6 +1420,10 @@ class Preset {
         'postHistoryInstructions': postHistoryInstructions,
         'impersonationPrompt': impersonationPrompt,
         'continueNudgePrompt': continueNudgePrompt,
+        // 2026-07-04 fields: OMIT when unset so existing preset blobs /
+        // backups / sync payloads stay byte-identical (promptBlocks
+        // precedent).
+        if (startReplyWith != null) 'startReplyWith': startReplyWith,
         'temperature': temperature,
         'topP': topP,
         'topK': topK,
@@ -1404,6 +1433,10 @@ class Preset {
         'minP': minP,
         'topA': topA,
         'repetitionPenalty': repetitionPenalty,
+        if (dryMultiplier != null) 'dryMultiplier': dryMultiplier,
+        if (dryBase != null) 'dryBase': dryBase,
+        if (dryAllowedLength != null) 'dryAllowedLength': dryAllowedLength,
+        if (bannedWords.isNotEmpty) 'bannedWords': bannedWords,
         'locked': locked,
         // Pyre 1.1: OMIT when empty so existing (flat) preset blobs / backups /
         // sync payloads stay byte-identical to pre-1.1.

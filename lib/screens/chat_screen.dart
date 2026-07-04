@@ -13,6 +13,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/models.dart';
 import '../services/chat_api.dart';
+import '../services/continuation_merge.dart';
 import '../services/chat_export.dart';
 import '../services/web_download.dart';
 import '../services/chat_prompt_builder.dart';
@@ -1207,6 +1208,18 @@ class _ChatScreenState extends State<ChatScreen> {
       maxHistoryMessages: _contextTrimWindow,
       provider: provider,
     );
+    // 2026-07-04 (Gui approved): "Start reply with" prefill. When the preset
+    // sets it, the filled text rides as a TRAILING ASSISTANT turn — the
+    // Anthropic-native assistant prefix, which most local/RP OpenAI-compat
+    // backends also continue. Unset = no turn appended = byte-identical
+    // requests (goldens untouched). The display below seeds the reply with
+    // the prefill and mergeContinuationText dedupes backends that echo it.
+    final prefill = resolveStartReplyWith(
+      raw: store.activePreset?.startReplyWith,
+      charName: _primaryCharacter(store, chat)?.name ?? '',
+      userName: _chatPersona(store, chat)?.name ?? 'User',
+    );
+    if (prefill != null) turns.add(ChatTurn('assistant', prefill));
     // Wave BM: foreground-service keep-alive so the OS doesn't kill
     // Pyre while the LLM streams (especially the slow first-token wait
     // on reasoning models). Matching stop() in onDone / failure paths.
@@ -1253,10 +1266,18 @@ class _ChatScreenState extends State<ChatScreen> {
           // persisting so they never land in the stored variant or
           // render literally; <think> stays in the buffer (ChatText
           // hides it for display + the per-message reasoning toggle).
+          final visibleRaw = _stripChatSentinels(_streamBuffer);
+          // Prefill: the reply STARTS with the forced text (the model's
+          // stream is its continuation; mergeContinuationText also dedupes
+          // backends that echo the prefill back).
+          final visible = prefill == null
+              ? visibleRaw
+              : mergeContinuationText(
+                  existing: prefill, continuation: visibleRaw);
           store.updateMessageText(
             chat.id,
             assistantId,
-            _stripChatSentinels(_streamBuffer),
+            visible,
             variantIndex: pinnedVariant,
             streamingNotifier: _streamingNotifier(),
           );
@@ -3182,6 +3203,14 @@ class _ChatScreenState extends State<ChatScreen> {
     turns.add(ChatTurn('user', nudge));
 
     final pinnedVariant = _streamVariantIndex;
+    // 2026-07-04 (Gui: "continue não funciona muito bem"): the stream used
+    // to append blindly onto the existing text, so a model that repeated
+    // the quoted tail duplicated prose, and word-boundary continuations
+    // glued ("wordword"). Accumulate the CONTINUATION separately and merge
+    // through mergeContinuationText (overlap trim + seam space) on every
+    // write instead.
+    final baseText = last.text;
+    var contBuffer = '';
     await _keepAliveStart(); // Wave BM
     try {
       // chat-core-1-10: cancel any prior subscription before re-arming
@@ -3204,15 +3233,25 @@ class _ChatScreenState extends State<ChatScreen> {
       ).listen(
         (chunk) {
           if (!mounted) return;
-          _streamBuffer += chunk;
+          contBuffer += chunk;
+          // Hold the very first render until the continuation is long
+          // enough for the overlap check to be meaningful — avoids a brief
+          // duplicated-tail flash that then "snaps" shorter. The final
+          // write in onDone flushes short continuations regardless.
+          if (contBuffer.length < 24) return;
           // Continue appends onto the EXISTING message text, so a Pyre
           // sentinel emitted mid-stream would otherwise end up buried in
           // the middle of the prose (not just at the tail). Strip the
-          // sentinels before persisting; <think> stays for the toggle.
+          // sentinels before merging; <think> stays for the toggle.
+          final merged = mergeContinuationText(
+            existing: baseText,
+            continuation: _stripChatSentinels(contBuffer),
+          );
+          _streamBuffer = merged;
           store.updateMessageText(
             chat.id,
             last.id,
-            _stripChatSentinels(_streamBuffer),
+            merged,
             variantIndex: pinnedVariant,
             streamingNotifier: _streamingNotifier(),
           );
@@ -3225,6 +3264,22 @@ class _ChatScreenState extends State<ChatScreen> {
         onDone: () {
           _keepAliveStop(); // Wave BM
           if (!mounted) return;
+          // Final merged write — also covers a short (<24 char)
+          // continuation that never hit the streaming threshold above.
+          final merged = mergeContinuationText(
+            existing: baseText,
+            continuation: _stripChatSentinels(contBuffer),
+          );
+          if (merged != baseText) {
+            _streamBuffer = merged;
+            store.updateMessageText(
+              chat.id,
+              last.id,
+              merged,
+              variantIndex: pinnedVariant,
+              streamingNotifier: _streamingNotifier(),
+            );
+          }
           _settleStreamingNotifier();
           setState(() {
             _generating = false;

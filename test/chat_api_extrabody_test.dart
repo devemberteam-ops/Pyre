@@ -80,5 +80,48 @@ void main() {
       );
       expect(body['stream'], isFalse);
     });
+
+    // 2026-07-04 (Gui approved): DRY + banned-words passthrough. Unset =
+    // absent (the request stays byte-identical for every existing preset);
+    // set = present under the names the RP backends accept.
+    test('DRY + banned words absent when the preset does not set them', () {
+      final body = buildRequestBody(
+        provider: makeProvider(),
+        settings: settings,
+        messages: messages,
+        stream: true,
+        preset: Preset(id: 'x', name: 'plain'),
+      );
+      expect(body.containsKey('dry_multiplier'), isFalse);
+      expect(body.containsKey('dry_base'), isFalse);
+      expect(body.containsKey('dry_allowed_length'), isFalse);
+      expect(body.containsKey('banned_strings'), isFalse);
+      expect(body.containsKey('bad_words'), isFalse);
+      expect(body.containsKey('banned_tokens'), isFalse);
+    });
+
+    test('DRY + banned words ride the body when set', () {
+      final body = buildRequestBody(
+        provider: makeProvider(),
+        settings: settings,
+        messages: messages,
+        stream: true,
+        preset: Preset(
+          id: 'x',
+          name: 'dry',
+          dryMultiplier: 0.8,
+          dryBase: 1.75,
+          dryAllowedLength: 2,
+          bannedWords: ['ministrations', 'shivers down her spine'],
+        ),
+      );
+      expect(body['dry_multiplier'], 0.8);
+      expect(body['dry_base'], 1.75);
+      expect(body['dry_allowed_length'], 2);
+      const words = ['ministrations', 'shivers down her spine'];
+      expect(body['banned_strings'], words);
+      expect(body['bad_words'], words);
+      expect(body['banned_tokens'], words);
+    });
   });
 }

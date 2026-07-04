@@ -492,6 +492,7 @@ Future<void> _openPresetKebab(BuildContext context, Preset p) async {
                 postHistoryInstructions: p.postHistoryInstructions,
                 impersonationPrompt: p.impersonationPrompt,
                 continueNudgePrompt: p.continueNudgePrompt,
+                startReplyWith: p.startReplyWith,
                 temperature: p.temperature,
                 topP: p.topP,
                 topK: p.topK,
@@ -501,6 +502,10 @@ Future<void> _openPresetKebab(BuildContext context, Preset p) async {
                 minP: p.minP,
                 topA: p.topA,
                 repetitionPenalty: p.repetitionPenalty,
+                dryMultiplier: p.dryMultiplier,
+                dryBase: p.dryBase,
+                dryAllowedLength: p.dryAllowedLength,
+                bannedWords: List<String>.from(p.bannedWords),
                 // Pyre 1.1: a modular preset must clone its toggleable blocks
                 // too (deep copy — each block is a mutable object), or the
                 // copy would silently flatten to mainPrompt.
@@ -652,6 +657,10 @@ class _PresetDetailsScreen extends StatelessWidget {
       'min_p': p.minP,
       'top_a': p.topA,
       'repetition_penalty': p.repetitionPenalty,
+      'dry_multiplier': p.dryMultiplier,
+      'dry_base': p.dryBase,
+      'dry_allowed_length': p.dryAllowedLength,
+      if (p.bannedWords.isNotEmpty) 'banned_words': p.bannedWords.join(', '),
     }..removeWhere((_, v) => v == null);
     if (samp.isEmpty) return const SizedBox.shrink();
     final lines =
@@ -890,6 +899,9 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
       TextEditingController(text: existing?.impersonationPrompt ?? '');
   final cntCtl =
       TextEditingController(text: existing?.continueNudgePrompt ?? '');
+  // 2026-07-04 (Gui approved): prefill.
+  final startCtl =
+      TextEditingController(text: existing?.startReplyWith ?? '');
 
   // Sampling — every field is an OPTIONAL override of the global
   // "Default generation" defaults (the card at the top of this screen).
@@ -906,6 +918,13 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
   final topACtl = TextEditingController(text: fmt(existing?.topA));
   final repCtl =
       TextEditingController(text: fmt(existing?.repetitionPenalty));
+  // 2026-07-04 (Gui approved): DRY anti-repetition + banned words.
+  final dryMultCtl = TextEditingController(text: fmt(existing?.dryMultiplier));
+  final dryBaseCtl = TextEditingController(text: fmt(existing?.dryBase));
+  final dryLenCtl =
+      TextEditingController(text: fmt(existing?.dryAllowedLength));
+  final bannedCtl =
+      TextEditingController(text: (existing?.bannedWords ?? const []).join(', '));
 
   // Pyre 1.1 (Prompt Manager): a working DRAFT copy of the preset's modular
   // prompt blocks. We deep-copy so toggles/edits/reorders are only committed
@@ -1042,6 +1061,20 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
                       'Optional. Supports {{char}}, {{lastChatMessage}}.',
                 ),
               ),
+              const SizedBox(height: 12),
+              hint(
+                  'Start reply with — forces every reply to BEGIN with this '
+                  'text. Great for locking format or cutting refusals '
+                  '(native on Anthropic; most local backends honor it too).'),
+              TextField(
+                controller: startCtl,
+                maxLines: 2,
+                minLines: 1,
+                decoration: const InputDecoration(
+                  hintText: 'Optional. Supports {{char}}, {{user}} — e.g. '
+                      '"{{char}}:"',
+                ),
+              ),
               sectionHeader('Sampling overrides'),
               hint(
                   'Each field overrides your global default (set in Default generation above) only when filled. Leave blank to use the global default.'),
@@ -1087,6 +1120,38 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
               const SizedBox(height: 12),
               numField(repCtl,
                   label: 'Repetition penalty', hint: '1.0 – 1.5 typical'),
+              sectionHeader('Anti-repetition (DRY) & banned words'),
+              hint(
+                  'For local/self-hosted backends (llama.cpp, KoboldCpp, '
+                  'TabbyAPI, vLLM) and some OpenRouter routes — hosted '
+                  'providers that don\'t support these simply ignore them. '
+                  'DRY punishes the model for repeating its own phrasing '
+                  '(the "same sentence every message" fix).'),
+              Row(children: [
+                Expanded(
+                    child: numField(dryMultCtl,
+                        label: 'DRY multiplier', hint: '0.8 typical, 0 = off')),
+                const SizedBox(width: 12),
+                Expanded(
+                    child: numField(dryBaseCtl,
+                        label: 'DRY base', hint: '1.75 typical')),
+              ]),
+              const SizedBox(height: 12),
+              numField(dryLenCtl,
+                  label: 'DRY allowed length', hint: 'int, 2 typical'),
+              const SizedBox(height: 12),
+              hint(
+                  'Banned words — the model is blocked from producing these '
+                  '(unlike Regex, which cleans text after the fact).'),
+              TextField(
+                controller: bannedCtl,
+                maxLines: 3,
+                minLines: 1,
+                decoration: const InputDecoration(
+                  hintText:
+                      'Comma-separated, e.g. ministrations, shivers down her spine',
+                ),
+              ),
             ],
             ),
           ),
@@ -1117,6 +1182,12 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
               return t.isEmpty ? null : t;
             }
 
+            List<String> words(TextEditingController c) => c.text
+                .split(RegExp(r'[,\n]'))
+                .map((w) => w.trim())
+                .where((w) => w.isNotEmpty)
+                .toList();
+
             if (existing == null) {
               store.addPreset(Preset(
                 id: newId('preset'),
@@ -1127,6 +1198,7 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
                 postHistoryInstructions: postCtl.text.trim(),
                 impersonationPrompt: s(impCtl),
                 continueNudgePrompt: s(cntCtl),
+                startReplyWith: s(startCtl),
                 temperature: d(tempCtl),
                 topP: d(topPCtl),
                 topK: i(topKCtl),
@@ -1136,6 +1208,10 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
                 minP: d(minPCtl),
                 topA: d(topACtl),
                 repetitionPenalty: d(repCtl),
+                dryMultiplier: d(dryMultCtl),
+                dryBase: d(dryBaseCtl),
+                dryAllowedLength: i(dryLenCtl),
+                bannedWords: words(bannedCtl),
               ));
             } else {
               existing
@@ -1144,6 +1220,7 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
                 ..postHistoryInstructions = postCtl.text.trim()
                 ..impersonationPrompt = s(impCtl)
                 ..continueNudgePrompt = s(cntCtl)
+                ..startReplyWith = s(startCtl)
                 ..temperature = d(tempCtl)
                 ..topP = d(topPCtl)
                 ..topK = i(topKCtl)
@@ -1152,7 +1229,11 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
                 ..presencePenalty = d(presCtl)
                 ..minP = d(minPCtl)
                 ..topA = d(topACtl)
-                ..repetitionPenalty = d(repCtl);
+                ..repetitionPenalty = d(repCtl)
+                ..dryMultiplier = d(dryMultCtl)
+                ..dryBase = d(dryBaseCtl)
+                ..dryAllowedLength = i(dryLenCtl)
+                ..bannedWords = words(bannedCtl);
               // MODULAR preset → commit the working block draft (toggles /
               // edits / reorders / adds / deletes). Empty content + name fields
               // weren't shown for a modular preset (the blocks ARE the prompt),
@@ -1170,9 +1251,10 @@ Future<void> _editPreset(BuildContext context, Preset? existing) async {
     ),
   );
   for (final c in <TextEditingController>[
-    nameCtl, mainCtl, postCtl, impCtl, cntCtl,
+    nameCtl, mainCtl, postCtl, impCtl, cntCtl, startCtl,
     tempCtl, topPCtl, topKCtl, tokensCtl, freqCtl,
     presCtl, minPCtl, topACtl, repCtl,
+    dryMultCtl, dryBaseCtl, dryLenCtl, bannedCtl,
   ]) {
     c.dispose();
   }

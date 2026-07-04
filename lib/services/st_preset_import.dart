@@ -295,6 +295,18 @@ StImportResult parseSillyTavernPreset(String jsonText) {
     minP: readDouble('min_p'),
     topA: readDouble('top_a'),
     repetitionPenalty: readDouble('repetition_penalty'),
+    // 2026-07-04 (Gui approved): DRY + banned words + Start Reply With ride
+    // ST presets under these keys (textgen settings). `banned_tokens` in ST
+    // is one newline/comma-separated string.
+    startReplyWith: readString('start_reply_with'),
+    dryMultiplier: readDouble('dry_multiplier'),
+    dryBase: readDouble('dry_base'),
+    dryAllowedLength: readInt('dry_allowed_length'),
+    bannedWords: (readString('banned_tokens') ?? '')
+        .split(RegExp(r'[,\n]'))
+        .map((w) => w.trim())
+        .where((w) => w.isNotEmpty)
+        .toList(),
     // Pyre 1.1: the modular structure (empty when nothing authored survives →
     // flat behaviour). mainPrompt/postHistoryInstructions above stay populated
     // as a safe fallback for any direct reader.

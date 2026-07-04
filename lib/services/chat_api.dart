@@ -371,6 +371,27 @@ Map<String, dynamic> _samplingPayload(
   if (preset?.repetitionPenalty != null) {
     out['repetition_penalty'] = preset!.repetitionPenalty;
   }
+  // 2026-07-04 (Gui approved): DRY anti-repetition — understood by
+  // llama.cpp / KoboldCpp / TabbyAPI (and some OpenRouter routes); everyone
+  // else silently ignores it (same send-everything philosophy as above,
+  // with safeBodyFor + the 400-retry backstop for strict providers).
+  if (preset?.dryMultiplier != null) {
+    out['dry_multiplier'] = preset!.dryMultiplier;
+  }
+  if (preset?.dryBase != null) out['dry_base'] = preset!.dryBase;
+  if (preset?.dryAllowedLength != null) {
+    out['dry_allowed_length'] = preset!.dryAllowedLength;
+  }
+  // 2026-07-04 (Gui approved): banned words — no universal name exists, so
+  // the same list rides under the aliases the popular RP backends accept:
+  // TabbyAPI `banned_strings`, vLLM/Aphrodite `bad_words`, KoboldCpp
+  // `banned_tokens` (accepts strings). Only sent when non-empty.
+  if (preset != null && preset.bannedWords.isNotEmpty) {
+    final words = preset.bannedWords;
+    out['banned_strings'] = words;
+    out['bad_words'] = words;
+    out['banned_tokens'] = words;
+  }
   return out;
 }
 
