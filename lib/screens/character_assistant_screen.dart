@@ -78,7 +78,9 @@ import '../widgets/lorebook_binding_section.dart';
 // in as-is) and the "Save & open editor" save-action was retired.
 import 'character_creator_help_screen.dart';
 import 'chat_picker_screens.dart';
-import 'lorebook_creator_screen.dart';
+// 2026-07-03: the standalone LorebookCreatorScreen was removed (owner
+// decision) — the shared draft-extraction helpers moved to services.
+import '../services/lorebook_entry_drafts.dart';
 
 /// Whether the Creator chat input should be LOCKED for a session in the
 /// given ([mode], [flow]) state.

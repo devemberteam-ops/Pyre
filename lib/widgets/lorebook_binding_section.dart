@@ -20,7 +20,6 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
-import '../screens/lorebook_creator_screen.dart';
 
 // ── Shared/embedded chooser ──────────────────────────────────────────────────
 
@@ -199,119 +198,16 @@ class LorebookBindingSection extends StatelessWidget {
                   ),
                   onPressed: () => _openPicker(context, store),
                 ),
-              if (!readOnly)
-                ActionChip(
-                  backgroundColor: EmberColors.bgDeep,
-                  side: BorderSide(
-                      color: EmberColors.primary.withValues(alpha: 0.35)),
-                  avatar: Icon(Icons.auto_awesome,
-                      size: 14, color: EmberColors.primary),
-                  label: Text(
-                    'Create with AI',
-                    style: TextStyle(
-                        color: EmberColors.primary, fontSize: 12),
-                  ),
-                  onPressed: () => _openCreatorForCard(context, store),
-                ),
             ],
           ),
       ],
     );
   }
 
-  /// Open the AI Lorebook Creator for this card.
-  /// Asks shared-vs-embedded (D1), then opens [LorebookCreatorScreen] with
-  /// `onBookCreated` so the new book's id is automatically bound to this card
-  /// on first save.
-  Future<void> _openCreatorForCard(
-      BuildContext context, AppStore store) async {
-    // D1: ALWAYS ask at bind time.
-    final embedded = await askEmbeddedChoice(context);
-    if (embedded == null) return; // user cancelled
-    if (!context.mounted) return;
-
-    // Ask for a name (same pattern as lorebooks_screen._openCreatorNew).
-    final nameCtl = TextEditingController(text: 'New lorebook');
-    String? nameError;
-    String? chosenName;
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          backgroundColor: EmberColors.bgPanel,
-          title: const Text('New lorebook with AI'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Give your lorebook a name — you can rename it later.',
-                style: TextStyle(fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: nameCtl,
-                autofocus: true,
-                decoration: InputDecoration(
-                  labelText: 'Lorebook name',
-                  errorText: nameError,
-                ),
-                onChanged: (_) {
-                  if (nameError != null && nameCtl.text.trim().isNotEmpty) {
-                    setLocal(() => nameError = null);
-                  }
-                },
-                onSubmitted: (_) {
-                  final name = nameCtl.text.trim();
-                  if (name.isEmpty) {
-                    setLocal(() => nameError = 'Name is required');
-                    return;
-                  }
-                  chosenName = name;
-                  Navigator.pop(ctx);
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final name = nameCtl.text.trim();
-                if (name.isEmpty) {
-                  setLocal(() => nameError = 'Name is required');
-                  return;
-                }
-                chosenName = name;
-                Navigator.pop(ctx);
-              },
-              child: const Text('Continue'),
-            ),
-          ],
-        ),
-      ),
-    );
-    nameCtl.dispose();
-
-    if (chosenName == null || chosenName!.isEmpty) return;
-    if (!context.mounted) return;
-
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => LorebookCreatorScreen(
-        targetBook: null,
-        initialBookName: chosenName,
-        createHidden: embedded,
-        onBookCreated: (newId) {
-          // Bind the new book to the card as soon as it's created.
-          if (selectedIds.contains(newId)) return;
-          onChanged!([...selectedIds, newId]);
-        },
-      ),
-    ));
-  }
+  // (2026-07-03, owner decision: the "Create with AI" chip and its standalone
+  // LorebookCreatorScreen flow were removed — the main AI Creator's in-canvas
+  // lorebook mode is the one AI path. Build the book there, then bind it here
+  // via "Add lorebook".)
 
   Future<void> _openPicker(BuildContext context, AppStore store) async {
     // Picker shows ALL books, even hidden ones — the hidden flag is

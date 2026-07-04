@@ -1,17 +1,15 @@
 // Wave CY.18.122 (Lorebook Creator, Wave 2): tests for the pure extraction
-// and save-append logic extracted from lorebook_creator_screen.dart.
+// and save-append logic — now in services/lorebook_entry_drafts.dart
+// (2026-07-03: the standalone LorebookCreatorScreen was removed; the main AI
+// Creator's in-canvas lorebook mode is the sole consumer of these helpers).
 //
 // We test the pure helper `extractEntryDraftFromReply` directly — it is the
 // wiring between the architect's [[BUILD_ENTRY]] reply and the EntryDraft
 // panel. The save-append logic is exercised against the models directly.
-//
-// A full widget pump would require a real AppStore (needs disk / path_provider)
-// and a real streaming provider. The logic under test is deliberately pure and
-// injected — these unit tests cover it without Flutter infrastructure.
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/models/models.dart';
-import 'package:pyre/screens/lorebook_creator_screen.dart'
+import 'package:pyre/services/lorebook_entry_drafts.dart'
     show
         extractEntryDraftFromReply,
         extractEntryDraftsFromReply,

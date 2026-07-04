@@ -14,7 +14,6 @@ import '../widgets/confirm_dialog.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/lorebook_binding_section.dart'
     show LorebookUsedBySection, askEmbeddedChoice;
-import 'lorebook_creator_screen.dart';
 
 class LorebooksScreen extends StatelessWidget {
   const LorebooksScreen({super.key});
@@ -39,15 +38,6 @@ class LorebooksScreen extends StatelessWidget {
             icon: const Icon(Icons.file_upload_outlined),
             tooltip: 'Import from JSON',
             onPressed: () => _importLorebookFile(context),
-          ),
-          // Wave CY.18.122: AI lorebook creator — opens the per-entry chat
-          // builder with a new (unnamed-until-first-save) target book.
-          // The user is asked for a book name up-front via a quick dialog
-          // so the header label is meaningful from the start.
-          IconButton(
-            icon: const Icon(Icons.auto_awesome),
-            tooltip: 'New lorebook with AI',
-            onPressed: () => _openCreatorNew(context),
           ),
           IconButton(
             icon: const Icon(Icons.add),
@@ -158,18 +148,6 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
               Navigator.pop(sheet);
               Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => LorebookEditScreen(lorebookId: l.id),
-              ));
-            },
-          ),
-          // Wave CY.18.122: AI entry builder — opens the Creator bound to
-          // this existing book, appending entries one at a time.
-          ListTile(
-            leading: Icon(Icons.auto_awesome, color: EmberColors.primary),
-            title: const Text('Add entries with AI'),
-            onTap: () {
-              Navigator.pop(sheet);
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => LorebookCreatorScreen(targetBook: l),
               ));
             },
           ),
@@ -390,87 +368,9 @@ Future<void> _embedIntoCard(
   );
 }
 
-// ── AI Creator entry point ────────────────────────────────────────────────────
-
-/// Wave CY.18.122: ask the user for a book name, then push the AI creator.
-/// The name dialog is kept minimal (one field). The creator will create the
-/// actual Lorebook on first save; if the user abandons the creator before
-/// saving any entry, no Lorebook object is created.
-Future<void> _openCreatorNew(BuildContext context) async {
-  final nameCtl = TextEditingController(text: 'New lorebook');
-  String? nameError;
-  String? chosenName;
-  await showDialog<void>(
-    context: context,
-    builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setLocal) => AlertDialog(
-        backgroundColor: EmberColors.bgPanel,
-        title: const Text('New lorebook with AI'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Give your lorebook a name — you can rename it later.',
-              style: TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: nameCtl,
-              autofocus: true,
-              decoration: InputDecoration(
-                labelText: 'Lorebook name',
-                errorText: nameError,
-              ),
-              onChanged: (_) {
-                if (nameError != null && nameCtl.text.trim().isNotEmpty) {
-                  setLocal(() => nameError = null);
-                }
-              },
-              onSubmitted: (v) {
-                final name = nameCtl.text.trim();
-                if (name.isEmpty) {
-                  setLocal(() => nameError = 'Name is required');
-                  return;
-                }
-                chosenName = name;
-                Navigator.pop(ctx);
-              },
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final name = nameCtl.text.trim();
-              if (name.isEmpty) {
-                setLocal(() => nameError = 'Name is required');
-                return;
-              }
-              chosenName = name;
-              Navigator.pop(ctx);
-            },
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    ),
-  );
-  nameCtl.dispose();
-
-  if (chosenName == null || chosenName!.isEmpty) return;
-  if (!context.mounted) return;
-  Navigator.of(context).push(MaterialPageRoute(
-    builder: (_) => LorebookCreatorScreen(
-      targetBook: null,
-      initialBookName: chosenName,
-    ),
-  ));
-}
+// (2026-07-03, owner decision: the standalone AI lorebook creator was removed
+// — the main AI Creator's "Build a lorebook" canvas mode is the one AI path.
+// Manual creation, entry editing, import and Copy-as-new all remain here.)
 
 /// Wave CA: import a lorebook from a JSON file picked off device storage.
 /// Accepts a few related shapes (see [tryParseLorebookJson]):
@@ -624,14 +524,6 @@ class LorebookEditScreen extends StatelessWidget {
       appBar: AppBar(
         title: Text(lore.name, overflow: TextOverflow.ellipsis),
         actions: [
-          // Wave CY.18.122: AI entry builder bound to this book.
-          IconButton(
-            icon: Icon(Icons.auto_awesome, color: EmberColors.primary),
-            tooltip: 'Add entries with AI',
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => LorebookCreatorScreen(targetBook: lore),
-            )),
-          ),
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: 'New entry',
