@@ -338,13 +338,25 @@ String buildJointPartyBlock({
   // place party mode's narration framing lives.
   // -----------------------------------------------------------------
   final userName = joinedUser ?? persona?.name ?? 'You';
+  // 2026-07-04 (Gui: "narrator fica estranho com o grupo de personas"): with
+  // a persona PARTY in the same chat, the user's persona cards are formatted
+  // just like the member cards ('--- Name ---'), so "the characters
+  // described above" could sweep them into the narrator's cast and the model
+  // starts voicing the user's own party. When a persona party is present the
+  // instruction names the split explicitly. Single-persona chats (joinedUser
+  // == null) keep the original bytes — golden 15 untouched.
   buf.writeln(
     'You are narrating a group scene featuring the characters described '
     'above. Voice each character in their own distinct manner as the '
     "moment calls for — they do NOT all have to speak or act every turn. "
     'Write one cohesive, flowing scene. Prefix each character\'s '
     "spoken/acted beat with their name so the reader can follow who is "
-    'who. Never speak, act, think, or decide for $userName.',
+    'who. '
+    '${joinedUser == null ? '' : "The user's own party ($joinedUser) is "
+        'described separately and is NOT part of your cast — they are '
+        'present in the scene, but only the user writes their words and '
+        'actions. '}'
+    'Never speak, act, think, or decide for $userName.',
   );
   return buf.toString();
 }
@@ -388,6 +400,14 @@ String buildJointPersonaBlock(List<Persona> personas) {
   final active = personas.where((p) => p.name.trim().isNotEmpty).toList();
   if (active.isEmpty) return '';
   final buf = StringBuffer();
+  // 2026-07-04 (Gui): header line so these cards can never be mistaken for
+  // scene characters — in a party-mode chat the member cards use the same
+  // '--- Name ---' delimiters, and the narrator instruction ("the characters
+  // described above") was sweeping the user's personas into the cast.
+  buf.writeln(
+      "The user's party — the following are the USER's own characters, "
+      'played exclusively by the user:');
+  buf.writeln();
   for (final p in active) {
     buf.writeln('--- ${p.name} ---');
     if (p.description.trim().isNotEmpty) {
