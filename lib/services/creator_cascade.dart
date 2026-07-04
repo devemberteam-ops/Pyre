@@ -390,6 +390,48 @@ String _foldBuildGateText(String text) {
       .replaceAll('\u00e7', 'c');
 }
 
+// ---------------------------------------------------------------------------
+// 2026-07-03 (Gui): build COST GUARDRAIL. The structured build is the most
+// expensive thing the app does (multi-pass; worst case dozens of LLM calls).
+// The old cascade's `exhausted` flag — which stopped automatic re-fires after
+// a failure — was dropped in the deterministic-build rewrite. This re-adds it
+// as a per-session flag persisted on the canvas:
+//   - a FAILED build sets the flag;
+//   - while set, the [[BUILD_SHEET]] marker does NOT auto-fire (a Retry of
+//     the old marker reply would silently re-burn the whole build against a
+//     provider that's probably still broken);
+//   - a NEW real user message clears it (fresh intent = fresh consent);
+//   - manual /build always runs (deliberate) and a successful build clears it.
+
+/// Canvas key holding the per-session "last structured build failed" flag.
+const String kCanvasBuildFailedKey = '_pyre_lastBuildFailed';
+
+/// True when the session's last structured build failed (flag set on canvas).
+bool creatorLastBuildFailed(Map<String, dynamic> canvas) =>
+    canvas[kCanvasBuildFailedKey] == true;
+
+/// Returns a copy of [canvas] with the failed flag set or REMOVED (never
+/// written as `false` — the canvas is exported/synced and shouldn't
+/// accumulate stale internal keys). Does not mutate the input.
+Map<String, dynamic> withCreatorLastBuildFailed(
+  Map<String, dynamic> canvas,
+  bool failed,
+) {
+  final next = Map<String, dynamic>.from(canvas);
+  if (failed) {
+    next[kCanvasBuildFailedKey] = true;
+  } else {
+    next.remove(kCanvasBuildFailedKey);
+  }
+  return next;
+}
+
+/// Cost-guardrail gate for the `[[BUILD_SHEET]]` marker auto-fire (applied
+/// AFTER [shouldAutoFireBuildMarker]'s proposal gate): blocked while the
+/// session's last build failed. `/build` bypasses this — it is deliberate.
+bool shouldMarkerAutoFireBuild({required bool lastBuildFailed}) =>
+    !lastBuildFailed;
+
 /// True when the user's OUTGOING Creator-input message is the deterministic
 /// `/build` command (the safety-net fallback if the architect ever forgets the
 /// marker). Accepts exactly `/build` and `/build the sheet`, case-insensitive,

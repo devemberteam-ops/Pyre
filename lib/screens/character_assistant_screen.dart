@@ -1245,6 +1245,9 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       if (foreignDescription.trim().isNotEmpty) {
         canvas['description'] = foreignDescription;
       }
+      // Cost guardrail: a build that reached the merge succeeded — drop the
+      // failed flag so the next marker auto-fires normally.
+      canvas.remove(kCanvasBuildFailedKey);
       store.updateCreatorSessionCanvas(id, canvas);
       store.flushPersist();
 
@@ -1280,13 +1283,28 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
         _scrollToBottom();
       }
     } catch (e) {
+      // Cost guardrail (2026-07-03, Gui): remember the failure on the BUILD's
+      // session (by captured `id`, not the active one — the user may have
+      // switched mid-build) so the [[BUILD_SHEET]] marker won't auto-refire a
+      // full multi-pass build until the user shows fresh intent.
+      final owned = store.creatorSessions.where((s) => s.id == id).toList();
+      if (owned.isNotEmpty) {
+        store.updateCreatorSessionCanvas(
+          id,
+          withCreatorLastBuildFailed(
+            Map<String, dynamic>.from(owned.first.canvas),
+            true,
+          ),
+        );
+        store.flushPersist();
+      }
       // Creator M2: don't write the error bubble into a session the user
       // switched to mid-build.
       if (myGen == _streamGen) {
         _updateBuildStatus(
           store,
           '⚠ The build hit a problem (${e.toString()}). Whatever was filled '
-          'is in the Sheet tab — you can re-run the build.',
+          'is in the Sheet tab — you can re-run it with /build when ready.',
         );
       }
     } finally {
@@ -1513,8 +1531,17 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
         );
         return;
       }
+      // Cost guardrail: /build is deliberate, so it always runs — but when
+      // the last build failed, say so, so the user knows this is a full
+      // (multi-pass) re-run rather than a resume.
       messenger.showSnackBar(
-        const SnackBar(content: Text('Building the sheet…')),
+        SnackBar(
+          content: Text(
+            creatorLastBuildFailed(_sessionCanvas(store))
+                ? 'Re-running the full build (the last one failed)…'
+                : 'Building the sheet…',
+          ),
+        ),
       );
       unawaited(_runStructuredBuildFlow());
       return;
@@ -1565,6 +1592,18 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     newMessages.add(
       CreatorMessage(role: 'user', content: text, attachments: attachments),
     );
+
+    // Cost guardrail: a NEW real user message is fresh intent — clear the
+    // failed-build flag so the architect's next [[BUILD_SHEET]] marker can
+    // auto-fire again. (A Retry of the OLD marker reply adds no user message,
+    // so the flag keeps blocking that path.)
+    final canvasNow = _sessionCanvas(store);
+    if (creatorLastBuildFailed(canvasNow)) {
+      store.updateCreatorSessionCanvas(
+        id,
+        withCreatorLastBuildFailed(Map<String, dynamic>.from(canvasNow), false),
+      );
+    }
 
     // Per image, drop an empty assistant placeholder right away so
     // the user sees a "…" bubble while the vision call runs instead
@@ -2104,7 +2143,21 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
                   _runLorebookStructuredBuildFlow(seedRaw: _streamBuffer),
                 );
               } else if (markerPresent && !_structuredBuilding) {
-                unawaited(_runStructuredBuildFlow());
+                // Cost guardrail (2026-07-03, Gui): after a FAILED build the
+                // marker must not silently re-burn a full multi-pass build
+                // (e.g. a Retry of the marker reply while the provider is
+                // still broken). A new user message clears the flag; /build
+                // always runs.
+                if (creatorLastBuildFailed(_sessionCanvas(store))) {
+                  _appendBuildStatus(
+                    store,
+                    '⚠ The last build failed, so I won\'t restart it '
+                    'automatically (it runs several passes). Check your '
+                    'provider, then type /build to run it again.',
+                  );
+                } else {
+                  unawaited(_runStructuredBuildFlow());
+                }
               }
             },
           );
