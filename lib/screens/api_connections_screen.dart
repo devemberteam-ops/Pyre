@@ -14,6 +14,7 @@ import '../services/resolvers.dart' show isProviderHostAllowed;
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/how_it_works_card.dart';
 import 'model_picker_sheet.dart';
 import 'smart_fallback_screen.dart';
 
@@ -51,6 +52,40 @@ class ApiConnectionsScreen extends StatelessWidget {
             )
           : Column(
               children: [
+                // 2026-07-03: the app's make-or-break screen was the only
+                // major one without the house "How it works" explainer (regex,
+                // fallback, memory, script all have one). Collapsed by default.
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: HowItWorksCard(
+                    title: 'How connections work',
+                    subtitle: 'BYOK — your key, your model, on your device.',
+                    sections: [
+                      HowItWorksSection('What a provider is', [
+                        HowItWorksBlock.paragraph(
+                            'Pyre brings no AI of its own — it connects to a '
+                            'service that writes the replies (OpenRouter, '
+                            'OpenAI, a local model…). You add the service and '
+                            'paste **its** API key.'),
+                      ]),
+                      HowItWorksSection('Your key stays yours', [
+                        HowItWorksBlock.paragraph(
+                            'Keys are kept in your device\'s secure store, '
+                            'never leave the device, and are left out of '
+                            'backups unless you tick that box.'),
+                      ]),
+                      HowItWorksSection('Tapping + the order', [
+                        HowItWorksBlock.bullet(
+                            '**Tap a connection** to make it the one your '
+                            'chats use (the CHAT badge moves to it).'),
+                        HowItWorksBlock.bullet(
+                            '**The list is the fallback order** — if one '
+                            'fails or refuses, Pyre offers the next. Drag to '
+                            'reorder.'),
+                      ]),
+                    ],
+                  ),
+                ),
                 // Fixed header: the per-feature override card (only with
                 // 2+ providers) + a gentle one-line fallback explainer.
                 if (store.providers.length >= 2)
@@ -186,11 +221,64 @@ class ApiConnectionsScreen extends StatelessWidget {
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              IconButton(
-                                icon: Icon(Icons.edit_outlined,
+                              // 2026-07-03: kebab menu — matches the app's
+                              // convention (characters/personas/lorebooks all
+                              // use one) and un-stacks the edit dialog, which
+                              // used to carry Delete + Duplicate among 5 piled
+                              // action buttons.
+                              PopupMenuButton<String>(
+                                icon: Icon(Icons.more_vert,
                                     color: EmberColors.textMid),
-                                tooltip: 'Edit',
-                                onPressed: () => _editProvider(context, p),
+                                onSelected: (choice) async {
+                                  if (choice == 'edit') {
+                                    _editProvider(context, p);
+                                  } else if (choice == 'duplicate') {
+                                    store.duplicateProvider(p.id);
+                                  } else if (choice == 'delete') {
+                                    final confirmed = await showDialog<bool>(
+                                      context: context,
+                                      builder: (dctx) => AlertDialog(
+                                        backgroundColor: EmberColors.bgPanel,
+                                        title:
+                                            const Text('Delete provider?'),
+                                        content: Text(
+                                          'Remove "${p.name}" and its saved '
+                                          'API key from this device? This '
+                                          'can\'t be undone.',
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(dctx, false),
+                                            child: const Text('Cancel'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(dctx, true),
+                                            child: const Text('Delete',
+                                                style: TextStyle(
+                                                    color: Colors.redAccent)),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (confirmed == true) {
+                                      store.removeProvider(p.id);
+                                    }
+                                  }
+                                },
+                                itemBuilder: (_) => const [
+                                  PopupMenuItem(
+                                      value: 'edit', child: Text('Edit')),
+                                  PopupMenuItem(
+                                      value: 'duplicate',
+                                      child: Text('Duplicate')),
+                                  PopupMenuItem(
+                                      value: 'delete',
+                                      child: Text('Delete',
+                                          style: TextStyle(
+                                              color: Colors.redAccent))),
+                                ],
                               ),
                               // Drag handle (only useful with 2+; harmless
                               // with one). Explicit listener so the rest of
@@ -492,6 +580,29 @@ class _ProviderBadge extends StatelessWidget {
   }
 }
 
+/// Small caption above a control in the add/edit-provider dialog. Two of the
+/// dialog's controls were unlabeled pill rows a novice couldn't tell apart.
+class _DialogFieldLabel extends StatelessWidget {
+  final String text;
+  const _DialogFieldLabel(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        text.toUpperCase(),
+        style: TextStyle(
+          color: EmberColors.textDim,
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.6,
+        ),
+      ),
+    );
+  }
+}
+
 Future<void> _testConnection(
   BuildContext context,
   TextEditingController nameCtl,
@@ -687,6 +798,9 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 2026-07-03: caption the two segmented controls — a novice
+                // couldn't tell them apart (both were unlabeled pill rows).
+                _DialogFieldLabel('Where it runs'),
                 SegmentedButton<ProviderKind>(
                   segments: const [
                     ButtonSegment(
@@ -715,6 +829,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                   },
                 ),
                 const SizedBox(height: 10),
+                _DialogFieldLabel('API format'),
                 SegmentedButton<ApiFormat>(
                   segments: const [
                     ButtonSegment(
@@ -1135,53 +1250,10 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
           ),
         ),
         actions: [
-          // Wave CY.18.266: delete an existing provider. There was no UI to
-          // remove a provider anywhere before — only add/edit/reorder. Calls
-          // store.removeProvider (records a tombstone so a LAN-synced delete
-          // propagates, and drops the key from OS-secure storage).
-          if (!isNew)
-            TextButton(
-              onPressed: () async {
-                final confirmed = await showDialog<bool>(
-                  context: ctx,
-                  builder: (dctx) => AlertDialog(
-                    backgroundColor: EmberColors.bgPanel,
-                    title: const Text('Delete provider?'),
-                    content: Text(
-                      'Remove "${existing.name}" and its saved API key from '
-                      'this device? This can\'t be undone.',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(dctx, false),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(dctx, true),
-                        child: const Text('Delete',
-                            style: TextStyle(color: Colors.redAccent)),
-                      ),
-                    ],
-                  ),
-                );
-                if (confirmed != true) return;
-                store.removeProvider(existing.id);
-                if (ctx.mounted) Navigator.pop(ctx);
-              },
-              child: const Text('Delete',
-                  style: TextStyle(color: Colors.redAccent)),
-            ),
-          // clarkarch: duplicate this connection (same config, fresh "(copy)"
-          // name + its saved key) — handy for one copy with reasoning ON and
-          // one OFF, or to fork a working setup.
-          if (!isNew)
-            TextButton(
-              onPressed: () {
-                store.duplicateProvider(existing.id);
-                Navigator.pop(ctx);
-              },
-              child: const Text('Duplicate'),
-            ),
+          // 2026-07-03: Delete + Duplicate moved to the list-row kebab (they
+          // were 2 of 5 stacked action buttons here, with destructive Delete
+          // in the pile). This dialog now closes with just Test / Cancel /
+          // Save — its actual job.
           TextButton(
             onPressed: () => _testConnection(ctx, nameCtl, urlCtl, keyCtl,
                 modelCtl, kind, format),
