@@ -234,6 +234,28 @@ ChatApiError _classifyNetworkError(Object e) {
   return ChatApiError(s, kind: ChatApiErrorKind.other);
 }
 
+/// Auth headers for a provider's REST calls that are NOT chat completions —
+/// the "Test connection" probe and the model browser's `GET /models`. The
+/// dialect must match what the chat path sends or the probe lies: an
+/// OpenAI-compatible provider authenticates with `Authorization: Bearer`,
+/// while a native Anthropic provider uses `x-api-key` + `anthropic-version`
+/// (2026-07-03: Test/Browse always sent Bearer, so a valid Claude key got a
+/// 401 and looked broken on the make-or-break screen).
+///
+/// An empty key returns no auth header — a keyless local server is valid.
+/// Pure and unit-tested (test/provider_rest_auth_headers_test.dart).
+Map<String, String> providerRestAuthHeaders({
+  required ApiFormat format,
+  required String apiKey,
+}) {
+  final key = apiKey.trim();
+  if (key.isEmpty) return const <String, String>{};
+  if (format == ApiFormat.anthropic) {
+    return {'x-api-key': key, 'anthropic-version': '2023-06-01'};
+  }
+  return {'Authorization': 'Bearer $key'};
+}
+
 /// Wave CY.1: scrub provider error bodies before surfacing them. Some
 /// proxies (and misconfigured OpenAI-compat servers) reflect the
 /// `Authorization: Bearer …` header into their 4xx response body. Same

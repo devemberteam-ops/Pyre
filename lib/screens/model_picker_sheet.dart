@@ -50,8 +50,12 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
       final resp = await http.get(
         Uri.parse(url),
         headers: {
-          if (widget.provider.apiKey.isNotEmpty)
-            'Authorization': 'Bearer ${widget.provider.apiKey}',
+          // 2026-07-03: match the provider's dialect (Anthropic → x-api-key +
+          // anthropic-version, not Bearer) so browsing a Claude connection's
+          // models doesn't 401 with a valid key.
+          ...providerRestAuthHeaders(
+              format: widget.provider.format,
+              apiKey: widget.provider.apiKey),
           ...widget.provider.headers,
         },
       );

@@ -51,10 +51,10 @@ class SmartFallbackScreen extends StatelessWidget {
                     'Drag to reorder; your active chat provider is always '
                     'tried first.'),
                 HowItWorksBlock.bullet(
-                    '**Refusal detection learns** — it spots a refusal (a '
-                    'short, unformatted, English brush-off) and remembers '
-                    'the patterns it has seen, so it gets better at '
-                    'recognising them over time.'),
+                    '**It learns which providers refuse** — a refusal is a '
+                    'short, unformatted, English brush-off. Pyre remembers '
+                    'which providers tend to give them and suggests the '
+                    'cleanest one (no refusals on record) to switch to.'),
               ]),
               HowItWorksSection('Opting out', [
                 HowItWorksBlock.paragraph(

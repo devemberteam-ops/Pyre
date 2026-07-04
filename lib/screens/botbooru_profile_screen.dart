@@ -620,8 +620,9 @@ class _IdentityEditCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'Used as your `creator` tag on cards built in the '
-            'Character Creator. Case-sensitive on botbooru.com.',
+            'Optional. Shown as the creator on cards you build in the '
+            'Character Creator — this is not a BotBooru account, nothing to '
+            'sign into. Case-sensitive on botbooru.com.',
             style: TextStyle(
                 color: EmberColors.textDim, fontSize: 11, height: 1.4),
           ),

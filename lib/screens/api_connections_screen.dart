@@ -85,6 +85,12 @@ class ApiConnectionsScreen extends StatelessWidget {
                       final active = p.id == store.activeProviderId;
                       final isCreator = p.id == store.creatorProviderId;
                       final isVision = p.id == store.visionProviderId;
+                      // 2026-07-03: Impersonate/Guide pins rendered no badge,
+                      // so the at-a-glance "which provider does what" contract
+                      // broke for exactly the two newest routes.
+                      final isImpersonate =
+                          p.id == store.impersonateProviderId;
+                      final isGuide = p.id == store.guideProviderId;
                       final initial = p.name.isNotEmpty
                           ? p.name.characters.first.toUpperCase()
                           : '?';
@@ -135,6 +141,20 @@ class ApiConnectionsScreen extends StatelessWidget {
                                 _ProviderBadge(
                                   label: 'VISION',
                                   color: const Color(0xFF6FBEFF),
+                                ),
+                              ],
+                              if (isImpersonate) ...[
+                                const SizedBox(width: 6),
+                                _ProviderBadge(
+                                  label: 'IMPERSONATE',
+                                  color: const Color(0xFF8BE28B),
+                                ),
+                              ],
+                              if (isGuide) ...[
+                                const SizedBox(width: 6),
+                                _ProviderBadge(
+                                  label: 'GUIDE',
+                                  color: const Color(0xFFD79BFF),
                                 ),
                               ],
                             ],
@@ -474,6 +494,7 @@ Future<void> _testConnection(
   TextEditingController keyCtl,
   TextEditingController modelCtl,
   ProviderKind kind,
+  ApiFormat format,
 ) async {
   final messenger = ScaffoldMessenger.of(context);
   final base = urlCtl.text.trim();
@@ -497,27 +518,44 @@ Future<void> _testConnection(
   try {
     final resp = await http.get(
       Uri.parse(url),
-      headers: {
-        if (keyCtl.text.trim().isNotEmpty)
-          'Authorization': 'Bearer ${keyCtl.text.trim()}',
-      },
+      // 2026-07-03: match the provider's dialect — Anthropic needs
+      // x-api-key + anthropic-version, not Bearer (a valid Claude key was
+      // getting a bogus 401 here). Both OpenAI and Anthropic expose /models.
+      headers: providerRestAuthHeaders(
+          format: format, apiKey: keyCtl.text.trim()),
     );
     if (resp.statusCode >= 400) {
-      // Audit 2026-06-04 [providers-01]: scrub any reflected key/token from the
-      // surfaced body before it lands in the SnackBar.
+      // 2026-07-03: lead with a human, actionable hint per status class so a
+      // novice knows whether it's the key, the URL, or the network — then the
+      // scrubbed raw first line for anyone who wants the detail. (H-7 audit
+      // [providers-01]: scrub reflected key/token before it hits the SnackBar.)
       final scrubbed = scrubProviderBody(
         resp.body.split('\n').first,
         apiKey: keyCtl.text.trim(),
       );
-      messenger.showSnackBar(
-          SnackBar(content: Text('HTTP ${resp.statusCode}: $scrubbed')));
+      final hint = (resp.statusCode == 401 || resp.statusCode == 403)
+          ? 'The key was rejected — check you pasted the whole key.'
+          : (resp.statusCode == 404)
+              ? 'Nothing answered at this URL — check the Base URL.'
+              : 'The provider returned an error.';
+      messenger.showSnackBar(SnackBar(
+          content: Text('$hint (HTTP ${resp.statusCode}: $scrubbed)')));
       return;
     }
+    // Test only verifies the endpoint + key; it doesn't check the model name.
+    final modelNote = modelCtl.text.trim().isEmpty
+        ? ' — but no model is set yet, so pick one before chatting.'
+        : '';
     messenger.showSnackBar(
-      const SnackBar(content: Text('Connection OK ✓')),
+      SnackBar(content: Text('Connection OK ✓$modelNote')),
     );
   } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text('Test failed: $e')));
+    // A thrown exception here is a transport failure (DNS, socket, TLS,
+    // timeout) — never an HTTP status — so the friendly cause is "couldn't
+    // reach the server", not "bad key".
+    messenger.showSnackBar(SnackBar(
+        content: Text('Couldn\'t reach the server — check the URL and your '
+            'connection. ($e)')));
   }
 }
 
@@ -846,6 +884,10 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                         baseUrl: urlCtl.text.trim(),
                         apiKey: keyCtl.text.trim(),
                         model: modelCtl.text.trim(),
+                        // 2026-07-03: carry the format so the picker probes
+                        // /models with the right dialect (Anthropic browse
+                        // used to 401 with Bearer).
+                        format: format,
                       );
                       if (temp.baseUrl.isEmpty) {
                         ScaffoldMessenger.of(ctx).showSnackBar(
@@ -1137,7 +1179,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
             ),
           TextButton(
             onPressed: () => _testConnection(ctx, nameCtl, urlCtl, keyCtl,
-                modelCtl, kind),
+                modelCtl, kind, format),
             child: const Text('Test'),
           ),
           TextButton(

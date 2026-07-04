@@ -4011,9 +4011,9 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       );
       return;
     }
-    // Wave BC: prefer the user's botbooru username (set in More →     // BotBooru Profile) so cards built in the Creator carry the
-    // botbooru identity when uploaded back. Falls back to the active
-    // persona's name, then a generic label.
+    // Wave BC: prefer the user's botbooru username (set in More → BotBooru
+    // Profile) so cards built in the Creator carry the botbooru identity when
+    // uploaded back.
     //
     // Wave CL: the architect prompt explicitly tells the model NOT
     // to emit a `Creator:` label (the runtime owns it). So `c.creator`
@@ -4021,9 +4021,14 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     // replaceAll on the literal `{{creator}}` token was a no-op for
     // every real card. Now we AUTO-FILL c.creator when empty, and
     // still honour the placeholder for the rare card that has it.
-    final creatorName = store.botbooruUsername.isNotEmpty
-        ? store.botbooruUsername
-        : (store.activePersona?.name ?? 'a Pyre user');
+    //
+    // 2026-07-03 (privacy): with NO username set, this used to fall back to
+    // the active PERSONA's name — often a private self-insert — silently
+    // stamping it as the card's authorship, published the moment the card is
+    // uploaded. Fall back to a neutral label instead; a user who wants
+    // attribution sets their handle in the Profile screen (which now says so).
+    final creatorName =
+        store.botbooruUsername.isNotEmpty ? store.botbooruUsername : 'a Pyre user';
     c = Character.fromJson(c.toJson())
       ..creator = c.creator.trim().isEmpty
           ? creatorName
