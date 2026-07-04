@@ -14,6 +14,7 @@ import '../widgets/confirm_dialog.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/lorebook_binding_section.dart'
     show LorebookUsedBySection, askEmbeddedChoice;
+import 'character_assistant_screen.dart' show CharacterAssistantScreen;
 
 // 2026-07-03 (Gui): Lorebooks moved OUT of More and into the library next to
 // Characters and Personas — they're content, not a setting. The standalone
@@ -152,6 +153,19 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
               Navigator.pop(sheet);
               Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => LorebookEditScreen(lorebookId: l.id),
+              ));
+            },
+          ),
+          // 2026-07-04 (Gui, granular editing): edit THIS book with the AI
+          // Creator — entries pre-loaded, Save updates it in place.
+          ListTile(
+            leading: Icon(Icons.auto_awesome, color: EmberColors.primary),
+            title: const Text('Edit with AI'),
+            onTap: () {
+              Navigator.pop(sheet);
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) =>
+                    CharacterAssistantScreen(editingLorebookId: l.id),
               ));
             },
           ),

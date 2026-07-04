@@ -140,12 +140,20 @@ class CharacterAssistantScreen extends StatefulWidget {
   /// skipping the character/scenario chooser.
   final bool lorebookMode;
 
+  /// 2026-07-04 (Gui, granular editing): when set, opens a fresh
+  /// LOREBOOK-mode session pre-loaded with this lorebook's entries. Saves
+  /// UPDATE the book in place (the target id rides the session canvas).
+  /// Mirrors [editingCharacterId]/[editingPersonaId] for the third library
+  /// content type. Implies lorebook mode regardless of [lorebookMode].
+  final String? editingLorebookId;
+
   const CharacterAssistantScreen({
     super.key,
     this.editingCharacterId,
     this.personaMode = false,
     this.editingPersonaId,
     this.lorebookMode = false,
+    this.editingLorebookId,
   });
 
   @override
@@ -198,6 +206,11 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
   static const String _canvasLorebookIdsKey = '_pyre_lorebookIds';
   static const String _canvasLorebookNameKey = '_pyre_lorebookName';
   static const String _canvasLorebookEntriesKey = '_pyre_lorebookEntries';
+  /// 2026-07-04 (Gui, granular editing): id of the EXISTING lorebook this
+  /// session is editing — Save updates it in place instead of creating a new
+  /// book. Rides the canvas (persisted with the session) so it survives
+  /// restarts without a session-model change.
+  static const String _canvasLorebookEditIdKey = '_pyre_lorebookEditId';
   static const String _canvasLorebookDraftingKey = '_pyre_lorebookDrafting';
   static const String _embeddedLorebookStartMarker =
       'Embedded lorebook drafting is now active';
@@ -461,6 +474,45 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
         _showCanvas = false; // chat-first (Wave 114)
       });
       return;
+    }
+
+    // 2026-07-04 (Gui, granular editing): EDIT an existing lorebook with AI.
+    // Fresh lorebook-mode session pre-loaded with the book's entries; Save
+    // updates the book in place (target id rides the canvas).
+    final loreEditId = widget.editingLorebookId;
+    if (loreEditId != null) {
+      final book = store.lorebookById(loreEditId);
+      if (book != null && !book.deleted) {
+        final s = store.newCreatorSession();
+        s.mode = 'lorebook';
+        s.flow = 'freeform';
+        store.renameCreatorSession(s.id, book.name);
+        store.updateCreatorSessionCanvas(s.id, {
+          ...s.canvas,
+          _canvasLorebookNameKey: book.name,
+          _canvasLorebookEntriesKey:
+              book.entries.map((e) => e.toJson()).toList(),
+          _canvasLorebookEditIdKey: book.id,
+        });
+        store.updateCreatorSessionMessages(s.id, [
+          CreatorMessage(
+            role: 'assistant',
+            content:
+                'I\'ve loaded **${book.name}** — its ${book.entries.length} '
+                'entr${book.entries.length == 1 ? 'y is' : 'ies are'} on the '
+                'canvas beside this chat. Tell me what to add or change '
+                '("add an entry about the northern war", "make the tavern '
+                'entry also trigger on \'inn\'") — drafts appear for review, '
+                'and Save updates this lorebook in place.',
+          ),
+        ]);
+        setState(() {
+          _sessionId = s.id;
+          _showCanvas = false; // chat-first (Wave 114)
+        });
+        return;
+      }
+      // Book missing (deleted between tap and mount) — fall through.
     }
 
     // 2026-07-03 (Gui): lorebook AI creation launched from the library's
@@ -761,6 +813,7 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
   Map<String, dynamic> _canvasForCardData(Map<String, dynamic> canvas) {
     final out = Map<String, dynamic>.from(canvas);
     out.remove(_canvasLorebookIdsKey);
+    out.remove(_canvasLorebookEditIdKey);
     out.remove(_canvasLorebookNameKey);
     out.remove(_canvasLorebookEntriesKey);
     out.remove(_canvasLorebookDraftingKey);
@@ -3891,6 +3944,26 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       return;
     }
     final name = _canvasLorebookName(canvas);
+    // 2026-07-04 (Gui, granular editing): an EDIT session updates the
+    // original book in place instead of minting a copy.
+    final editId = canvas[_canvasLorebookEditIdKey] as String?;
+    final target = editId == null ? null : store.lorebookById(editId);
+    if (target != null && !target.deleted) {
+      target
+        ..name = name.trim().isEmpty ? target.name : name.trim()
+        ..entries = entries;
+      store.updateLorebook(target);
+      store.markCreatorSessionSaved(id, target.id);
+      store.flushPersist();
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Updated ${target.name}.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     final book = Lorebook(
       id: newId('lore'),
       name: name.trim().isEmpty ? 'New lorebook' : name.trim(),
@@ -3930,7 +4003,8 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       final updatedCanvas = Map<String, dynamic>.from(_sessionCanvas(store))
         ..remove(_canvasLorebookNameKey)
         ..remove(_canvasLorebookEntriesKey)
-        ..remove(_canvasLorebookDraftingKey);
+        ..remove(_canvasLorebookDraftingKey)
+        ..remove(_canvasLorebookEditIdKey);
       store.updateCreatorSessionCanvas(sessionId, updatedCanvas);
       _setCanvasLorebookIds(store, mergedIds);
     }
