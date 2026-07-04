@@ -554,7 +554,27 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
         // not the character/scenario block architects.
         s.mode = 'edit';
         store.renameCreatorSession(s.id, character.name);
-        store.updateCreatorSessionCanvas(s.id, _characterToCanvas(character));
+        final editCanvas = _characterToCanvas(character);
+        // 2026-07-04 (Gui, granular editing): "uma card COM lorebook" — when
+        // the character has a bound book, pre-load its entries into the edit
+        // session so lore edits happen HERE too, and stamp the edit-id so
+        // saving updates that book in place instead of minting a second
+        // hidden one. Prefer the card's own EMBEDDED (hidden) book — the one
+        // the Creator materializes — over shared library books.
+        final bound = character.lorebookIds
+            .map(store.lorebookById)
+            .whereType<Lorebook>()
+            .where((b) => !b.deleted)
+            .toList(growable: false);
+        if (bound.isNotEmpty) {
+          final target = bound.firstWhere((b) => b.hidden,
+              orElse: () => bound.first);
+          editCanvas[_canvasLorebookNameKey] = target.name;
+          editCanvas[_canvasLorebookEntriesKey] =
+              target.entries.map((e) => e.toJson()).toList();
+          editCanvas[_canvasLorebookEditIdKey] = target.id;
+        }
+        store.updateCreatorSessionCanvas(s.id, editCanvas);
         store.updateCreatorSessionMessages(s.id, [
           CreatorMessage(
             role: 'assistant',
@@ -3988,13 +4008,27 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     final entries = _canvasLorebookEntries(canvas);
     if (entries.isEmpty) return null;
     final name = _canvasLorebookName(canvas);
-    final book = Lorebook(
-      id: newId('lore'),
-      name: name.trim().isEmpty ? 'Embedded lorebook' : name.trim(),
-      entries: entries,
-      hidden: true,
-    );
-    store.addLorebook(book);
+    // 2026-07-04 (Gui, granular editing): an edit session pre-loaded the
+    // card's BOUND book — update it in place instead of minting a second
+    // hidden book alongside it.
+    final editId = canvas[_canvasLorebookEditIdKey] as String?;
+    final target = editId == null ? null : store.lorebookById(editId);
+    final Lorebook book;
+    if (target != null && !target.deleted) {
+      target
+        ..name = name.trim().isEmpty ? target.name : name.trim()
+        ..entries = entries;
+      store.updateLorebook(target);
+      book = target;
+    } else {
+      book = Lorebook(
+        id: newId('lore'),
+        name: name.trim().isEmpty ? 'Embedded lorebook' : name.trim(),
+        entries: entries,
+        hidden: true,
+      );
+      store.addLorebook(book);
+    }
     final mergedIds = _mergeLorebookIds(_canvasLorebookIds(canvas), <String>[
       book.id,
     ]);
