@@ -13,6 +13,7 @@ import '../services/prompt_post_processing.dart';
 import '../services/resolvers.dart' show isProviderHostAllowed;
 import '../state/app_store.dart';
 import '../theme.dart';
+import '../widgets/empty_state.dart';
 import 'model_picker_sheet.dart';
 import 'smart_fallback_screen.dart';
 
@@ -34,15 +35,19 @@ class ApiConnectionsScreen extends StatelessWidget {
         ],
       ),
       body: store.providers.isEmpty
-          ? Center(
-              child: Padding(
-                padding: EdgeInsets.all(32),
-                child: Text(
-                  'No providers configured.\nTap + to add an OpenAI-compatible endpoint.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: EmberColors.textMid),
-                ),
-              ),
+          // 2026-07-03: this is the make-or-break first screen (the app can't
+          // write a reply without a provider). The old weak "Tap + to add an
+          // OpenAI-compatible endpoint" jargon-line had no button and no hint
+          // where a key comes from. Use the house empty-state with a real CTA.
+          ? EmptyState(
+              icon: Icons.cloud_outlined,
+              title: 'Connect an AI provider',
+              subtitle:
+                  'Pyre needs an AI service to write replies — it brings no '
+                  'model of its own. Add one (OpenRouter has free models to '
+                  'start), then paste the API key from that service\'s site.',
+              ctaLabel: 'Add a provider',
+              onCta: () => _editProvider(context, null),
             )
           : Column(
               children: [
