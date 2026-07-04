@@ -2633,20 +2633,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 childrenPadding:
                     const EdgeInsets.only(left: 16, bottom: 4),
                 children: [
-                  // Rename chat lives here now (moved out of the top level).
-                  ListTile(
-                    leading: const Icon(Icons.drive_file_rename_outline),
-                    title: const Text('Rename chat'),
-                    subtitle: Text(
-                      'Name this chat to tell it apart from others.',
-                      style: TextStyle(
-                          color: EmberColors.textMid, fontSize: 12),
-                    ),
-                    onTap: () {
-                      Navigator.pop(sheet);
-                      _renameChatPrompt(chat, primary);
-                    },
-                  ),
+                  // 2026-07-04 (Gui): Rename chat LEFT this menu — renaming
+                  // is a list-organization act, so it lives on the chat rows
+                  // (Chats tab kebab + per-character chat list), not inside
+                  // the conversation.
                   ListTile(
                     leading: const Icon(Icons.tune),
                     title: const Text('Chat background'),
@@ -2772,44 +2762,9 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Completeness-gaps: rename (or clear) the chat's manual title. Mirrors
-  /// the Creator's `_renameSessionPrompt` (Cancel / Reset / Save). The dialog
-  /// pre-fills with the current effective label (manual title or character
-  /// name); "Reset" clears the override back to the derived label.
-  Future<void> _renameChatPrompt(Chat chat, Character? primary) async {
-    final fallback = primary?.name ?? 'Chat';
-    final ctl = TextEditingController(text: chat.displayTitle(fallback));
-    final renamed = await showDialog<String?>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: EmberColors.bgPanel,
-        title: const Text('Rename chat'),
-        content: TextField(
-          controller: ctl,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Chat title'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, null),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, ''),
-            child: const Text('Reset'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    ctl.dispose(); // H-3: dispose the rename controller once the dialog closes.
-    if (renamed == null) return;
-    if (!mounted) return;
-    context.read<AppStore>().renameChat(chat.id, renamed.isEmpty ? null : renamed);
-  }
+  // 2026-07-04 (Gui): _renameChatPrompt removed with the menu item — the
+  // shared rename dialog lives in chats_of_character_screen.dart
+  // (renameChatPrompt) and is reachable from the chat-row kebabs.
 
   /// Wave CY.13: export the chat to disk. Two formats:
   ///  - SillyTavern JSONL (portable; opens in ST / chub clients)

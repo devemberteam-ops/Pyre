@@ -265,6 +265,19 @@ class _CharacterChatsRow extends StatelessWidget {
                 startNewChatWithPersonaPrompt(context, character!);
               },
             ),
+            // 2026-07-04 (Gui): renaming is a list-organization act — it
+            // lives on the chat rows now, not inside the conversation's own
+            // menu. With ONE chat this kebab IS that chat's row (with more,
+            // the per-chat rename lives in the drilldown list).
+            if (chats.length == 1)
+              ListTile(
+                leading: const Icon(Icons.drive_file_rename_outline),
+                title: const Text('Rename chat'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  renameChatPrompt(context, store, chats.first);
+                },
+              ),
             ListTile(
               leading: Icon(Icons.delete_outline,
                   color: EmberColors.danger),

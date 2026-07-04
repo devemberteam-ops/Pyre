@@ -263,7 +263,7 @@ void _showRowKebab(BuildContext context, AppStore store, Chat chat) {
             title: const Text('Rename chat'),
             onTap: () {
               Navigator.pop(sheet);
-              _renameChatPrompt(context, store, chat);
+              renameChatPrompt(context, store, chat);
             },
           ),
           ListTile(
@@ -289,10 +289,11 @@ void _showRowKebab(BuildContext context, AppStore store, Chat chat) {
   );
 }
 
-/// Completeness-gaps: rename (or clear) a chat's manual title from the
-/// per-character chat list. Mirrors the chat-screen rename dialog
-/// (Cancel / Reset / Save).
-Future<void> _renameChatPrompt(
+/// Rename (or clear) a chat's manual title (Cancel / Reset / Save). Shared
+/// by the per-character chat list AND the Chats-tab row kebab — 2026-07-04
+/// (Gui): renaming is a list-organization act, so it lives on the chat rows,
+/// not inside the conversation's own menu (removed from there).
+Future<void> renameChatPrompt(
     BuildContext context, AppStore store, Chat chat) async {
   final ctl = TextEditingController(text: chat.title ?? '');
   final renamed = await showDialog<String?>(
