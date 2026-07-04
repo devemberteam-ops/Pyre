@@ -795,23 +795,35 @@ LiveSheetSnapshot seedInitialSnapshot(Chat chat, List<LiveSheetEntity> entities)
   );
 }
 
-/// C-3: build the default Live Sheet entity list for a chat — the persona (as
-/// the `user` entity, falling back to "You" when there's no persona) plus every
-/// real (non-narrator) character in the chat as a `char` entity. Pure: mirrors
-/// the entity construction the Live Sheet screen used to do inline, so the
-/// chat-creation seed and the screen produce identical entities.
+/// C-3: build the default Live Sheet entity list for a chat — every persona
+/// (as a `user` entity; 2026-07-04, Gui's LiveSheet review: a persona PARTY
+/// seeds one entity per member, not just the primary — falling back to "You"
+/// when there's none) plus every real (non-narrator) character in the chat
+/// as a `char` entity. Pure: mirrors the entity construction the Live Sheet
+/// screen used to do inline, so the chat-creation seed and the screen
+/// produce identical entities.
 List<LiveSheetEntity> buildLiveSheetEntities({
-  required String? personaName,
+  required List<String> personaNames,
   required Iterable<Character> characters,
 }) {
+  final users = [
+    for (final n in personaNames)
+      if (n.trim().isNotEmpty) n.trim(),
+  ];
   return <LiveSheetEntity>[
-    LiveSheetEntity(
-      id: newId('lse'),
-      name: (personaName != null && personaName.trim().isNotEmpty)
-          ? personaName
-          : 'You',
-      kind: LiveSheetEntityKind.user,
-    ),
+    if (users.isEmpty)
+      LiveSheetEntity(
+        id: newId('lse'),
+        name: 'You',
+        kind: LiveSheetEntityKind.user,
+      )
+    else
+      for (final n in users)
+        LiveSheetEntity(
+          id: newId('lse'),
+          name: n,
+          kind: LiveSheetEntityKind.user,
+        ),
     for (final ch in characters)
       // A narrator/scenario card has no body — seeding it as a physical entity
       // makes the model hallucinate one. Skip it; persona + real NPCs seed.
@@ -837,18 +849,64 @@ List<LiveSheetEntity> buildLiveSheetEntities({
 /// started tracking or injecting.
 bool ensureLiveSheetSeed({
   required Chat chat,
-  required String? personaName,
+  required List<String> personaNames,
   required Iterable<Character> characters,
 }) {
   if (!chat.liveSheetEnabled) return false;
   if (activeLiveSheetSnapshot(chat) != null) return false;
   final entities = buildLiveSheetEntities(
-    personaName: personaName,
+    personaNames: personaNames,
     characters: characters,
   );
   final snapshot = seedInitialSnapshot(chat, entities);
   chat.liveSheetSnapshots.add(snapshot);
   return true;
+}
+
+/// 2026-07-04 (Gui's LiveSheet review): keep the ACTIVE snapshot's entity
+/// roster in step with the chat's cast. Members added to a group after
+/// creation — and personas joining the party — never became tracked entities
+/// unless the update model spontaneously added them. This appends the
+/// MISSING ones (name match case-insensitive; narrator cards still skipped)
+/// as empty entities (they render nothing until facts arrive, and the next
+/// update pass sees them listed and starts filling them in). It NEVER
+/// removes or renames — a persona who left the party may still be in the
+/// story, and their tracked state stays valid history. Returns true iff
+/// anything was added (caller bumps the chat so it syncs).
+bool syncLiveSheetEntities({
+  required Chat chat,
+  required List<String> personaNames,
+  required Iterable<Character> characters,
+}) {
+  if (!chat.liveSheetEnabled) return false;
+  final active = activeLiveSheetSnapshot(chat);
+  if (active == null) return false;
+  final known = {for (final e in active.entities) _lsNorm(e.name)};
+  var added = false;
+  for (final n in personaNames) {
+    final name = n.trim();
+    if (name.isEmpty || known.contains(_lsNorm(name))) continue;
+    active.entities.add(LiveSheetEntity(
+      id: newId('lse'),
+      name: name,
+      kind: LiveSheetEntityKind.user,
+    ));
+    known.add(_lsNorm(name));
+    added = true;
+  }
+  for (final ch in characters) {
+    if (isNarratorCard(ch)) continue;
+    final name = ch.name.trim();
+    if (name.isEmpty || known.contains(_lsNorm(name))) continue;
+    active.entities.add(LiveSheetEntity(
+      id: newId('lse'),
+      name: name,
+      kind: LiveSheetEntityKind.char,
+    ));
+    known.add(_lsNorm(name));
+    added = true;
+  }
+  return added;
 }
 
 /// Re-anchors [snapshot] in place to the LATEST message, recomputing its

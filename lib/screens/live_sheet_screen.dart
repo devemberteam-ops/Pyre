@@ -135,13 +135,18 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
     // chat-creation path produce identical entities. Resolves the chat persona
     // + non-narrator characters; only touches the chat when a snapshot was
     // actually appended (so it still syncs).
-    final persona = _chatPersona(store, chat);
+    // 2026-07-04 (Gui's LiveSheet review): every party persona seeds a user
+    // entity, not just the primary.
+    final personaNames = [
+      for (final id in chat.effectivePersonaIds)
+        if (id != kExplicitNoPersonaId) store.personaById(id)?.name ?? '',
+    ].where((n) => n.trim().isNotEmpty).toList();
     final characters = chat.characterIds
         .map((id) => chat.characterSnapshots[id] ?? store.characterById(id))
         .whereType<Character>();
     final seeded = lsheet.ensureLiveSheetSeed(
       chat: chat,
-      personaName: persona?.name,
+      personaNames: personaNames,
       characters: characters,
     );
     if (seeded) store.touchChat(chat); // F1: snapshot seed syncs

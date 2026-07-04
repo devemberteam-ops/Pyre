@@ -14,7 +14,8 @@ import '../services/attachment_refs.dart';
 import '../services/attachment_store.dart';
 import '../services/chat_api.dart' show warmUpProvider;
 import '../services/example_seed.dart';
-import '../services/live_sheet.dart' show ensureLiveSheetSeed;
+import '../services/live_sheet.dart'
+    show ensureLiveSheetSeed, syncLiveSheetEntities;
 import '../services/lan_client.dart';
 import '../services/provider_fallback.dart';
 import '../services/regex_rules.dart';
@@ -2691,7 +2692,10 @@ class AppStore extends ChangeNotifier {
     // The persona resolves the same way the chat will (activePersonaId).
     ensureLiveSheetSeed(
       chat: chat,
-      personaName: activePersona?.name,
+      personaNames: [
+        if (activePersona?.name.trim().isNotEmpty ?? false)
+          activePersona!.name,
+      ],
       characters: [snapshot],
     );
     // Wave CY.18.70: stamp mtime on new chat so the next sync push
@@ -2976,9 +2980,31 @@ class AppStore extends ChangeNotifier {
     chat.characterIds.add(character.id);
     chat.characterSnapshots[character.id] =
         Character.fromJson(character.toJson());
+    // 2026-07-04 (Gui's LiveSheet review): a member joining the group becomes
+    // a tracked entity right away — previously the update model had to
+    // "discover" them on its own.
+    _syncChatLiveSheetEntities(chat);
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
     chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
     _bump();
+  }
+
+  /// 2026-07-04 (Gui's LiveSheet review): resolve the chat's CURRENT cast
+  /// (party personas + non-narrator members) and append any missing entities
+  /// to the active Live Sheet snapshot. No-op when the sheet is off/unseeded.
+  void _syncChatLiveSheetEntities(Chat chat) {
+    final names = <String>[
+      for (final id in chat.effectivePersonaIds)
+        if (id != kExplicitNoPersonaId) personaById(id)?.name ?? '',
+    ].where((n) => n.trim().isNotEmpty).toList();
+    final members = chat.characterIds
+        .map((id) => chat.characterSnapshots[id] ?? characterById(id))
+        .whereType<Character>();
+    syncLiveSheetEntities(
+      chat: chat,
+      personaNames: names,
+      characters: members,
+    );
   }
 
   /// Remove a character from a chat (group chat). Keeps the snapshot so
@@ -3045,6 +3071,9 @@ class AppStore extends ChangeNotifier {
     // effectivePersonaIds prefers a non-empty roster, so leaving it in place
     // would silently ignore this choice and keep the party active.
     chat.personaIds = [];
+    // 2026-07-04 (Gui's LiveSheet review): the newly-picked persona becomes a
+    // tracked entity (existing entities stay — history remains valid).
+    _syncChatLiveSheetEntities(chat);
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
     chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
     _bump();
@@ -3074,6 +3103,9 @@ class AppStore extends ChangeNotifier {
       chat.personaIds = [];
       chat.personaId = live.isNotEmpty ? live.first : kExplicitNoPersonaId;
     }
+    // 2026-07-04 (Gui's LiveSheet review): every party member becomes a
+    // tracked entity (the sheet was structurally single-persona before).
+    _syncChatLiveSheetEntities(chat);
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
     chat.mtime = chat.updatedAt;
     _bump();

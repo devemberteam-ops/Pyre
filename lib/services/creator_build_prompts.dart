@@ -40,6 +40,45 @@ QUALITY RULES (apply to every value you write):
 const String _kSystemPreamble =
     'You are building one section of a character card. Return ONLY a single JSON object.';
 
+// ── Craft doctrine, condensed (2026-07-04, Gui: "o creator não sabe o
+// PORQUÊ faz o que faz") ───────────────────────────────────────────────────
+//
+// The build stage's compass for what makes the artifact GOOD — the condensed
+// counterpart of the per-mode architect doctrines in card_assist_prompts.dart
+// (the conversation develops the right things; this makes the WRITTEN fields
+// earn their place).
+String _craftFor(CreatorMode mode) {
+  switch (mode) {
+    case CreatorMode.character:
+      return 'CRAFT (why these fields exist): a card is an instrument the '
+          'model PLAYS, not a wiki page — every value must change how the '
+          'character behaves in chat. Specific, sensory, behavioral detail '
+          'over adjectives ("counts her coins twice" beats "frugal"). Keep '
+          'one living contradiction at the core. Traits must MANIFEST in '
+          'speech/habits/decisions, not be asserted. first_mes sets scene, '
+          'demonstrates the voice, and ends handing the user something to '
+          'react to — never speaking or acting for them. Dialogue examples '
+          'teach the voice (rhythm, tics, vocabulary). Leave hooks open; a '
+          'card is half a conversation.';
+    case CreatorMode.persona:
+      return 'CRAFT (why these fields exist): a persona tells the MODEL how '
+          'the world sees and treats the user. Prioritize what others can '
+          'NOTICE and react to (appearance, bearing, reputation, scars, '
+          'habits) and how the user treats people — not inner monologue no '
+          'one can perceive. Never script the user\'s actions; establish who '
+          'they ARE. Dialogue examples show the user\'s voice so the model '
+          'can quote it credibly.';
+    case CreatorMode.scenario:
+      return 'CRAFT (why these fields exist): a scenario is an ENGINE for '
+          'situations, not an encyclopedia. Prefer facts that create '
+          'pressure (dangers, taboos, scarcities, factions with colliding '
+          'wants) over trivia. NPCs need a want, a lever, and a line of '
+          'voice. Powers must cost something. The opening scene starts '
+          'mid-motion with visible stakes and ends on a decision point for '
+          'the user — never a tour.';
+  }
+}
+
 // ── Brevity directive (CHARACTER + PERSONA only) ──────────────────────────
 //
 // The schema has ~50 description fields and the model writes a full paragraph
@@ -140,7 +179,7 @@ List<ChatTurn> buildBatchTurns({
   final schema = schemaFor(mode);
 
   final turns = <ChatTurn>[
-    ChatTurn('system', '$_kSystemPreamble\n\n$_kQualityRules'),
+    ChatTurn('system', '$_kSystemPreamble\n\n$_kQualityRules\n\n${_craftFor(mode)}'),
   ];
 
   // Carry the Phase-1 conversation as context so the model knows who we are

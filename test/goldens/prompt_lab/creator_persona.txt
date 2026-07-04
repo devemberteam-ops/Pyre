@@ -9,6 +9,8 @@ QUALITY RULES (apply to every value you write):
 - Frank and adult where the card calls for it: intimate, anatomical, and kink fields must be explicit and specific (this app is adult-friendly), never euphemistic or coy — when the batch contains such fields.
 - Named inner circle: relationship fields name real people with names, ages, and the bond — never "his mother" or "a friend" placeholders.
 - No meta: no author notes, no "as an AI", no fourth-wall breaks, no "this character is designed to…". Stay fully in-world.
+
+CRAFT (why these fields exist): a persona tells the MODEL how the world sees and treats the user. Prioritize what others can NOTICE and react to (appearance, bearing, reputation, scars, habits) and how the user treats people — not inner monologue no one can perceive. Never script the user's actions; establish who they ARE. Dialogue examples show the user's voice so the model can quote it credibly.
 ----------------------------------------
 [user]
 a quiet art student I play as — observant, sketches strangers

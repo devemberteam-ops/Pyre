@@ -67,6 +67,33 @@ void main() {
       expect(back.updatePrompt, 'u');
       expect(back.seedPrompt, 'se');
     });
+
+    // 2026-07-04 (Gui's LiveSheet review): prompt version force-reset — same
+    // mechanism as MemorySettings.summaryPromptVersion, so the improved
+    // anti-bloat default reaches installs that persisted the old text.
+    test('an OLD-version stored prompt is force-reset to the new default', () {
+      final m = LiveSheetSettings.fromJson({
+        'updatePrompt': 'the old stored update prompt',
+        'seedPrompt': 'the old stored seed prompt',
+        'promptVersion': LiveSheetSettings.kLiveSheetPromptVersion - 1,
+      });
+      expect(m.updatePrompt, LiveSheetSettings().updatePrompt);
+      expect(m.seedPrompt, LiveSheetSettings().seedPrompt);
+      expect(m.promptVersion, LiveSheetSettings.kLiveSheetPromptVersion);
+    });
+
+    test('a CURRENT-version custom prompt is preserved', () {
+      final m = LiveSheetSettings.fromJson({
+        'updatePrompt': 'my custom prompt',
+        'promptVersion': LiveSheetSettings.kLiveSheetPromptVersion,
+      });
+      expect(m.updatePrompt, 'my custom prompt');
+    });
+
+    test('the shipped default carries the anti-bloat discipline', () {
+      expect(LiveSheetSettings().updatePrompt,
+          contains('KEEP THE SHEET TIGHT'));
+    });
   });
   group('Chat live sheet fields', () {
     test('a NEW chat defaults Live Sheet to ENABLED', () {
@@ -766,7 +793,7 @@ void main() {
   group('buildLiveSheetEntities', () {
     test('persona becomes the user entity; characters become char entities', () {
       final ents = buildLiveSheetEntities(
-        personaName: 'Ren',
+        personaNames: const ['Ren'],
         characters: [Character(id: 'a', name: 'Vesna')],
       );
       expect(ents.length, 2);
@@ -776,15 +803,30 @@ void main() {
       expect(ents[1].kind, LiveSheetEntityKind.char);
     });
 
-    test('null/blank persona falls back to "You"', () {
+    // 2026-07-04 (Gui: LiveSheet review): the sheet was structurally
+    // single-persona — a persona PARTY only tracked one member. Every party
+    // persona is a user-kind entity now.
+    test('a persona PARTY seeds one user entity per member', () {
+      final ents = buildLiveSheetEntities(
+        personaNames: const ['Ren', 'Kaia'],
+        characters: [Character(id: 'a', name: 'Vesna')],
+      );
+      expect(ents.map((e) => e.name), ['Ren', 'Kaia', 'Vesna']);
+      expect(ents[0].kind, LiveSheetEntityKind.user);
+      expect(ents[1].kind, LiveSheetEntityKind.user);
+      expect(ents[2].kind, LiveSheetEntityKind.char);
+    });
+
+    test('no/blank personas fall back to a single "You" entity', () {
       expect(
-        buildLiveSheetEntities(personaName: null, characters: const [])
+        buildLiveSheetEntities(personaNames: const [], characters: const [])
             .single
             .name,
         'You',
       );
       expect(
-        buildLiveSheetEntities(personaName: '   ', characters: const [])
+        buildLiveSheetEntities(
+                personaNames: const ['   '], characters: const [])
             .single
             .name,
         'You',
@@ -793,7 +835,7 @@ void main() {
 
     test('a narrator/scenario card is NOT seeded as a physical entity', () {
       final ents = buildLiveSheetEntities(
-        personaName: 'Ren',
+        personaNames: const ['Ren'],
         characters: [
           Character(
               id: 's',
@@ -804,6 +846,88 @@ void main() {
       );
       // user + Vesna only; the narrator card is skipped.
       expect(ents.map((e) => e.name), ['Ren', 'Vesna']);
+    });
+  });
+
+  // 2026-07-04 (Gui: LiveSheet review): members added to a group AFTER
+  // creation (and personas joining the party) never became tracked entities
+  // unless the update model spontaneously added them. syncLiveSheetEntities
+  // appends the MISSING ones to the active snapshot; it never removes or
+  // renames (history stays).
+  group('syncLiveSheetEntities', () {
+    Chat chatWithSeed() {
+      final c = Chat(id: 'c1', characterIds: const ['a']);
+      c.messages
+          .add(Message(id: 'm0', kind: MessageKind.char, variants: ['hi']));
+      ensureLiveSheetSeed(
+        chat: c,
+        personaNames: const ['Ren'],
+        characters: [Character(id: 'a', name: 'Vesna')],
+      );
+      return c;
+    }
+
+    test('adds a newly-joined character + persona; keeps existing', () {
+      final c = chatWithSeed();
+      final changed = syncLiveSheetEntities(
+        chat: c,
+        personaNames: const ['Ren', 'Kaia'],
+        characters: [
+          Character(id: 'a', name: 'Vesna'),
+          Character(id: 'b', name: 'Moss'),
+        ],
+      );
+      expect(changed, isTrue);
+      final ents = activeLiveSheetSnapshot(c)!.entities;
+      expect(ents.map((e) => e.name), ['Ren', 'Vesna', 'Kaia', 'Moss']);
+      expect(ents.firstWhere((e) => e.name == 'Kaia').kind,
+          LiveSheetEntityKind.user);
+      expect(ents.firstWhere((e) => e.name == 'Moss').kind,
+          LiveSheetEntityKind.char);
+    });
+
+    test('no-op when everyone is already tracked (name match is '
+        'case-insensitive)', () {
+      final c = chatWithSeed();
+      final changed = syncLiveSheetEntities(
+        chat: c,
+        personaNames: const ['ren'],
+        characters: [Character(id: 'a', name: 'VESNA')],
+      );
+      expect(changed, isFalse);
+      expect(activeLiveSheetSnapshot(c)!.entities.length, 2);
+    });
+
+    test('no-op without an active snapshot or with the sheet disabled', () {
+      final bare = Chat(id: 'c2', characterIds: const ['a']);
+      expect(
+        syncLiveSheetEntities(
+            chat: bare, personaNames: const ['Ren'], characters: const []),
+        isFalse,
+      );
+      final off = chatWithSeed()..liveSheetEnabled = false;
+      expect(
+        syncLiveSheetEntities(
+            chat: off,
+            personaNames: const ['Kaia'],
+            characters: const []),
+        isFalse,
+      );
+    });
+
+    test('narrator cards are still skipped', () {
+      final c = chatWithSeed();
+      final changed = syncLiveSheetEntities(
+        chat: c,
+        personaNames: const ['Ren'],
+        characters: [
+          Character(
+              id: 's',
+              name: 'The Sunken Gate',
+              description: '<Narrator>\nYou are the omniscient narrator.'),
+        ],
+      );
+      expect(changed, isFalse);
     });
   });
 
@@ -826,7 +950,7 @@ void main() {
 
       final seeded = ensureLiveSheetSeed(
         chat: c,
-        personaName: 'Ren',
+        personaNames: const ['Ren'],
         characters: [Character(id: 'a', name: 'Vesna')],
       );
       expect(seeded, true);
@@ -840,13 +964,13 @@ void main() {
       final c = newEnabledChat();
       expect(
           ensureLiveSheetSeed(
-              chat: c, personaName: 'Ren', characters: const []),
+              chat: c, personaNames: const ['Ren'], characters: const []),
           true);
       expect(c.liveSheetSnapshots.length, 1);
       // A second call is a no-op (active snapshot already present).
       expect(
           ensureLiveSheetSeed(
-              chat: c, personaName: 'Ren', characters: const []),
+              chat: c, personaNames: const ['Ren'], characters: const []),
           false);
       expect(c.liveSheetSnapshots.length, 1);
     });
@@ -855,7 +979,7 @@ void main() {
       final c = newEnabledChat()..liveSheetEnabled = false;
       expect(
           ensureLiveSheetSeed(
-              chat: c, personaName: 'Ren', characters: const []),
+              chat: c, personaNames: const ['Ren'], characters: const []),
           false);
       expect(c.liveSheetSnapshots, isEmpty);
     });

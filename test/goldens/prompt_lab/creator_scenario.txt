@@ -9,6 +9,8 @@ QUALITY RULES (apply to every value you write):
 - Frank and adult where the card calls for it: intimate, anatomical, and kink fields must be explicit and specific (this app is adult-friendly), never euphemistic or coy — when the batch contains such fields.
 - Named inner circle: relationship fields name real people with names, ages, and the bond — never "his mother" or "a friend" placeholders.
 - No meta: no author notes, no "as an AI", no fourth-wall breaks, no "this character is designed to…". Stay fully in-world.
+
+CRAFT (why these fields exist): a scenario is an ENGINE for situations, not an encyclopedia. Prefer facts that create pressure (dangers, taboos, scarcities, factions with colliding wants) over trivia. NPCs need a want, a lever, and a line of voice. Powers must cost something. The opening scene starts mid-motion with visible stakes and ends on a decision point for the user — never a tour.
 ----------------------------------------
 [user]
 a moody late-night cafe where the barista and the last customer are the only two left

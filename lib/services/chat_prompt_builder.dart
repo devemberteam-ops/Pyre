@@ -1414,6 +1414,19 @@ String creatorArchitectPrompt({
           : kCardAssistantPrompt;
   }
   var prompt = base;
+  // 2026-07-04 (Gui): CRAFT DOCTRINE — each architect knows WHY, not just
+  // what: the compass for what makes its artifact good. Appended at assembly
+  // (also on top of user-forked prompts) so every session carries it. The
+  // unknown-mode fallback mirrors the base selection above (→ character);
+  // 'edit' stays doctrine-free (it edits BOTH card kinds narrowly and has
+  // its own scoped-edit contract).
+  if (mode == 'scenario') {
+    prompt = '$prompt\n$kScenarioCraftDoctrine';
+  } else if (mode == 'persona') {
+    prompt = '$prompt\n$kPersonaCraftDoctrine';
+  } else if (mode != 'edit') {
+    prompt = '$prompt\n$kCharacterCraftDoctrine';
+  }
   // 2026-07-03 (Gui): the character architect already carries a full "read the
   // register, don't default to high fantasy" block; give the SAME instinct to
   // scenario + persona (they lacked it) via the shared condensed version.

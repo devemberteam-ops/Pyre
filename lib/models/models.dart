@@ -2323,7 +2323,13 @@ class LiveSheetSettings {
       'story has established about them (appearance, what they wear, conditions, '
       'possessions, role). Do NOT add fleeting or unnamed bystanders, and never '
       'invent facts the story has not shown — same durable-changes-only, '
-      'no-speculation discipline applies to new entities.';
+      'no-speculation discipline applies to new entities.\n\n'
+      // 2026-07-04 (Gui's LiveSheet review): anti-bloat discipline — long RPs
+      // only ever ADDED facts, so sheets grew stale and noisy.
+      'KEEP THE SHEET TIGHT: prefer replacing an outdated fact (`-` old, `+` '
+      'new) over piling near-duplicates, and when a section already holds '
+      'many facts, retire the ones that stopped mattering (`-` lines) as you '
+      'add new ones. A sheet where everything is "important" is useless.';
   static const _defaultSeedPrompt =
       'Build a CURRENT-STATE mini-sheet for ONE entity in this roleplay, based on '
       'the entity\'s description (if given) and what has happened in the '
@@ -2338,13 +2344,43 @@ class LiveSheetSettings {
       'state as of the latest message (e.g. if they were undressed in the scene, '
       'say so). Keep each fact a short phrase. Invent nothing not supported by the '
       'description or conversation.';
-  LiveSheetSettings({this.autoEvery = 10, this.updatePrompt = _defaultUpdatePrompt, this.seedPrompt = _defaultSeedPrompt, this.newChatsEnabled = true});
-  factory LiveSheetSettings.fromJson(Map<String, dynamic> j) => LiveSheetSettings(
+  /// The [kLiveSheetPromptVersion] this install last saw. Same force-reset
+  /// mechanism as [MemorySettings.summaryPromptVersion]: when the shipped
+  /// version is newer, [fromJson] resets BOTH prompts to the current defaults
+  /// exactly once (Gui's call for the checkpoints prompt applies here too —
+  /// everyone lands on the improved default instead of being stranded).
+  ///   v0/absent — pre-1.2
+  ///   v2        — Pyre 1.2 (anti-bloat "KEEP THE SHEET TIGHT" discipline)
+  int promptVersion;
+  static const int kLiveSheetPromptVersion = 2;
+
+  LiveSheetSettings(
+      {this.autoEvery = 10,
+      this.updatePrompt = _defaultUpdatePrompt,
+      this.seedPrompt = _defaultSeedPrompt,
+      this.newChatsEnabled = true,
+      this.promptVersion = kLiveSheetPromptVersion});
+  factory LiveSheetSettings.fromJson(Map<String, dynamic> j) {
+    final storedVersion = _jInt(j['promptVersion']) ?? 0;
+    final mustReset = storedVersion < kLiveSheetPromptVersion;
+    return LiveSheetSettings(
         autoEvery: _jInt(j['autoEvery']) ?? 10,
-        updatePrompt: (j['updatePrompt'] as String?) ?? _defaultUpdatePrompt,
-        seedPrompt: (j['seedPrompt'] as String?) ?? _defaultSeedPrompt,
-        newChatsEnabled: (j['newChatsEnabled'] as bool?) ?? true);
-  Map<String, dynamic> toJson() => {'autoEvery': autoEvery, 'updatePrompt': updatePrompt, 'seedPrompt': seedPrompt, 'newChatsEnabled': newChatsEnabled};
+        updatePrompt: mustReset
+            ? _defaultUpdatePrompt
+            : (j['updatePrompt'] as String?) ?? _defaultUpdatePrompt,
+        seedPrompt: mustReset
+            ? _defaultSeedPrompt
+            : (j['seedPrompt'] as String?) ?? _defaultSeedPrompt,
+        newChatsEnabled: (j['newChatsEnabled'] as bool?) ?? true,
+        promptVersion: kLiveSheetPromptVersion);
+  }
+  Map<String, dynamic> toJson() => {
+        'autoEvery': autoEvery,
+        'updatePrompt': updatePrompt,
+        'seedPrompt': seedPrompt,
+        'newChatsEnabled': newChatsEnabled,
+        'promptVersion': promptVersion
+      };
 }
 
 /// Script (story-direction) configuration — global, stored alongside

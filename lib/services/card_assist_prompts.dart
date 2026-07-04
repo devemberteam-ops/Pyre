@@ -1196,6 +1196,85 @@ joke premise built with a deadly-serious tone is worse than one built by a
 collaborator who's in on it. Keep the literary register only when the user IS
 being serious (epic lore, heavy drama). The mistake is defaulting to it.''';
 
+// ---------------------------------------------------------------------------
+// 2026-07-04 (Gui): CRAFT DOCTRINE — "o creator faz o que faz mas não sabe o
+// PORQUÊ". These blocks teach each architect what makes its artifact GOOD,
+// so the conversation develops the right things and the build writes fields
+// that earn their place. Appended at assembly (chat_prompt_builder) per mode;
+// condensed versions ride the structured-build system turn
+// (creator_build_prompts._craftFor).
+
+const String kCharacterCraftDoctrine = '''
+
+## WHAT MAKES A CHARACTER CARD GOOD (your compass for every suggestion)
+
+A card is not a wiki page — it is an instrument the MODEL plays. Every
+line earns its place by changing how the character behaves in chat.
+Judge every idea you propose against that.
+
+- Specificity beats adjectives. "She counts her coins twice and tips
+  exactly 10%" beats "frugal". Concrete, sensory, behavioral detail is
+  what a model can act on; abstract trait-words evaporate in play.
+- One living contradiction beats ten harmonious traits. A devout
+  priestess who steals; a brute terrified of his tiny mother. The
+  tension is what generates scenes.
+- Personality must MANIFEST. For each trait, how does it show — in
+  speech, under stress, when drunk, when cornered? Behavior over
+  assertion, always.
+- Voice is the soul. Speech rhythm, vocabulary, verbal tics, what they
+  never say. Dialogue examples teach voice better than any paragraph of
+  description — treat them as the card's most load-bearing field after
+  the first message.
+- The first message is the single most important field: it sets scene
+  and mood, DEMONSTRATES the voice, and ends by handing the user
+  something concrete to react to. It never speaks or acts for the user.
+- Write facts the model can use ("fears open water since the ferry
+  sank"), not marketing copy ("a mysterious enigma with a dark past").
+- Leave the user room. A card is half a conversation — keep hooks open
+  instead of resolving every question about the character.''';
+
+const String kScenarioCraftDoctrine = '''
+
+## WHAT MAKES A SCENARIO CARD GOOD (your compass for every suggestion)
+
+A scenario is an ENGINE for situations, not an encyclopedia. Its test
+is: does each element create pressure, choices, and scenes?
+
+- Prefer world facts that generate conflict — dangers, taboos,
+  scarcities, deadlines, factions with colliding wants — over lore
+  trivia the narrator will never use.
+- NPCs exist to WANT things. Give the key ones a want, a lever they can
+  pull, and a line of voice; that is what lets the narrator actually
+  play them against the user.
+- Powers and systems must COST something. Magic or tech with a price
+  generates plots; free power kills them.
+- The opening scene starts mid-motion: something is already happening,
+  stakes are visible, and it ends on a decision point for the user —
+  never a guided tour of the setting.
+- Decide the narrator's signature: what it lingers on (senses, dread,
+  humor, intimacy) so every scene has a recognizable texture.''';
+
+const String kPersonaCraftDoctrine = '''
+
+## WHAT MAKES A PERSONA GOOD (your compass for every suggestion)
+
+A persona tells the MODEL how the world sees and treats the user — it
+is read BY the character, never played by it.
+
+- Prioritize what others can NOTICE and react to: appearance, bearing,
+  scent, reputation, status, scars, habits. Inner monologue the
+  character can't perceive gives the model nothing to play against.
+- Dynamics beat biography: how the user treats strangers, friends, and
+  enemies hands the character something to bounce off immediately.
+- Keep agency with the user. The persona establishes who they ARE; it
+  never scripts what they do (that's the user's half of the story).
+- Dialogue examples show the user's voice so the model can quote or
+  paraphrase them credibly in scene.''';
+
+// (No lorebook doctrine here: kLorebookEntryArchitectPrompt in
+// lorebook_architect_prompts.dart ALREADY carries deep craft — key quality,
+// entry splitting, altitude, constant discipline — verified 2026-07-04.)
+
 /// Persona Creator: a self-contained CONVERSATION-ONLY architect for
 /// developing the USER's persona (the character they PLAY AS). It mirrors
 /// the CHARACTER architect's discipline — converse first, PROPOSE the build
