@@ -969,7 +969,15 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
   /// Run the deterministic structured build for the active session and merge
   /// the rendered card into the canvas. Best-effort: any field that comes back
   /// empty is surfaced as a soft note — never a retry loop.
-  Future<void> _runStructuredBuildFlow() async {
+  ///
+  /// 2026-07-04 (Gui, granular editing): [targetKeys] — from a SCOPED
+  /// `[[BUILD_SHEET: …]]` marker — narrows an EDIT build to just those
+  /// top-level fields (greetings, first message, creator notes, tags, …).
+  /// Only honoured when the session is an edit session AND every key passes
+  /// `keysAreTopLevelEditable` for the mode; anything else falls back to the
+  /// full rebuild (the safe default). A scoped build never re-renders the
+  /// Description — it is carried forward byte-verbatim.
+  Future<void> _runStructuredBuildFlow({List<String>? targetKeys}) async {
     final store = context.read<AppStore>();
     final id = _sessionId;
     if (id == null) return;
@@ -978,6 +986,9 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     final cs.CreatorMode? mode = _underlyingBuildMode(session);
     if (mode == null) return;
     if (_structuredBuilding || _generating) return;
+    final scoped = _isEditSession(session) &&
+        targetKeys != null &&
+        cs.keysAreTopLevelEditable(targetKeys, mode);
 
     // Audit 2026-06-04 (Creator M2): a session switch/delete during this
     // (long, multi-pass) build must abort it cleanly — otherwise its
@@ -1011,14 +1022,22 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
           ? <String, String>{}
           : decomposeDescription(existingDesc, mode);
       // Only the labeled (character / persona) path is at risk — the scenario
-      // path round-trips its `<Tag>` sections via the merge branch. Count how
-      // many KNOWN schema-field keys the decompose recognised; < 2 on a
-      // non-empty Description means the card uses a convention Pyre can't
-      // parse → treat it as foreign and keep the raw Description.
+      // path round-trips its `<Tag>` sections via the merge branch.
+      // 2026-07-04 (Gui): coverage-based heuristic — the old `< 2 recognized
+      // labels` rule let a PARTLY-labelled import (two stray labels above a
+      // page of authored prose) pass as native, and the rebuild silently
+      // re-invented the prose. Now the recognized sections must also cover
+      // at least half the Description's text (isForeignDescription).
       if (existingDesc.trim().isNotEmpty && mode != cs.CreatorMode.scenario) {
         final knownKeys = cs.schemaFor(mode).map((f) => f.key).toSet();
-        final recognised = existing.keys.where(knownKeys.contains).length;
-        if (recognised < 2) foreignDescription = existingDesc;
+        final recognized = <String, String>{
+          for (final e in existing.entries)
+            if (knownKeys.contains(e.key)) e.key: e.value,
+        };
+        if (isForeignDescription(
+            description: existingDesc, recognized: recognized)) {
+          foreignDescription = existingDesc;
+        }
       }
       // Audit 2026-06-04 (High): seed the top-level `scenario` from the canvas
       // so an edit REFINES it in place instead of inventing a fresh one. Adding
@@ -1117,12 +1136,20 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
           ),
     ];
 
-    final batches = cs.batchesFor(mode);
+    // Granular edit: a scoped build collapses the multi-pass rebuild into
+    // the one (usually) small batch containing the targeted fields.
+    final batches = scoped
+        ? cs.filterBatchesToKeys(cs.batchesFor(mode), targetKeys.toSet())
+        : cs.batchesFor(mode);
     setState(() => _structuredBuilding = true);
     _appendBuildStatus(
       store,
-      '⏳  Building the sheet… this runs in a few passes and can take a '
-      'couple of minutes. Keep the app open.',
+      scoped
+          ? '⏳  Updating ${targetKeys.length} '
+              'field${targetKeys.length == 1 ? '' : 's'} — everything else '
+              'stays untouched.'
+          : '⏳  Building the sheet… this runs in a few passes and can take a '
+              'couple of minutes. Keep the app open.',
     );
 
     var batchIndex = 0;
@@ -1236,6 +1263,11 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       // instruction accepts "lost if the session changed"); a re-run rebuilds.
       if (myGen != _streamGen) return;
 
+      // Granular edit: a scoped build only returned the TARGETED fields —
+      // the model never echoed the rest — so merge the untouched values in
+      // from `existing` before rendering, or the render would blank them.
+      final scopedMerged = scoped ? {...existing, ...fields} : fields;
+
       // CRITICAL 4: a scenario card with a duplicate `<Tag>` (e.g. two
       // `<World>` blocks → world / world#2) decomposes `#N` variants into
       // `existing`, but the edit batches only re-request BASE keys, so the model
@@ -1245,13 +1277,22 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
           (_isEditSession(session) &&
               mode == cs.CreatorMode.scenario &&
               existing.isNotEmpty)
-          ? carryForwardDuplicateTags(fields, existing)
-          : fields;
+          ? carryForwardDuplicateTags(scopedMerged, existing)
+          : scopedMerged;
 
       // Render deterministically → canvas. Merge non-null rendered keys into
       // the current session canvas (preserve anything already there, e.g. a
       // user-typed name or an attached avatar).
       final rendered = renderCard(buildFields, mode);
+      // Granular edit: a scoped build must NEVER touch the Description — the
+      // targeted keys are all top-level, so carry the current text forward
+      // byte-verbatim (works for native AND foreign cards alike; a decompose
+      // → re-render round-trip is not byte-stable and has no business
+      // running for a greetings/notes/tags edit).
+      if (scoped) {
+        final curDesc = (_sessionCanvas(store)['description'] ?? '').toString();
+        rendered['description'] = curDesc;
+      }
       final canvas = Map<String, dynamic>.from(_sessionCanvas(store));
       final editing = _isEditSession(session);
       rendered.forEach((k, v) {
@@ -2189,7 +2230,11 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
                     'provider, then type /build to run it again.',
                   );
                 } else {
-                  unawaited(_runStructuredBuildFlow());
+                  // Granular edit (2026-07-04, Gui): a scoped marker narrows
+                  // the build to the named top-level fields — validated (and
+                  // ignored outside edit sessions) inside the flow itself.
+                  unawaited(_runStructuredBuildFlow(
+                      targetKeys: marker?.scopedKeys));
                 }
               }
             },

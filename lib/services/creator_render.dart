@@ -121,6 +121,31 @@ Map<String, String> decomposeDescription(
   return _decomposeLabeled(description, mode);
 }
 
+/// 2026-07-04 (Gui, granular editing): is this Description FOREIGN — a
+/// convention Pyre's decompose can't faithfully round-trip, so a full rebuild
+/// must preserve it VERBATIM instead of re-rendering it?
+///
+/// The old rule (`< 2 recognized labels` on a non-empty Description) let a
+/// PARTLY-labelled import slip through: two stray `Name:`/`Race:` lines above
+/// a page of hand-authored prose classified as "native", and the rebuild
+/// silently re-invented the prose. The rule now also demands COVERAGE — the
+/// recognized sections must account for at least half of the Description's
+/// text. [recognized] is the decomposed map already filtered to KNOWN schema
+/// keys (what the edit flow builds as `existing`).
+bool isForeignDescription({
+  required String description,
+  required Map<String, String> recognized,
+}) {
+  final total = description.trim().length;
+  if (total == 0) return false; // nothing to protect
+  if (recognized.length < 2) return true;
+  var covered = 0;
+  for (final v in recognized.values) {
+    covered += v.trim().length;
+  }
+  return covered < total * 0.5;
+}
+
 /// Build the `mes_example` string from a [dialogueExamples] list: `<START>`
 /// separated exchanges, each with `*action/expression*` italics interlaced
 /// with `**dialogue**` bold. List items may be maps (`{action, dialogue,

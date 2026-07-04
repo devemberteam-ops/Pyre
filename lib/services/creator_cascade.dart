@@ -289,8 +289,12 @@ const String kBuildSheetMarker = '[[BUILD_SHEET]]';
 /// stripped text reads cleanly. The `[[` / `]]` brackets are escaped for the
 /// regex. We match every occurrence (replaceAll) so a model that emits it more
 /// than once still ends up clean.
+// 2026-07-04 (Gui, granular editing): the marker now accepts an optional
+// FIELD SCOPE — `[[BUILD_SHEET: alternate_greetings, creator_notes]]` — which
+// edit sessions use to rebuild ONLY those top-level fields (the Description
+// stays byte-untouched). A bare `[[BUILD_SHEET]]` keeps meaning "full build".
 final RegExp _buildSheetMarkerRe = RegExp(
-  r'\s*\[\[\s*BUILD_SHEET\s*\]\]\s*',
+  r'\s*\[\[\s*BUILD_SHEET\s*(?::([^\]\n]*))?\]\]\s*',
   caseSensitive: false,
   multiLine: true,
 );
@@ -298,7 +302,7 @@ final RegExp _buildSheetMarkerRe = RegExp(
 /// Result of [detectAndStripBuildMarker]: the message with the marker removed
 /// plus whether the marker was present.
 class BuildMarkerResult {
-  const BuildMarkerResult(this.text, this.found);
+  const BuildMarkerResult(this.text, this.found, {this.scopedKeys});
 
   /// The assistant message with every `[[BUILD_SHEET]]` occurrence stripped
   /// and the result trimmed. When [found] is false this is the input,
@@ -307,20 +311,36 @@ class BuildMarkerResult {
 
   /// True when at least one `[[BUILD_SHEET]]` marker was present in the input.
   final bool found;
+
+  /// Field keys named in a SCOPED marker (`[[BUILD_SHEET: a, b]]`), or null
+  /// for a bare marker / no marker — null means "full build". The caller
+  /// validates the keys against the mode's schema
+  /// (creator_schema.keysAreTopLevelEditable) before narrowing the build.
+  final List<String>? scopedKeys;
 }
 
 /// Detect + strip the `[[BUILD_SHEET]]` marker from a completed assistant
-/// message. Returns the cleaned text (marker removed, trimmed) and whether the
-/// marker was found. Pure — no side effects — so the auto-fire decision can be
-/// unit-tested without the widget.
+/// message. Returns the cleaned text (marker removed, trimmed), whether the
+/// marker was found, and any scoped field keys. Pure — no side effects — so
+/// the auto-fire decision can be unit-tested without the widget.
 BuildMarkerResult detectAndStripBuildMarker(String raw) {
-  final found = _buildSheetMarkerRe.hasMatch(raw);
-  if (!found) return BuildMarkerResult(raw.trim(), false);
+  final match = _buildSheetMarkerRe.firstMatch(raw);
+  if (match == null) return BuildMarkerResult(raw.trim(), false);
+  final keys = match
+      .group(1)
+      ?.split(',')
+      .map((k) => k.trim())
+      .where((k) => k.isNotEmpty)
+      .toList();
   // Replace each marker (plus the whitespace it absorbs) with a single space,
   // then collapse + trim so we don't leave a dangling blank line where the
   // marker sat on its own final line.
   final stripped = raw.replaceAll(_buildSheetMarkerRe, '\n').trim();
-  return BuildMarkerResult(stripped, true);
+  return BuildMarkerResult(
+    stripped,
+    true,
+    scopedKeys: (keys == null || keys.isEmpty) ? null : keys,
+  );
 }
 
 /// True when a detected build marker should actually auto-fire the structured

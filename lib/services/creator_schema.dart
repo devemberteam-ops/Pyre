@@ -830,3 +830,40 @@ Set<String> requiredKeysFor(CreatorMode mode) {
   }
   return required;
 }
+
+// ---------------------------------------------------------------------------
+// 2026-07-04 (Gui, granular editing)
+
+/// True when EVERY key names a TOP-LEVEL field of [mode]'s schema — i.e. one
+/// that renders outside the Description (first_mes, alternate_greetings,
+/// creator_notes, tags, tagline, scenario, dialogueExamples, …). This is the
+/// granular-edit contract: such fields can be rebuilt alone via a scoped
+/// `[[BUILD_SHEET: …]]` marker while the Description stays byte-untouched.
+/// Any Description-section key, unknown key, or an empty scope → false (the
+/// caller falls back to the full rebuild — the safe default).
+bool keysAreTopLevelEditable(Iterable<String> keys, CreatorMode mode) {
+  final topLevel = <String>{
+    for (final f in schemaFor(mode))
+      if (f.kind == CardFieldKind.topLevel ||
+          f.kind == CardFieldKind.tags ||
+          f.kind == CardFieldKind.greetingsList ||
+          f.kind == CardFieldKind.dialogueExamples)
+        f.key,
+  };
+  final list = keys.toList();
+  return list.isNotEmpty && list.every(topLevel.contains);
+}
+
+/// Narrows [batches] to the targeted [keys]: each batch keeps only its
+/// targeted keys (order preserved) and emptied batches are dropped. With the
+/// scoped-edit contract this typically collapses a 4-pass build into ONE
+/// small call.
+List<List<String>> filterBatchesToKeys(
+  List<List<String>> batches,
+  Set<String> keys,
+) {
+  return [
+    for (final b in batches)
+      if (b.any(keys.contains)) [for (final k in b) if (keys.contains(k)) k],
+  ];
+}

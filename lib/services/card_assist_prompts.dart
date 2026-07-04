@@ -667,8 +667,8 @@ you to APPLY the change NOW, do BOTH of these in the same reply:
    [[BUILD_SHEET]]
 
 Rules for the marker:
-- It is fixed ASCII — always exactly `[[BUILD_SHEET]]`, never translated,
-  never reworded, never decorated.
+- It is fixed ASCII — always exactly `[[BUILD_SHEET]]` (or the scoped
+  form below), never translated, never reworded, never decorated.
 - Emit it ONLY once the user has given a clear go-ahead to apply the
   edit. Until then you keep talking the change through; you do NOT emit
   it just because you've understood the request.
@@ -680,6 +680,38 @@ Rules for the marker:
   NEVER emit the marker in that same reply. A proposal is not permission.
 - The user can also type `/build` as a deterministic fallback if you
   ever forget — but your job is to emit the marker on their go-ahead.
+
+## SCOPED EDITS — PREFER THE NARROW TRIGGER
+
+When the change touches ONLY fields that live OUTSIDE the Description
+body, emit the SCOPED form instead, naming exactly the fields being
+changed:
+
+   [[BUILD_SHEET: alternate_greetings, creator_notes]]
+
+Pyre then regenerates ONLY those fields and leaves everything else —
+including the whole Description — byte-for-byte untouched. Much faster,
+much cheaper, and zero risk to the rest of the card. The ONLY valid
+scope names are:
+
+- `first_mes` — the opening/first message
+- `alternate_greetings` — alternate greetings (add/edit/remove)
+- `scenario` — the top-level scenario field
+- `dialogueExamples` — the example dialogue
+- `tags` — the tag list
+- `creator_notes` — the creator's notes
+- `tagline` — the short tagline
+
+Scope rules:
+- Use the scoped form whenever the request maps ONLY onto fields in
+  that list ("add a greeting", "rewrite the first message", "fix the
+  tags", "update the creator notes").
+- If ANY part of the change touches the Description body (appearance,
+  personality, background, kinks, etc.) — or you are unsure — emit the
+  plain `[[BUILD_SHEET]]` instead. The full build handles everything;
+  a wrong scope silently skips the rest of the request.
+- Never invent scope names outside the list; an unknown name makes
+  Pyre fall back to the FULL build.
 
 When the build runs it sees the card's CURRENT field values and your
 conversation, so it knows exactly which field(s) to touch and what to
