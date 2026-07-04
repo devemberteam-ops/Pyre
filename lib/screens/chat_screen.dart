@@ -688,157 +688,22 @@ class _ChatScreenState extends State<ChatScreen> {
     // Persona party (2026-07): MULTI-select. Pick one persona to play solo, or
     // several for a "persona party" — your messages then represent the whole
     // group (see buildJointPersonaBlock). Selection order = party order (first
-    // = primary). A search field keeps it usable past 10+ personas.
+    // = primary).
+    //
+    // 2026-07-03 (Gui): routed to the full-screen organized picker (favorites
+    // + the library's sort + search) instead of the cramped bottom sheet —
+    // "it should take you to the normal screen with better organization."
     final store = context.read<AppStore>();
-    final personas = store.personas.where((p) => !p.deleted).toList();
-    // LinkedHashSet preserves selection order → the party's order + primary.
-    final selected = <String>{...chat.effectivePersonaIds}
+    final initial = <String>{...chat.effectivePersonaIds}
       ..removeWhere((id) => id == kExplicitNoPersonaId);
-    var query = '';
-
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: EmberColors.bgPanel,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    final picked = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(
+        builder: (_) =>
+            PersonaPartyPickerScreen(initialSelected: initial.toList()),
       ),
-      builder: (sheet) {
-        return StatefulBuilder(
-          builder: (sheetCtx, setSheetState) {
-            final filtered = query.trim().isEmpty
-                ? personas
-                : personas
-                    .where((p) =>
-                        p.name.toLowerCase().contains(query.toLowerCase()))
-                    .toList();
-            final n = selected.length;
-            final status = n == 0
-                ? 'No persona'
-                : n == 1
-                    ? 'Solo — 1 persona'
-                    : 'Persona party — $n personas (your messages = the '
-                        'whole group)';
-            return SafeArea(
-              child: Padding(
-                padding: EdgeInsets.only(
-                    bottom: MediaQuery.of(sheetCtx).viewInsets.bottom),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 8, bottom: 8),
-                        child: SizedBox(
-                          width: 40,
-                          height: 4,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: EmberColors.stroke,
-                              borderRadius:
-                                  const BorderRadius.all(Radius.circular(2)),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Padding(
-                      padding:
-                          const EdgeInsets.fromLTRB(16, 4, 16, 2),
-                      child: Text('Persona for this chat',
-                          style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w600)),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Text(
-                        'Pick one to play solo, or several for a persona '
-                        'party. Only affects this chat.',
-                        style: TextStyle(
-                            color: EmberColors.textMid,
-                            fontSize: 12,
-                            height: 1.3),
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: TextField(
-                        onChanged: (v) => setSheetState(() => query = v),
-                        decoration: InputDecoration(
-                          isDense: true,
-                          hintText: 'Search personas…',
-                          prefixIcon: const Icon(Icons.search, size: 18),
-                          border: const OutlineInputBorder(),
-                        ),
-                      ),
-                    ),
-                    Flexible(
-                      child: ListView(
-                        shrinkWrap: true,
-                        children: [
-                          for (final p in filtered)
-                            CheckboxListTile(
-                              value: selected.contains(p.id),
-                              onChanged: (v) => setSheetState(() {
-                                if (v == true) {
-                                  selected.add(p.id);
-                                } else {
-                                  selected.remove(p.id);
-                                }
-                              }),
-                              activeColor: EmberColors.primary,
-                              controlAffinity:
-                                  ListTileControlAffinity.trailing,
-                              secondary: AvatarBubble(
-                                dataUrl: p.avatar,
-                                fallback: p.name,
-                                radius: 16,
-                              ),
-                              title: Text(p.name),
-                            ),
-                        ],
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(status,
-                                style: TextStyle(
-                                    color: n > 1
-                                        ? EmberColors.primary
-                                        : EmberColors.textMid,
-                                    fontSize: 12,
-                                    fontWeight: n > 1
-                                        ? FontWeight.w600
-                                        : FontWeight.w400)),
-                          ),
-                          FilledButton(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: EmberColors.primary,
-                              foregroundColor: Colors.white,
-                            ),
-                            onPressed: () {
-                              store.setChatPersonaParty(
-                                  chat.id, selected.toList());
-                              Navigator.of(sheet).pop();
-                            },
-                            child: const Text('Done'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
     );
+    if (picked == null || !mounted) return; // dismissed without applying
+    store.setChatPersonaParty(chat.id, picked);
   }
 
   /// Wave 1.1 (F6): in-chat preset switcher. Lets the user see and swap the

@@ -20,6 +20,7 @@ import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
 import '../widgets/empty_state.dart';
+import 'characters_screen.dart' show topLevelVisibleCharacters;
 import 'chat_screen.dart' show ChatScreen;
 
 /// Sentinel value pushed back via `Navigator.pop` to indicate the
@@ -27,6 +28,117 @@ import 'chat_screen.dart' show ChatScreen;
 /// Distinct from a `null` pop (sheet dismissed without picking) and
 /// distinct from a real persona id.
 const String pickerNoPersonaSentinel = '__pyre_picker_no_persona__';
+
+// ---------------------------------------------------------------------------
+// 2026-07-03 (Gui): "adding characters/personas to a chat gives a mini menu
+// with all the options, when it should take you to the normal screen that
+// already has folders and better organization." The pickers now share the
+// LIBRARY's organization instead of being flat name lists. Pure helpers so
+// the behavior is unit-tested without widgets.
+
+/// The library's organization applied to a character picker: folder
+/// visibility via [topLevelVisibleCharacters] (tombstones excluded, the home
+/// view hides filed cards, a query searches everything), minus the ids
+/// already in the chat, favorites floated first, each group sorted with the
+/// library's sort key.
+({List<Character> favs, List<Character> rest}) organizePickerCharacters({
+  required List<Character> all,
+  required List<Folder> folders,
+  required Set<String> excludeIds,
+  String? folderId,
+  String query = '',
+  String sortKey = 'recent',
+  Map<String, int> chatCounts = const {},
+  Map<String, int> lastUsedAt = const {},
+}) {
+  final q = query.trim().toLowerCase();
+  Iterable<Character> stream = topLevelVisibleCharacters(
+    all,
+    folders,
+    activeFolderId: folderId,
+    query: q,
+  ).where((c) => !excludeIds.contains(c.id));
+  if (q.isNotEmpty) {
+    stream = stream.where((c) {
+      final hay = [c.name, c.tagline ?? '', c.tags.join(' '), c.description]
+          .join(' ')
+          .toLowerCase();
+      return hay.contains(q);
+    });
+  }
+  final list = stream.toList();
+  switch (sortKey) {
+    case 'created':
+      list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      break;
+    case 'alpha':
+      list.sort(
+          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      break;
+    case 'chatted':
+      list.sort(
+          (a, b) => (chatCounts[b.id] ?? 0).compareTo(chatCounts[a.id] ?? 0));
+      break;
+    case 'recent':
+    default:
+      list.sort(
+          (a, b) => (lastUsedAt[b.id] ?? 0).compareTo(lastUsedAt[a.id] ?? 0));
+      break;
+  }
+  return (
+    favs: list.where((c) => c.favorite).toList(),
+    rest: list.where((c) => !c.favorite).toList(),
+  );
+}
+
+/// Library-parity organization for the persona pickers (personas have no
+/// folders): tombstones excluded, favorites floated first, each group sorted
+/// with the library's persona sort key.
+({List<Persona> favs, List<Persona> rest}) organizePickerPersonas({
+  required List<Persona> all,
+  String query = '',
+  String sortKey = 'recent',
+  Map<String, int> lastUsedAt = const {},
+}) {
+  final q = query.trim().toLowerCase();
+  final list = all.where((p) => !p.deleted).where((p) {
+    if (q.isEmpty) return true;
+    final hay =
+        [p.name, p.tagline ?? '', p.description].join(' ').toLowerCase();
+    return hay.contains(q);
+  }).toList();
+  switch (sortKey) {
+    case 'created':
+      list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      break;
+    case 'alpha':
+      list.sort(
+          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      break;
+    case 'recent':
+    default:
+      list.sort(
+          (a, b) => (lastUsedAt[b.id] ?? 0).compareTo(lastUsedAt[a.id] ?? 0));
+      break;
+  }
+  return (
+    favs: list.where((p) => p.favorite).toList(),
+    rest: list.where((p) => !p.favorite).toList(),
+  );
+}
+
+/// One O(N_chats) pass: persona id → most recent chat.updatedAt. Mirrors the
+/// library's "Recently used" persona sort.
+Map<String, int> lastUsedAtByPersona(List<Chat> chats) {
+  final m = <String, int>{};
+  for (final ch in chats) {
+    final pid = ch.personaId;
+    if (pid == null) continue;
+    final prev = m[pid];
+    if (prev == null || ch.updatedAt > prev) m[pid] = ch.updatedAt;
+  }
+  return m;
+}
 
 /// Wave CY.18.1: shared entry point for "start a new chat with this
 /// character". Honours [ChatSettings.askPersonaOnNewChat] uniformly
@@ -178,6 +290,205 @@ Future<void> startNewGroupChat(
   }
 }
 
+/// Shared organized body for the character pickers: subtitle + search +
+/// folder browsing (LOCAL state — never touches the library tab's own folder
+/// view) + favorites section, with each picker rendering its own row widget.
+/// Virtualized — only on-screen rows inflate.
+class _OrganizedCharacterPickerBody extends StatefulWidget {
+  final String subtitle;
+  final Set<String> excludeIds;
+  final Widget Function(Character c) buildRow;
+  const _OrganizedCharacterPickerBody({
+    required this.subtitle,
+    required this.excludeIds,
+    required this.buildRow,
+  });
+
+  @override
+  State<_OrganizedCharacterPickerBody> createState() =>
+      _OrganizedCharacterPickerBodyState();
+}
+
+class _OrganizedCharacterPickerBodyState
+    extends State<_OrganizedCharacterPickerBody> {
+  String _query = '';
+  String? _folderId;
+
+  Widget _sectionLabel(String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: EmberColors.textDim,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.1,
+          ),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final store = context.watch<AppStore>();
+    final q = _query.trim().toLowerCase();
+    final liveFolders = store.folders.where((f) => !f.deleted).toList();
+    // A folder deleted (or synced away) while browsing it falls back to the
+    // home view gracefully instead of rendering an empty husk.
+    Folder? activeFolder;
+    for (final f in liveFolders) {
+      if (f.id == _folderId) {
+        activeFolder = f;
+        break;
+      }
+    }
+    final organized = organizePickerCharacters(
+      all: store.characters,
+      folders: store.folders,
+      excludeIds: widget.excludeIds,
+      folderId: activeFolder?.id,
+      query: q,
+      sortKey: store.charSortKey,
+      chatCounts: store.chatCountByCharacter,
+      lastUsedAt: store.lastUsedAtByCharacter,
+    );
+    final onHome = activeFolder == null && q.isEmpty;
+
+    int selectableIn(Folder f) {
+      final ids = f.characterIds.toSet();
+      return store.characters
+          .where((c) =>
+              !c.deleted &&
+              ids.contains(c.id) &&
+              !widget.excludeIds.contains(c.id))
+          .length;
+    }
+
+    // Lazily-built row list (thunks, not widgets) so a big library only
+    // inflates on-screen rows — same virtualization as the library tab.
+    final rows = <Widget Function()>[];
+    if (onHome && liveFolders.isNotEmpty) {
+      rows.add(() => _sectionLabel('FOLDERS'));
+      for (final f in liveFolders) {
+        final count = selectableIn(f);
+        rows.add(() => ListTile(
+              leading:
+                  Icon(Icons.folder_outlined, color: EmberColors.textMid),
+              title: Text(f.name),
+              subtitle: Text(
+                '$count character${count == 1 ? '' : 's'}',
+                style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+              ),
+              trailing: const Icon(Icons.chevron_right, size: 18),
+              onTap: () => setState(() => _folderId = f.id),
+            ));
+      }
+      rows.add(() => const SizedBox(height: 8));
+    }
+    if (organized.favs.isNotEmpty) {
+      rows.add(() => _sectionLabel('FAVORITES'));
+      for (final c in organized.favs) {
+        rows.add(() => widget.buildRow(c));
+      }
+      if (organized.rest.isNotEmpty) rows.add(() => const SizedBox(height: 8));
+    }
+    for (final c in organized.rest) {
+      rows.add(() => widget.buildRow(c));
+    }
+    // Home view with folders but zero unfiled rows: keep the folder tiles
+    // visible and say where everyone is.
+    final noCharacterRows = organized.favs.isEmpty && organized.rest.isEmpty;
+    if (noCharacterRows && onHome && liveFolders.isNotEmpty) {
+      rows.add(() => Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Text(
+              'Everyone else lives inside a folder — open one above, or '
+              'search to look across all of them.',
+              style: TextStyle(
+                  color: EmberColors.textMid, fontSize: 12, height: 1.4),
+            ),
+          ));
+    }
+
+    final liveCount = store.characters.where((c) => !c.deleted).length;
+    final Widget listBody;
+    if (rows.isEmpty) {
+      listBody = Padding(
+        padding: const EdgeInsets.all(32),
+        child: EmptyState(
+          icon: liveCount == 0 ? Icons.person_outline : Icons.search_off,
+          title: liveCount == 0
+              ? 'No characters yet'
+              : q.isNotEmpty
+                  ? 'No matches'
+                  : 'Every character is already in this chat',
+          subtitle: liveCount == 0
+              ? 'Import or create one from the Characters tab.'
+              : q.isNotEmpty
+                  ? 'Try a different search term.'
+                  : 'They\'re all members already.',
+        ),
+      );
+    } else {
+      listBody = ListView.builder(
+        itemCount: rows.length,
+        itemBuilder: (_, i) => rows[i](),
+      );
+    }
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(
+            widget.subtitle,
+            style: TextStyle(
+              color: EmberColors.textMid,
+              fontSize: 12,
+              height: 1.4,
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: TextField(
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search, size: 18),
+              hintText: 'Search characters…',
+              isDense: true,
+            ),
+            onChanged: (v) => setState(() => _query = v),
+          ),
+        ),
+        if (activeFolder != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 16, 4),
+            child: Row(
+              children: [
+                TextButton.icon(
+                  onPressed: () => setState(() => _folderId = null),
+                  icon: const Icon(Icons.arrow_back, size: 16),
+                  label: const Text('All characters'),
+                ),
+                const SizedBox(width: 4),
+                Icon(Icons.folder_outlined,
+                    size: 16, color: EmberColors.textMid),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    activeFolder.name,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Expanded(child: listBody),
+      ],
+    );
+  }
+}
+
 /// Multi-select character picker for [startNewGroupChat]. Pops with the
 /// ordered member id list ([primary] first, locked), or null if dismissed.
 class GroupCharacterPickerScreen extends StatefulWidget {
@@ -191,105 +502,61 @@ class GroupCharacterPickerScreen extends StatefulWidget {
 
 class _GroupCharacterPickerScreenState
     extends State<GroupCharacterPickerScreen> {
-  String _query = '';
   // Selection order is preserved → it becomes the member order (primary
   // first; primary is locked on).
   late final List<String> _selected = [widget.primary.id];
 
   @override
   Widget build(BuildContext context) {
-    final store = context.watch<AppStore>();
-    final q = _query.trim().toLowerCase();
-    final candidates = store.characters.where((c) {
-      if (q.isEmpty) return true;
-      final hay =
-          '${c.name} ${c.tagline ?? ''} ${c.description}'.toLowerCase();
-      return hay.contains(q);
-    }).toList();
     final n = _selected.length;
     return Scaffold(
       appBar: AppBar(title: const Text('New group chat')),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Text(
-              'Pick the members. ${widget.primary.name} opens the chat '
-              '(their greeting starts it); everyone joins the scene.',
-              style: TextStyle(
-                color: EmberColors.textMid,
-                fontSize: 12,
-                height: 1.4,
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: TextField(
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search, size: 18),
-                hintText: 'Search characters…',
-                isDense: true,
-              ),
-              onChanged: (v) => setState(() => _query = v),
-            ),
-          ),
           Expanded(
-            child: candidates.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.all(32),
-                    child: EmptyState(
-                      icon: Icons.search_off,
-                      title: 'No matches',
-                      subtitle: 'Try a different search term.',
-                    ),
-                  )
-                : ListView.separated(
-                    itemCount: candidates.length,
-                    separatorBuilder: (_, _) =>
-                        Divider(color: EmberColors.stroke, height: 1),
-                    itemBuilder: (_, i) {
-                      final c = candidates[i];
-                      final isPrimary = c.id == widget.primary.id;
-                      return CheckboxListTile(
-                        activeColor: EmberColors.primary,
-                        controlAffinity: ListTileControlAffinity.trailing,
-                        secondary: AvatarBubble(
-                          dataUrl: c.avatar,
-                          fallback: c.name,
-                          radius: 18,
-                        ),
-                        title: Text(c.name),
-                        subtitle: isPrimary
-                            ? Text('Opens the chat',
-                                style: TextStyle(
-                                    color: EmberColors.primary,
-                                    fontSize: 12))
-                            : (c.tagline != null && c.tagline!.isNotEmpty
-                                ? Text(
-                                    c.tagline!,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                        color: EmberColors.textMid,
-                                        fontSize: 12),
-                                  )
-                                : null),
-                        value: _selected.contains(c.id),
-                        // The primary is locked on — unchecking it would
-                        // orphan the greeting that opens the chat.
-                        onChanged: isPrimary
-                            ? null
-                            : (v) => setState(() {
-                                  if (v == true) {
-                                    _selected.add(c.id);
-                                  } else {
-                                    _selected.remove(c.id);
-                                  }
-                                }),
-                      );
-                    },
+            child: _OrganizedCharacterPickerBody(
+              subtitle: 'Pick the members. ${widget.primary.name} opens the '
+                  'chat (their greeting starts it); everyone joins the scene.',
+              excludeIds: const {},
+              buildRow: (c) {
+                final isPrimary = c.id == widget.primary.id;
+                return CheckboxListTile(
+                  activeColor: EmberColors.primary,
+                  controlAffinity: ListTileControlAffinity.trailing,
+                  secondary: AvatarBubble(
+                    dataUrl: c.avatar,
+                    fallback: c.name,
+                    radius: 18,
                   ),
+                  title: Text(c.name),
+                  subtitle: isPrimary
+                      ? Text('Opens the chat',
+                          style: TextStyle(
+                              color: EmberColors.primary, fontSize: 12))
+                      : (c.tagline != null && c.tagline!.isNotEmpty
+                          ? Text(
+                              c.tagline!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  color: EmberColors.textMid, fontSize: 12),
+                            )
+                          : null),
+                  value: _selected.contains(c.id),
+                  // The primary is locked on — unchecking it would
+                  // orphan the greeting that opens the chat.
+                  onChanged: isPrimary
+                      ? null
+                      : (v) => setState(() {
+                            if (v == true) {
+                              _selected.add(c.id);
+                            } else {
+                              _selected.remove(c.id);
+                            }
+                          }),
+                );
+              },
+            ),
           ),
           const Divider(height: 1),
           SafeArea(
@@ -366,19 +633,16 @@ class _PersonaPickerScreenState extends State<PersonaPickerScreen> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AppStore>();
-    final q = _query.trim().toLowerCase();
-    // M-4: exclude soft-deleted (tombstoned) personas — a synced-in tombstone
-    // would otherwise show in the picker and, if selected, pin a deleted
-    // persona whose text keeps injecting until GC. Mirrors the main list in
-    // characters_screen (`_applyFiltersAndSort`).
-    final live = store.personas.where((p) => !p.deleted);
-    final filtered = q.isEmpty
-        ? live.toList()
-        : live.where((p) {
-            final hay = '${p.name} ${p.tagline ?? ''} ${p.description}'
-                .toLowerCase();
-            return hay.contains(q);
-          }).toList();
+    // M-4 (tombstone exclusion) + 2026-07-03 (Gui, library-parity
+    // organization): favorites float first and the library's persona sort
+    // applies, all via the shared pure helper.
+    final organized = organizePickerPersonas(
+      all: store.personas,
+      query: _query,
+      sortKey: store.personaSortKey,
+      lastUsedAt: lastUsedAtByPersona(store.chats),
+    );
+    final filtered = [...organized.favs, ...organized.rest];
     return Scaffold(
       appBar: AppBar(title: Text(widget.title)),
       body: Column(
@@ -497,8 +761,9 @@ class _PersonaPickerScreenState extends State<PersonaPickerScreen> {
 }
 
 /// Full-screen character picker — returns the picked Character id, or
-/// null if dismissed. Excludes ids already in [excludeIds].
-class CharacterPickerScreen extends StatefulWidget {
+/// null if dismissed. Excludes ids already in [excludeIds]. Organized like
+/// the library (folders + favorites + the library's sort).
+class CharacterPickerScreen extends StatelessWidget {
   final Set<String> excludeIds;
   final String title;
   final String subtitle;
@@ -510,33 +775,129 @@ class CharacterPickerScreen extends StatefulWidget {
   });
 
   @override
-  State<CharacterPickerScreen> createState() =>
-      _CharacterPickerScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: _OrganizedCharacterPickerBody(
+        subtitle: subtitle,
+        excludeIds: excludeIds,
+        buildRow: (c) => ListTile(
+          leading: AvatarBubble(
+            dataUrl: c.avatar,
+            fallback: c.name,
+            radius: 18,
+          ),
+          title: Text(c.name),
+          subtitle: c.tagline != null && c.tagline!.isNotEmpty
+              ? Text(
+                  c.tagline!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+                )
+              : null,
+          onTap: () => Navigator.pop(context, c.id),
+        ),
+      ),
+    );
+  }
 }
 
-class _CharacterPickerScreenState extends State<CharacterPickerScreen> {
+/// 2026-07-03 (Gui): full-screen MULTI-select persona picker for the per-chat
+/// persona / persona party — replaces the cramped bottom sheet ("a mini menu
+/// with all the options") with the same organized screen the other pickers
+/// use: favorites float first, the library's persona sort, search. Selection
+/// order = party order (first = primary). Pops with the ordered id list
+/// (empty = No persona), or null if dismissed without applying.
+class PersonaPartyPickerScreen extends StatefulWidget {
+  final List<String> initialSelected;
+  const PersonaPartyPickerScreen({super.key, this.initialSelected = const []});
+
+  @override
+  State<PersonaPartyPickerScreen> createState() =>
+      _PersonaPartyPickerScreenState();
+}
+
+class _PersonaPartyPickerScreenState extends State<PersonaPartyPickerScreen> {
   String _query = '';
+  // Insertion order = party order (first = primary).
+  late final List<String> _selected = List<String>.from(widget.initialSelected);
 
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AppStore>();
-    final q = _query.trim().toLowerCase();
-    final candidates = store.characters
-        .where((c) => !widget.excludeIds.contains(c.id))
-        .where((c) {
-      if (q.isEmpty) return true;
-      final hay = '${c.name} ${c.tagline ?? ''} ${c.description}'
-          .toLowerCase();
-      return hay.contains(q);
-    }).toList();
+    final organized = organizePickerPersonas(
+      all: store.personas,
+      query: _query,
+      sortKey: store.personaSortKey,
+      lastUsedAt: lastUsedAtByPersona(store.chats),
+    );
+    final n = _selected.length;
+    final status = n == 0
+        ? 'No persona'
+        : n == 1
+            ? 'Solo — 1 persona'
+            : 'Persona party — $n personas (your messages = the whole group)';
+
+    Widget row(Persona p) => CheckboxListTile(
+          value: _selected.contains(p.id),
+          onChanged: (v) => setState(() {
+            if (v == true) {
+              if (!_selected.contains(p.id)) _selected.add(p.id);
+            } else {
+              _selected.remove(p.id);
+            }
+          }),
+          activeColor: EmberColors.primary,
+          controlAffinity: ListTileControlAffinity.trailing,
+          secondary: AvatarBubble(
+            dataUrl: p.avatar,
+            fallback: p.name,
+            radius: 16,
+          ),
+          title: Text(p.name),
+          subtitle: p.tagline != null && p.tagline!.isNotEmpty
+              ? Text(
+                  p.tagline!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+                )
+              : null,
+        );
+
+    final rows = <Widget Function()>[];
+    if (organized.favs.isNotEmpty) {
+      rows.add(() => Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+            child: Text(
+              'FAVORITES',
+              style: TextStyle(
+                color: EmberColors.textDim,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.1,
+              ),
+            ),
+          ));
+      for (final p in organized.favs) {
+        rows.add(() => row(p));
+      }
+      if (organized.rest.isNotEmpty) rows.add(() => const SizedBox(height: 8));
+    }
+    for (final p in organized.rest) {
+      rows.add(() => row(p));
+    }
+
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: AppBar(title: const Text('Persona for this chat')),
       body: Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Text(
-              widget.subtitle,
+              'Pick one to play solo, or several for a persona party. '
+              'Uncheck everything for no persona. Only affects this chat.',
               style: TextStyle(
                 color: EmberColors.textMid,
                 fontSize: 12,
@@ -549,59 +910,66 @@ class _CharacterPickerScreenState extends State<CharacterPickerScreen> {
             child: TextField(
               decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.search, size: 18),
-                hintText: 'Search characters…',
+                hintText: 'Search personas…',
                 isDense: true,
               ),
               onChanged: (v) => setState(() => _query = v),
             ),
           ),
           Expanded(
-            child: candidates.isEmpty
+            child: rows.isEmpty
                 ? Padding(
                     padding: const EdgeInsets.all(32),
                     child: EmptyState(
-                      icon: store.characters.isEmpty
-                          ? Icons.person_outline
+                      icon: store.personas.where((p) => !p.deleted).isEmpty
+                          ? Icons.face_outlined
                           : Icons.search_off,
-                      title: store.characters.isEmpty
-                          ? 'No characters yet'
-                          : (widget.excludeIds.length ==
-                                  store.characters.length
-                              ? 'Every character is already in this chat'
-                              : 'No matches'),
-                      subtitle: store.characters.isEmpty
-                          ? 'Import or create one from the Characters tab.'
-                          : 'Try a different search term.',
+                      title: store.personas.where((p) => !p.deleted).isEmpty
+                          ? 'No personas yet'
+                          : 'No matches',
+                      subtitle: store.personas
+                              .where((p) => !p.deleted)
+                              .isEmpty
+                          ? 'Create one from the Personas tab to play as a specific identity.'
+                          : 'Nothing matches your search.',
                     ),
                   )
-                : ListView.separated(
-                    itemCount: candidates.length,
-                    separatorBuilder: (_, _) => Divider(
-                        color: EmberColors.stroke, height: 1),
-                    itemBuilder: (_, i) {
-                      final c = candidates[i];
-                      return ListTile(
-                        leading: AvatarBubble(
-                          dataUrl: c.avatar,
-                          fallback: c.name,
-                          radius: 18,
-                        ),
-                        title: Text(c.name),
-                        subtitle:
-                            c.tagline != null && c.tagline!.isNotEmpty
-                                ? Text(
-                                    c.tagline!,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                        color: EmberColors.textMid,
-                                        fontSize: 12),
-                                  )
-                                : null,
-                        onTap: () => Navigator.pop(context, c.id),
-                      );
-                    },
+                : ListView.builder(
+                    itemCount: rows.length,
+                    itemBuilder: (_, i) => rows[i](),
                   ),
+          ),
+          const Divider(height: 1),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      status,
+                      style: TextStyle(
+                        color: n > 1
+                            ? EmberColors.primary
+                            : EmberColors.textMid,
+                        fontSize: 12,
+                        fontWeight: n > 1 ? FontWeight.w600 : FontWeight.w400,
+                      ),
+                    ),
+                  ),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: EmberColors.primary,
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: () =>
+                        Navigator.pop(context, List<String>.from(_selected)),
+                    child: const Text('Done'),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
