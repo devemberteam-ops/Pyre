@@ -1394,6 +1394,12 @@ String creatorArchitectPrompt({
           : kCardAssistantPrompt;
   }
   var prompt = base;
+  // 2026-07-03 (Gui): the character architect already carries a full "read the
+  // register, don't default to high fantasy" block; give the SAME instinct to
+  // scenario + persona (they lacked it) via the shared condensed version.
+  if (mode == 'scenario' || mode == 'persona') {
+    prompt = '$prompt\n\n$kReadTheVibeShared';
+  }
   // Wave CY.18.101: flow is always freeform now, so the freeform appendix
   // applies to every block-mode session (character or scenario).
   final usesBlocks = mode == 'character' || mode == 'scenario';
