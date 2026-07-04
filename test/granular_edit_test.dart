@@ -10,6 +10,8 @@
 // native, and the rebuild silently re-invented the user's authored
 // Description).
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pyre/services/chat_api.dart' show ChatTurn;
+import 'package:pyre/services/creator_build_prompts.dart';
 import 'package:pyre/services/creator_cascade.dart';
 import 'package:pyre/services/creator_render.dart';
 import 'package:pyre/services/creator_schema.dart' as cs;
@@ -160,6 +162,56 @@ void main() {
       expect(
         isForeignDescription(description: '   ', recognized: const {}),
         isFalse,
+      );
+    });
+  });
+
+  // 2026-07-04 (Gui): "imaginava que desse para a LLM entender que eu só
+  // quero editar X parte sem precisar ser no nosso modelo" — foreign-format
+  // Descriptions get a SURGICAL TEXT EDIT (model receives the text verbatim
+  // + the conversation, returns it with only the requested change applied).
+  group('surgical description edit (foreign cards)', () {
+    test('turns: system contract + conversation + verbatim text last', () {
+      final turns = buildSurgicalDescriptionEditTurns(
+        description: '[character("Vael") + Mind("guarded")]',
+        transcript: [
+          ChatTurn('user', 'make him 25 instead of 30'),
+          ChatTurn('assistant', 'Got it — applying.'),
+        ],
+      );
+      expect(turns.first.role, 'system');
+      expect(turns.first.content, contains('ONLY the change'));
+      expect(turns[1].content, 'make him 25 instead of 30');
+      expect(turns.last.role, 'user');
+      expect(turns.last.content, contains('[character("Vael")'));
+    });
+
+    test('acceptance: good edit passes; fences stripped', () {
+      final original = 'A long hand-written prose card about Vael. ' * 4;
+      final edited = '${'A long hand-written prose card about Vael. ' * 3}'
+          'Now aged 25.';
+      expect(
+        acceptSurgicalDescriptionEdit(original: original, edited: edited),
+        edited,
+      );
+      expect(
+        acceptSurgicalDescriptionEdit(
+            original: original, edited: '```\n$edited\n```'),
+        edited,
+      );
+    });
+
+    test('acceptance: empty or suspiciously short (summarised) → rejected '
+        '(original kept)', () {
+      final original = 'A long hand-written prose card about Vael. ' * 6;
+      expect(
+        acceptSurgicalDescriptionEdit(original: original, edited: '   '),
+        isNull,
+      );
+      expect(
+        acceptSurgicalDescriptionEdit(
+            original: original, edited: 'Vael, now 25.'),
+        isNull,
       );
     });
   });

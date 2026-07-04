@@ -1252,7 +1252,16 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     // normal completion, error, or cancellation.
     await _keepAliveStart();
     try {
-      final fields = await runStructuredBuild(
+      // FOREIGN card + a scope that ONLY names Description sections: the
+      // schema batches would regenerate values whose render gets overwritten
+      // by the surgical text edit anyway — skip them entirely (the surgical
+      // call below is the whole build).
+      final surgicalOnly = scoped &&
+          foreignDescription.trim().isNotEmpty &&
+          targetKeys.every(cs.descriptionSectionKeys(mode).contains);
+      final fields = surgicalOnly
+          ? <String, dynamic>{}
+          : await runStructuredBuild(
         batches: batches,
         // Back off between retries so a transient provider throttle (empty
         // reply) can recover before the next attempt.
@@ -1333,6 +1342,45 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
         },
       );
 
+      // Surgical Description edit for FOREIGN-format cards (2026-07-04,
+      // Gui): Pyre can't decompose these into sections, but the MODEL can
+      // still apply "only the change X" to the raw text — it gets the
+      // conversation + the current Description verbatim and returns the full
+      // text with only the requested change applied (or unchanged when the
+      // request doesn't concern it). Guarded by
+      // acceptSurgicalDescriptionEdit; a rejected/failed result keeps the
+      // original verbatim (noted in the done message). Skipped when the
+      // scope proves the request never touches the Description.
+      String? surgicalDescription;
+      var surgicalRejected = false;
+      final wantsDescriptionEdit = !scoped || sectionScoped;
+      if (foreignDescription.trim().isNotEmpty &&
+          wantsDescriptionEdit &&
+          !cancelToken.isCancelled) {
+        try {
+          final out = await completeChatStreamed(
+            provider: provider,
+            settings: settings,
+            messages: buildSurgicalDescriptionEditTurns(
+              description: foreignDescription,
+              transcript: transcript,
+            ),
+            debugTag: 'creator-surgical-desc',
+          );
+          final accepted = acceptSurgicalDescriptionEdit(
+            original: foreignDescription,
+            edited: out,
+          );
+          if (accepted != null) {
+            surgicalDescription = accepted;
+          } else {
+            surgicalRejected = true;
+          }
+        } catch (_) {
+          surgicalRejected = true;
+        }
+      }
+
       if (!mounted) return;
       // Creator M2: if the user switched/deleted the session while the build
       // ran, bail BEFORE touching the canvas. The merge below reads
@@ -1371,11 +1419,9 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       //    only the targeted sections regenerated, every other section came
       //    verbatim from the decomposed parse (strictly more faithful than
       //    the full rebuild, where the model re-echoes everything);
-      //  - scope targets sections on a FOREIGN card → the parse is unreliable,
-      //    so keep the text verbatim and say so in the done message.
-      final sectionEditBlocked =
-          sectionScoped && foreignDescription.trim().isNotEmpty;
-      if (scoped && (!sectionScoped || sectionEditBlocked)) {
+      //  - FOREIGN card → the surgical text edit above owns the Description
+      //    (applied via the restore below); rejected/failed → original kept.
+      if (scoped && !sectionScoped) {
         final curDesc = (_sessionCanvas(store)['description'] ?? '').toString();
         rendered['description'] = curDesc;
       }
@@ -1398,12 +1444,13 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
         }
         canvas[k] = v;
       });
-      // FIX (foreign card): the imported Description couldn't be decomposed, so
-      // the rebuilt one would be re-invented prose — restore the raw original
-      // verbatim instead of overwriting the user's content. Other rebuilt
-      // fields (first_mes, scenario, tags) still apply above.
+      // FIX (foreign card): the imported Description couldn't be decomposed,
+      // so the schema-rebuilt one would be re-invented prose. Apply the
+      // SURGICAL text edit's result when it passed the guard; otherwise
+      // restore the raw original verbatim. Other rebuilt fields (first_mes,
+      // scenario, tags) still apply above.
       if (foreignDescription.trim().isNotEmpty) {
-        canvas['description'] = foreignDescription;
+        canvas['description'] = surgicalDescription ?? foreignDescription;
       }
       // Cost guardrail: a build that reached the merge succeeded — drop the
       // failed flag so the next marker auto-fires normally.
@@ -1420,10 +1467,11 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
           : '✓  Card built. A few fields came back empty '
                 '(${missing.join(', ')}) — you can re-run the build or fill them '
                 'by hand in the Sheet tab.';
-      if (sectionEditBlocked) {
-        doneMsg += '\n\n⚠ This card\'s Description uses a format Pyre can\'t '
-            'edit section-by-section, so it was left untouched — edit it by '
-            'hand in the Sheet tab, or ask for a change to the other fields.';
+      if (surgicalRejected) {
+        doneMsg += '\n\n⚠ The revised Description came back looking wrong '
+            '(empty or drastically shortened), so the original text was '
+            'kept. Try rephrasing the request, or edit the Description by '
+            'hand in the Sheet tab.';
       }
       _updateBuildStatus(store, doneMsg);
       if (mounted) setState(() => _showCanvas = true); // surface the Sheet

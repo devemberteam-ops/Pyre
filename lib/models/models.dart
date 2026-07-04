@@ -829,13 +829,6 @@ class MemoryCheckpoint {
   /// Wave CY.18.62: LAN sync metadata. See Character.mtime for rationale.
   int mtime;
   bool deleted;
-  /// 2026-07-04 (Gui: "os resumos não dão para entender por si só"): true
-  /// when this checkpoint was written under the v3 SELF-CONTAINED ROLLING
-  /// RECAP design — it retells the WHOLE story so far and stands alone, so
-  /// injection uses it INSTEAD of concatenating the chain. False (and
-  /// omitted from json) for legacy "next paragraph" checkpoints, which keep
-  /// the old concatenation path byte-identically.
-  bool selfContained;
 
   MemoryCheckpoint({
     required this.id,
@@ -845,7 +838,6 @@ class MemoryCheckpoint {
     int? createdAt,
     this.mtime = 0,
     this.deleted = false,
-    this.selfContained = false,
   }) : createdAt = createdAt ?? DateTime.now().millisecondsSinceEpoch;
 
   factory MemoryCheckpoint.fromJson(Map<String, dynamic> j) =>
@@ -857,7 +849,6 @@ class MemoryCheckpoint {
         createdAt: _jInt(j['createdAt']),
         mtime: _jInt(j['mtime']) ?? 0,
         deleted: (j['deleted'] as bool?) ?? false,
-        selfContained: (j['selfContained'] as bool?) ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -868,7 +859,6 @@ class MemoryCheckpoint {
         'createdAt': createdAt,
         'mtime': mtime,
         if (deleted) 'deleted': true,
-        if (selfContained) 'selfContained': true,
       };
 }
 
@@ -2100,38 +2090,39 @@ class MemorySettings {
   /// manual "Summarise now" still work.
   bool newChatsEnabled;
 
-  /// v3, 2026-07-04 (Gui: "o resumo não conta uma história que dê para
-  /// entender por si só"): each checkpoint is now a SELF-CONTAINED ROLLING
-  /// RECAP — the complete "story so far" retold from the top every time
-  /// (prior recap compressed + new events folded in), so ANY single
-  /// checkpoint read alone tells the whole story. The v2 "next paragraph —
-  /// never re-introduce" chain produced connective fragments that neither
-  /// the user nor the model could follow once the oldest links fell out of
-  /// the prompt window. Injection now uses only the newest recap.
+  /// v3 final, 2026-07-04 (Gui's own design): CHAPTERS. Each checkpoint is
+  /// ONE new chapter covering ONLY the events since the previous one — "de 0
+  /// até 20 conta o setting e começo, de 20 até 40 resume o que aconteceu
+  /// SEM recontar o que já foi contado". Read in order, the chapters add up
+  /// to one complete, self-contained story. (An earlier draft retold the
+  /// whole story every time — Gui rejected the retelling; the chain itself
+  /// is the story.)
   static const _defaultPrompt =
-      'You are keeping the "story so far" of an unfolding roleplay as ONE '
-      'complete, self-contained recap. Someone who has read NOTHING else — '
-      'not the chat, not any earlier recap — must be able to read your '
-      'output alone and fully understand the story: who the people are, '
-      'where they are, what has happened between them, and where things '
-      'stand now.\n\n'
-      'Each time you run, RETELL the whole story from the beginning as one '
-      'flowing narrative: open by grounding the reader (who these people '
-      'were, where they were, the situation that set things in motion), '
-      'compress the earlier events into their essential arc — keep every '
-      'fact that still matters (names, relationships, promises, injuries, '
-      'secrets, items, stakes), let go of moment-to-moment detail that no '
-      'longer does — then give the MOST RECENT events the most room, and '
-      'close on where things stand and what hangs unresolved.\n\n'
-      'Your output REPLACES every earlier recap — never write "as '
-      'mentioned before" or assume prior knowledge; the reader has none. '
-      'Do NOT borrow scenarios, settings, or names from this instruction; '
-      'lift everything from the material provided.\n\n'
-      'Always: third person, PAST tense; the real names of people and '
-      'places exactly as the story names them; preserve relationship '
-      'shifts and stakes; roughly {{words}} words; flowing prose only '
-      '— no labels, headers, bullet points, or commentary outside the '
-      'narrative.';
+      'You are writing the running "story so far" of an unfolding roleplay '
+      'as a sequence of CHAPTERS. Each time you run, you write ONE new '
+      'chapter covering ONLY what happened since the previous chapter. '
+      'Read in order, the chapters must add up to one complete, '
+      'self-contained story a newcomer could follow.\n\n'
+      'If this is the FIRST chapter, open the story: ground who these '
+      'people were, where they were, and the situation that set things in '
+      'motion — the actual inciting circumstance of THIS roleplay — then '
+      'carry the opening events forward as a shaped arc and end on where '
+      'things stood.\n\n'
+      'If earlier chapters are provided, write ONLY the next chapter: what '
+      'happened, how it shifted things between the people involved, what '
+      'it cost or meant, closing on where things stand now. NEVER retell, '
+      'summarise, or rephrase anything an earlier chapter already covered '
+      '— no recap of the recap, no re-introductions. Trust the reader to '
+      'have read the earlier chapters.\n\n'
+      'Even so, every chapter must stand on its own feet as prose: use '
+      'the real NAMES of people and places (never a bare "he"/"she" that '
+      'leans on the previous chapter\'s final sentence), complete '
+      'sentences, no meta commentary, no bulleted logs. Do NOT borrow '
+      'scenarios, settings, or names from this instruction; lift '
+      'everything from the material provided.\n\n'
+      'Always: third person, PAST tense; preserve relationship shifts and '
+      'stakes; roughly {{words}} words; flowing prose only — no labels, '
+      'headers, bullet points, or commentary outside the narrative.';
 
   /// The CURRENT default summary prompt (exposed for the Checkpoints screen's
   /// "Restore" action and for migration tests).

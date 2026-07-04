@@ -446,3 +446,66 @@ CardField? _findField(List<CardField> schema, String key) {
   }
   return null;
 }
+
+// ── Surgical Description edit (foreign-format cards) ──────────────────────
+//
+// 2026-07-04 (Gui): "eu imaginava que desse para a LLM entender que eu só
+// quero editar X parte e não o texto todo sem precisar ser necessariamente
+// no nosso modelo." For a card whose Description Pyre CANNOT decompose into
+// schema sections (plain prose, W++, markdown, hybrids), the edit build now
+// runs this SURGICAL TEXT EDIT: the model receives the current Description
+// verbatim plus the conversation, and returns the full text with ONLY the
+// requested change applied — same convention, everything else preserved.
+// [acceptSurgicalDescriptionEdit] guards the result before it is stored.
+
+const String kSurgicalDescriptionEditSystem =
+    'You are applying a requested edit to a character card\'s Description '
+    'text. You will receive the conversation where the user requested '
+    'changes, then the CURRENT Description verbatim.\n\n'
+    'Rewrite the Description applying ONLY the change(s) the user asked '
+    'for. Everything else must be preserved EXACTLY as written — same '
+    'wording, same formatting convention (labels, brackets, prose, '
+    'markdown — whatever the card uses), same order, same spacing. Do NOT '
+    'convert the format, do NOT summarise, do NOT expand, reorganise, or '
+    '"improve" anything the user did not ask to change.\n\n'
+    'If none of the requested changes concern the Description text, return '
+    'it EXACTLY as given.\n\n'
+    'Output ONLY the revised Description text — no commentary, no '
+    'preamble, no code fences, no surrounding quotes.';
+
+/// Compose the turns for the surgical Description edit: system contract,
+/// the Phase-1 conversation (so the model knows exactly what the user asked
+/// to change), and a final user turn carrying the current text verbatim.
+List<ChatTurn> buildSurgicalDescriptionEditTurns({
+  required String description,
+  required List<ChatTurn> transcript,
+}) {
+  return <ChatTurn>[
+    ChatTurn('system', kSurgicalDescriptionEditSystem),
+    ...transcript,
+    ChatTurn(
+      'user',
+      'CURRENT DESCRIPTION (between the markers — apply only the requested '
+      'change(s) and return the full revised text):\n'
+      '<<<DESCRIPTION\n$description\nDESCRIPTION>>>',
+    ),
+  ];
+}
+
+/// Guard for the surgical edit's output before it replaces the stored
+/// Description. Returns the cleaned text to apply, or null to REJECT (keep
+/// the original): empty output, or output so much shorter than the original
+/// (< 40%) that the model almost certainly summarised instead of editing.
+/// A wrapping code fence is stripped (models add them despite instructions).
+String? acceptSurgicalDescriptionEdit({
+  required String original,
+  required String edited,
+}) {
+  var out = edited.trim();
+  final fence =
+      RegExp(r'^```[a-zA-Z]*\s*\n([\s\S]*?)\n?```$').firstMatch(out);
+  if (fence != null) out = fence.group(1)!.trim();
+  if (out.isEmpty) return null;
+  if (out.length < original.trim().length * 0.4) return null;
+  return out;
+}

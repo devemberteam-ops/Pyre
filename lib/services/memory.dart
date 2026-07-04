@@ -348,25 +348,24 @@ String _buildSummariserBody({
   required List<MemoryCheckpoint> priorContext,
 }) {
   final body = StringBuffer();
-  // v3 2026-07-04 (Gui): self-contained rolling recap — the prior recap is
-  // MATERIAL to retell compressed inside the new one (which REPLACES it),
-  // not a handoff line to continue from. See MemorySettings._defaultPrompt.
+  // v3 final 2026-07-04 (Gui's design): CHAPTERS — the prior chapters are
+  // context only; the new chapter covers ONLY the new events and never
+  // retells. See MemorySettings._defaultPrompt.
   if (priorContext.isNotEmpty) {
     body.writeln(
-        '## Previous recap (the story so far up to a point — RETELL its '
-        'story compressed inside your new recap; your output REPLACES it, '
-        'so nothing may be assumed known):');
+        '## Earlier chapters (context only — do NOT retell or rephrase any '
+        'of this):');
     for (final c in priorContext) {
       body.writeln(c.summary.trim());
       body.writeln();
     }
     body.writeln(
-        '## New events since that recap — fold these in as the latest part '
-        'of the story, giving them the most room:');
+        '## New events since the last chapter — write the NEXT chapter '
+        'covering ONLY these:');
   } else {
     body.writeln(
-        '## The conversation so far — tell it as one complete, '
-        'self-contained story so far:');
+        '## The conversation so far — write the OPENING chapter of the '
+        'story:');
   }
   for (var i = startExclusive + 1; i <= endInclusive; i++) {
     if (i < 0 || i >= chat.messages.length) continue;
@@ -783,9 +782,6 @@ Future<MemoryCheckpoint?> _generateCheckpointBody({
       summary: summary,
       anchorMessageIdx: cutoff,
       pathHash: snapshotPathHash,
-      // v3: written under the self-contained rolling-recap prompt — injection
-      // uses this recap ALONE (see buildRecapBlock).
-      selfContained: true,
     );
   } catch (e) {
     MemoryErrors.record('generateCheckpoint', e);
@@ -893,8 +889,6 @@ Future<MemoryCheckpoint?> _regenerateCheckpointBody({
       anchorMessageIdx: target.anchorMessageIdx,
       pathHash: snapshotPathHash,
       createdAt: DateTime.now().millisecondsSinceEpoch,
-      // v3: regenerated under the self-contained rolling-recap prompt.
-      selfContained: true,
     );
   } catch (e) {
     MemoryErrors.record('regenerateCheckpoint', e);
@@ -951,12 +945,6 @@ String buildRecapBlock(Chat chat) {
   if (!chat.memoryEnabled) return '';
   final valid = findValidCheckpoints(chat);
   if (valid.isEmpty) return '';
-  // v3 2026-07-04 (Gui): a SELF-CONTAINED rolling recap retells the whole
-  // story every time, so when the newest valid checkpoint is one, it alone
-  // IS the recap — injecting the older chain under it would just duplicate
-  // the story (and waste the budget). Legacy chains (no flag) keep the old
-  // concatenation byte-identically.
-  if (valid.last.selfContained) return valid.last.summary.trim();
   final capped = valid.length > kMaxCheckpointsInPrompt
       ? valid.sublist(valid.length - kMaxCheckpointsInPrompt)
       : valid;
