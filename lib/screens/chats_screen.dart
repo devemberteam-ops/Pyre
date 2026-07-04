@@ -27,6 +27,17 @@ class ChatsScreen extends StatelessWidget {
     final chats = store.chats.where((c) => !c.deleted).toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
 
+    // 2026-07-03 (Gui): chats (including GROUP chats) can start right here —
+    // the tab used to have no create affordance at all (library-only).
+    final newChatButton = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      child: ElevatedButton.icon(
+        icon: const Icon(Icons.add, size: 16),
+        label: const Text('New chat'),
+        onPressed: () => startNewChatFlow(context),
+      ),
+    );
+
     if (chats.isEmpty) {
       return Scaffold(
         appBar: AppBar(
@@ -34,11 +45,16 @@ class ChatsScreen extends StatelessWidget {
               style: TextStyle(
                   color: EmberColors.primary, fontWeight: FontWeight.w700)),
           centerTitle: true,
+          actions: [newChatButton],
         ),
-        body: const EmptyState(
+        body: EmptyState(
           icon: Icons.chat_bubble_outline,
           title: 'No chats yet',
-          subtitle: 'Start a chat from the Characters tab.',
+          subtitle: 'Start one here — solo or a whole group — or tap a '
+              'character in the Characters tab.',
+          ctaLabel: 'New chat',
+          ctaIcon: Icons.add,
+          onCta: () => startNewChatFlow(context),
         ),
       );
     }
@@ -65,6 +81,7 @@ class ChatsScreen extends StatelessWidget {
           ),
         ),
         centerTitle: true,
+        actions: [newChatButton],
       ),
       body: Column(
         children: [

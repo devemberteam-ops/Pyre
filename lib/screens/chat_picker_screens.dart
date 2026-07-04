@@ -212,15 +212,74 @@ Future<void> startNewChatWithPersonaPrompt(
   }
 }
 
+/// 2026-07-03 (Gui): "New chat" entry for the CHATS tab — chats used to be
+/// startable only from the library. Offers a solo chat (pick one character)
+/// or a group chat built at creation (the multi-select picker).
+Future<void> startNewChatFlow(BuildContext context) async {
+  final store = context.read<AppStore>();
+  final navigator = Navigator.of(context);
+  final choice = await showModalBottomSheet<String>(
+    context: context,
+    backgroundColor: EmberColors.bgPanel,
+    builder: (sheet) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: Icon(Icons.person_outline, color: EmberColors.primary),
+            title: const Text('Chat'),
+            subtitle: Text(
+              'Pick one character to talk to.',
+              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+            ),
+            onTap: () => Navigator.pop(sheet, 'solo'),
+          ),
+          ListTile(
+            leading: Icon(Icons.groups_outlined, color: EmberColors.primary),
+            title: const Text('Group chat'),
+            subtitle: Text(
+              'Pick the whole cast up front — everyone joins the scene.',
+              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+            ),
+            onTap: () => Navigator.pop(sheet, 'group'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (choice == null || !context.mounted) return;
+  if (choice == 'group') {
+    await startNewGroupChat(context, null);
+    return;
+  }
+  final picked = await navigator.push<String>(
+    MaterialPageRoute(
+      builder: (_) => const CharacterPickerScreen(
+        title: 'New chat',
+        subtitle: 'Pick who to chat with.',
+      ),
+    ),
+  );
+  if (picked == null || !context.mounted) return;
+  final c = store.characterById(picked);
+  if (c == null) return;
+  await startNewChatWithPersonaPrompt(context, c);
+}
+
 /// Facilidade (owner 2026-07): start a NEW GROUP chat in one flow — pick the
-/// members up front (multi-select, [primary] pre-selected) instead of forming
-/// the group member-by-member after creation. Honours the same
-/// `askPersonaOnNewChat` prompt as [startNewChatWithPersonaPrompt], creates
-/// the chat with EVERY picked member, opens it, and suggests Party mode via
-/// the same snackbar the add-member flow uses.
+/// members up front (multi-select) instead of forming the group
+/// member-by-member after creation. Honours the same `askPersonaOnNewChat`
+/// prompt as [startNewChatWithPersonaPrompt], creates the chat with EVERY
+/// picked member, opens it, and suggests Party mode via the same snackbar
+/// the add-member flow uses.
+///
+/// [primary] pre-selects + locks the character the flow was launched from
+/// (the details sheet's "Group" action). Null (the Chats tab "New chat"
+/// entry) starts with nothing selected — the FIRST member picked opens the
+/// chat.
 Future<void> startNewGroupChat(
   BuildContext context,
-  Character primary,
+  Character? primary,
 ) async {
   final store = context.read<AppStore>();
   // Dead-context fix (2026-07-03, review HIGH): the ONLY call site (the
@@ -490,10 +549,12 @@ class _OrganizedCharacterPickerBodyState
 }
 
 /// Multi-select character picker for [startNewGroupChat]. Pops with the
-/// ordered member id list ([primary] first, locked), or null if dismissed.
+/// ordered member id list (the primary first), or null if dismissed.
+/// [primary] pre-selects + locks that character; when null, the FIRST
+/// member picked becomes the one whose greeting opens the chat.
 class GroupCharacterPickerScreen extends StatefulWidget {
-  final Character primary;
-  const GroupCharacterPickerScreen({super.key, required this.primary});
+  final Character? primary;
+  const GroupCharacterPickerScreen({super.key, this.primary});
 
   @override
   State<GroupCharacterPickerScreen> createState() =>
@@ -503,23 +564,35 @@ class GroupCharacterPickerScreen extends StatefulWidget {
 class _GroupCharacterPickerScreenState
     extends State<GroupCharacterPickerScreen> {
   // Selection order is preserved → it becomes the member order (primary
-  // first; primary is locked on).
-  late final List<String> _selected = [widget.primary.id];
+  // first; a launch-time primary is locked on).
+  late final List<String> _selected = [
+    if (widget.primary != null) widget.primary!.id,
+  ];
 
   @override
   Widget build(BuildContext context) {
     final n = _selected.length;
+    // The character whose greeting opens the chat: the locked launch-time
+    // primary, or whoever was picked first.
+    final primaryId =
+        widget.primary?.id ?? (_selected.isEmpty ? null : _selected.first);
     return Scaffold(
       appBar: AppBar(title: const Text('New group chat')),
       body: Column(
         children: [
           Expanded(
             child: _OrganizedCharacterPickerBody(
-              subtitle: 'Pick the members. ${widget.primary.name} opens the '
-                  'chat (their greeting starts it); everyone joins the scene.',
+              subtitle: widget.primary != null
+                  ? 'Pick the members. ${widget.primary!.name} opens the '
+                      'chat (their greeting starts it); everyone joins the '
+                      'scene.'
+                  : 'Pick the members. The first one you pick opens the '
+                      'chat (their greeting starts it); everyone joins the '
+                      'scene.',
               excludeIds: const {},
               buildRow: (c) {
-                final isPrimary = c.id == widget.primary.id;
+                final isLockedPrimary = c.id == widget.primary?.id;
+                final isPrimary = c.id == primaryId;
                 return CheckboxListTile(
                   activeColor: EmberColors.primary,
                   controlAffinity: ListTileControlAffinity.trailing,
@@ -543,9 +616,10 @@ class _GroupCharacterPickerScreenState
                             )
                           : null),
                   value: _selected.contains(c.id),
-                  // The primary is locked on — unchecking it would
-                  // orphan the greeting that opens the chat.
-                  onChanged: isPrimary
+                  // A launch-time primary is locked on — unchecking it would
+                  // orphan the greeting that opens the chat. A picker-chosen
+                  // primary stays free (uncheck it and the next pick leads).
+                  onChanged: isLockedPrimary
                       ? null
                       : (v) => setState(() {
                             if (v == true) {
@@ -567,9 +641,11 @@ class _GroupCharacterPickerScreenState
                 children: [
                   Expanded(
                     child: Text(
-                      n <= 1
-                          ? 'Just ${widget.primary.name} — a regular 1:1 chat'
-                          : '$n members',
+                      n == 0
+                          ? 'Pick at least one member'
+                          : n == 1
+                              ? 'Just 1 member — a regular 1:1 chat'
+                              : '$n members',
                       style: TextStyle(
                         color: n > 1
                             ? EmberColors.primary
@@ -585,8 +661,10 @@ class _GroupCharacterPickerScreenState
                       backgroundColor: EmberColors.primary,
                       foregroundColor: Colors.white,
                     ),
-                    onPressed: () =>
-                        Navigator.pop(context, List<String>.from(_selected)),
+                    onPressed: n == 0
+                        ? null
+                        : () => Navigator.pop(
+                            context, List<String>.from(_selected)),
                     child: const Text('Create chat'),
                   ),
                 ],
