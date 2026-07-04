@@ -41,6 +41,7 @@ import '../services/attachment_store.dart';
 import '../services/chat_api.dart';
 import '../services/chat_prompt_builder.dart';
 import '../services/creator_cascade.dart';
+import '../services/lorebook_merge.dart';
 // Wave CY.18.231 (Creator Structured Build): the deterministic JSON
 // pipeline that replaces the `<<SHEET>>`-marker cascade. `CreatorMode`
 // lives only in creator_schema.dart (this file uses `CreatorTurn` from
@@ -217,8 +218,8 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       "Pick one below — I focus on one at a time, since each path needs "
       "a different build flow.\n\n"
       "**Heads-up on timing:** once you say go, I write the whole card "
-      "in one pass — usually **3-5 minutes** depending on your "
-      "provider. The app isn't frozen, it's working; keep it open or "
+      "over a few automatic passes — usually a few minutes depending on "
+      "your provider. The app isn't frozen, it's working; keep it open or "
       "minimize it (Pyre keeps generating in the background).";
 
   /// Wave CY.18.101: the guided greetings (_characterFlowGreeting /
@@ -236,11 +237,11 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       "you're ready (or I'll nudge you once there's enough to go on), "
       "say the word and I'll write the whole card in one go — you "
       "don't have to confirm anything along the way.\n\n"
-      "**Heads-up on timing:** the full write-up usually takes "
-      "**3-5 minutes** depending on your provider — I'm composing the "
-      "entire card without stopping for input. Pyre keeps working in "
-      "the background, so you can minimise the app or screen-off; just "
-      "don't kill the process.\n\n"
+      "**Heads-up on timing:** the write-up runs over a few automatic "
+      "passes and usually takes a few minutes depending on your provider "
+      "— I'm composing the entire card without stopping for input. Pyre "
+      "keeps working in the background, so you can minimise the app or "
+      "screen-off; just don't kill the process.\n\n"
       "Drop a name, a vibe, an image, a card, or a document — or just "
       "describe what's in your head and I'll find the angle.";
 
@@ -252,10 +253,10 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       "write the whole thing in one go — the world and its rules, the "
       "cast, the opening scene, and everything the narrator needs to "
       "run it. Want alternate openings? Just ask.\n\n"
-      "**Heads-up on timing:** the full write-up usually takes "
-      "**3-5 minutes** depending on your provider. Pyre keeps working "
-      "in the background, so you can minimise the app safely — just "
-      "don't kill the process.\n\n"
+      "**Heads-up on timing:** the write-up runs over a few automatic "
+      "passes and usually takes a few minutes depending on your provider. "
+      "Pyre keeps working in the background, so you can minimise the app "
+      "safely — just don't kill the process.\n\n"
       "Drop a premise, a vibe, a reference, or a fragment of a scene "
       "— I'll pitch a tone, a place, and the first hook, and you tell "
       "me where to push.";
@@ -3626,7 +3627,7 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       messenger.showSnackBar(
         const SnackBar(
           content: Text(
-            'Sheet needs at least a name before saving. Keep chatting — it\'ll fill in.',
+            'Nothing to save yet — build the card first (tell me when you\'re ready, or type /build).',
           ),
         ),
       );
@@ -4175,7 +4176,20 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
           return;
         }
         try {
-          final pngBytes = encodeCharaCardPng(c, avatarPng);
+          // C1 (2026-07-03): merge bound lorebooks into the card_book so the
+          // embedded world travels with the exported PNG. This path used to
+          // call encodeCharaCardPng WITHOUT `lorebook:`, so a character built
+          // in the Creator with an embedded lorebook exported a PNG with NO
+          // world — silently dropped from the shareable file. Mirrors the
+          // Characters-tab export (characters_screen.dart). By here the draft
+          // has already materialized into c.lorebookIds.
+          final boundBooks = c.lorebookIds
+              .map(store.lorebookById)
+              .whereType<Lorebook>()
+              .where((b) => !b.deleted)
+              .toList(growable: false);
+          final pngBytes = encodeCharaCardPng(c, avatarPng,
+              lorebook: mergeBoundLorebooksForExport(boundBooks));
           final safeName = c.name
               .replaceAll(RegExp(r'[^A-Za-z0-9 _\-.]'), '')
               .trim()
@@ -4780,7 +4794,7 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
                   child: Padding(
                     padding: EdgeInsets.all(32),
                     child: Text(
-                      'Sheet is empty. Keep chatting — the card sheet fills in as you reveal more about the character. Every turn refreshes it automatically.',
+                      'The sheet stays empty while we talk — I write every field in one go once you\'re ready to build (say the word, or type /build). It\'ll fill in here then, ready to review before you save.',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: EmberColors.textMid),
                     ),
@@ -6052,7 +6066,7 @@ class _InputBar extends StatelessWidget {
                       textInputAction: TextInputAction.newline,
                       decoration: InputDecoration(
                         hintText: modeLocked
-                            ? 'Choose a flow above to begin…'
+                            ? 'Pick what to build above to begin…'
                             : 'Reply to the assistant…',
                         isDense: true,
                       ),

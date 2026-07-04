@@ -18,13 +18,13 @@ class CharacterCreatorHelpScreen extends StatelessWidget {
         children: [
           _h1('Creator tips'),
           _p('Quick reference for while you\'re building. For a full '
-              'explanation of how the Creator works — phases, building '
-              'modes, background generation — open '
+              'explanation of how the Creator works — the build, the '
+              'building modes, the settings — open '
               'More → Character Creator → "How the Character Creator '
               'works".'),
 
-          _h2('Attach buttons'),
-          _p('In the input bar you have three icons before the text field:'),
+          _h2('Attach button'),
+          _p('The + button before the text field opens three attach options:'),
           _bullet('🖼  Image — pick a reference picture. The vision '
               'model describes what the character looks like, then the '
               'assistant uses that profile as authoritative context. '
@@ -53,12 +53,14 @@ class CharacterCreatorHelpScreen extends StatelessWidget {
               'requests, your provider has refusal patterns. Switch to '
               'an uncensored model (DeepSeek, Venice, Soji, or any '
               'tune on Featherless/Arli/Infermatic).'),
-          _bullet('The "Generate card now" button works any time. If '
-              'the AI is asking too many questions, hit it whenever '
-              'you\'re ready.'),
-          _bullet('After the card is drafted, you can keep refining via '
-              'chat — OR tap "Save and refine" to open the manual editor '
-              'with all fields pre-populated, then tweak by hand.'),
+          _bullet('There\'s no "Generate" button — you tell the AI when to '
+              'build. When it proposes building (or any time you\'re ready), '
+              'say the word or type /build. It then writes the whole card in '
+              'one multi-pass go.'),
+          _bullet('The sheet stays empty while you talk and fills in all at '
+              'once when you build — that\'s expected, not a bug. Once it\'s '
+              'built, review every field in the canvas and edit any by hand '
+              'before you Save.'),
 
           _h2('Honest section'),
           _p('Most people building cards in tools like this are doing '
@@ -79,11 +81,10 @@ class CharacterCreatorHelpScreen extends StatelessWidget {
           _bullet('"Image analysis failed" — your active provider doesn\'t '
               'support vision. Set a creator-specific vision provider '
               'in More → API Connections.'),
-          _bullet('"The model returned something that isn\'t valid JSON" — '
-              'the model wrapped the JSON in markdown fences (some models '
-              'do this even when asked not to). Open the canvas — the '
-              'raw output is there. Either paste it elsewhere, or ask '
-              'the model to retry without the fences.'),
+          _bullet('The build failed or a field came back empty — the build '
+              'runs in a few passes and re-asks for anything missing on its '
+              'own, but a weak or refusing model can still leave gaps. Type '
+              '/build to run it again, or switch to a stronger model.'),
           _bullet('Card seems lobotomised after a small edit — your '
               'model probably ignored the "preserve every field" '
               'instruction and rewrote everything. Switch to a smarter '

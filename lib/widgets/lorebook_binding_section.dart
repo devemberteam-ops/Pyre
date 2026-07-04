@@ -218,7 +218,7 @@ class LorebookBindingSection extends StatelessWidget {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
             content: Text(
-                'You don\'t have any lorebooks yet. Create or import one in More → Lorebooks first.')),
+                'You don\'t have any lorebooks yet. Make one in More → Lorebooks (or ask the AI Creator to "Build a lorebook"), then come back to bind it.')),
       );
       return;
     }

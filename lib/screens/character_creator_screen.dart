@@ -764,35 +764,30 @@ class _HowItWorksCard extends StatelessWidget {
               'card.'),
         ]),
 
-        // 0b. The four conversation phases — how a session progresses.
-        HowItWorksSection('The four conversation phases', [
+        // 0b. How a session flows (structured build — the old GREETING/
+        // BUILD-UP/GENERATE/REFINE phase model + "Generate" button were
+        // retired with the deterministic build).
+        HowItWorksSection('How a session flows', [
           HowItWorksBlock.paragraph(
-              '1) **GREETING** — the AI opens with a question. Tell it '
-              'the vibe (name, species, archetype, "broken princess '
-              'with a sword", anything). Vague is fine.\n\n'
-              '2) **BUILD-UP** — back-and-forth. The AI asks one '
-              'thing per turn, in roughly this order: body, '
-              'personality, background, relationships, intimacy '
-              'preferences if NSFW. You can lead — just answer what '
-              'you want and skip the rest.\n\n'
-              '3) **GENERATE** — when you have enough material '
-              '(usually 8–15 exchanges), the AI offers to draft the '
-              'card. You can also hit "Generate card now" earlier if '
-              'you\'re impatient.\n\n'
-              '4) **REFINE** — after the card is generated, ANY '
-              'message you send is interpreted as an edit ("make her '
-              'hair red", "remove the moan examples", "darken the '
-              'personality"). The editor only touches the field you '
-              'asked about — the rest stays byte-identical.'),
+              '1) **Talk it out** — tell the AI the vibe (name, species, '
+              'archetype, "broken princess with a sword", anything). Vague '
+              'is fine; it asks a few targeted questions. The sheet stays '
+              'empty while you chat — nothing is written yet.\n\n'
+              '2) **Build** — when the AI proposes building, or any time '
+              'you\'re ready, say the word (or type /build). It then writes '
+              'the WHOLE card in one go, over a few automatic passes.\n\n'
+              '3) **Review** — the finished card appears field-by-field in '
+              'the canvas. Read it, and tap any field to edit it by hand.\n\n'
+              '4) **Refine or save** — keep chatting to ask for changes '
+              '(the AI edits only what you asked and leaves the rest alone), '
+              'or Save it to your library.'),
         ]),
 
-        // 1. Building modes — the first choice every session asks.
-        HowItWorksSection('Three building modes', [
+        // 1. Building modes — what the new-session picker offers.
+        HowItWorksSection('What you can build', [
           HowItWorksBlock.paragraph(
-              'When you start a new Creator session, the assistant '
-              'asks what kind of card you\'re making. The mode you '
-              'pick determines which architect prompt runs the '
-              'show:'),
+              'A new Creator session asks what you\'re making — the choice '
+              'sets which architect runs the show:'),
           HowItWorksBlock.bullet(
               '**Character** — a single persona for roleplay. '
               'Name, look, voice, personality, contradictions, '
@@ -804,26 +799,28 @@ class _HowItWorksCard extends StatelessWidget {
               '"supernatural school", "free-use city"), not a '
               'single character.'),
           HowItWorksBlock.bullet(
-              '**Edit (with AI)** — opens with an existing card '
-              'loaded on the sheet. Every message you send is '
-              'interpreted as a partial edit ("make her younger", '
-              '"rewrite scenario to fantasy setting", "tone down '
-              'the NSFW tags"). Works on cards built ANYWHERE — '
-              'SillyTavern W++, Chub.ai prose, JanitorAI XML, etc. '
-              'The edit architect preserves whatever format the '
-              'original used; it does NOT convert to Pyre\'s '
-              'labeled style unless you explicitly ask.'),
+              '**Lorebook** — a set of World Info entries (keyword-'
+              'triggered lore) built right here in the canvas.'),
+          HowItWorksBlock.paragraph(
+              '**Edit with AI** isn\'t a starting choice — it\'s how you '
+              'open an EXISTING character or persona back into the Creator '
+              '(from its "Edit with AI" action). It loads the card on the '
+              'sheet and every message becomes a partial edit ("make her '
+              'younger", "tone down the NSFW tags"), touching only what you '
+              'asked. It works on cards built ANYWHERE (SillyTavern W++, '
+              'Chub prose, JanitorAI XML) and preserves the original '
+              'format unless you ask it to change.'),
         ]),
 
         // Wave CY.18.101: guided flow removed — single freeform flow.
         HowItWorksSection('How the build runs', [
           HowItWorksBlock.paragraph(
-              'After picking Character or Scenario, you chat through '
-              'the idea, then the architect builds the whole sheet in '
-              'one continuous pass — you don\'t confirm anything '
-              'along the way. A full build typically takes 3–5 '
-              'minutes depending on your provider; Pyre keeps '
-              'generating in the background if you minimise the app.'),
+              'When you say to build, the architect writes the whole sheet '
+              'over a few automatic passes (you\'ll see a "pass X of N" '
+              'counter) — you don\'t confirm anything along the way. It '
+              'usually takes a few minutes depending on your provider, and '
+              'Pyre keeps generating in the background if you minimise the '
+              'app.'),
         ]),
 
         // 3. What gets built. (Wave CY.18.112: de-jargoned — the
@@ -937,7 +934,7 @@ class _HowItWorksCard extends StatelessWidget {
         // 7. Background generation.
         HowItWorksSection('Background generation', [
           HowItWorksBlock.paragraph(
-              'A full build takes 3–5 minutes; each section can '
+              'A full build usually takes a few minutes; each pass can '
               'be 30–90 seconds. Pyre uses a foreground '
               'service so generation continues when you minimise '
               'the app or screen-off — just don\'t kill the '
