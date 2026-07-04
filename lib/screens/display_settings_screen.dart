@@ -1,18 +1,14 @@
-// WS-J — Display settings.
+// Appearance cards: the global "App text size" slider ([AppTextSizeCard]) and
+// the "Wide desktop layout" toggle ([WideLayoutCard]).
 //
-// New home for cross-platform appearance / display knobs. Currently hosts the
-// global "App text size" slider (moved out of the inline More list — the More
-// screen now links here via a "Display" row). The slider behaviour is
-// IDENTICAL to before: it tracks a local value while dragging and commits
-// through [AppStore.setUiScale], which clamps + persists and triggers the
-// whole-app rebuild that re-applies the scale. This screen is the future home
-// for related display settings.
-//
-// Also hosts the "Wide desktop layout" toggle (relocated here from
-// DesktopShortcutsScreen — it's a display preference, so it belongs next to
-// text size). Gated via [_isDesktopLike]: desktop builds AND web (a
-// desktop-browser PWA shares the desktop responsive layout since
-// 2026-07-03); on mobile builds the card simply isn't built.
+// 2026-07-03: "Display" and "Theme" were two More-menu rows for what is almost
+// the same thing (appearance), so they merged into one "Appearance" screen
+// (ThemeSettingsScreen). This file no longer hosts a screen — it exports the
+// two cards + the [isDesktopLikePlatform] gate for that unified screen to
+// compose. Card behaviour is unchanged: the text slider commits through
+// [AppStore.setUiScale] (clamp + persist + whole-app rebuild); the layout
+// toggle writes [UiPrefs.desktopWideLayout] and is shown only where it has an
+// effect (desktop + web).
 
 import 'dart:io' show Platform;
 
@@ -29,32 +25,14 @@ import '../theme.dart';
 /// layout; on a phone-sized web viewport the toggle is harmlessly inert,
 /// exactly like a narrow desktop window). Platform isn't available on web,
 /// so check kIsWeb first.
-bool get _isDesktopLike {
+///
+/// 2026-07-03: made public + the standalone DisplaySettingsScreen was removed
+/// when "Display" and "Theme" merged into one "Appearance" screen (owner:
+/// "why two menus for almost the same thing?"). The two cards below now live
+/// under ThemeSettingsScreen; this file keeps them + the platform gate.
+bool get isDesktopLikePlatform {
   if (kIsWeb) return true;
   return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
-}
-
-class DisplaySettingsScreen extends StatelessWidget {
-  const DisplaySettingsScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Display')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-        children: [
-          const _DisplayCard(),
-          // Desktop + web: the wide-layout preference. Hidden on mobile
-          // builds, where it has no effect.
-          if (_isDesktopLike) ...const [
-            SizedBox(height: 12),
-            _DesktopLayoutCard(),
-          ],
-        ],
-      ),
-    );
-  }
 }
 
 /// "Wide desktop layout" toggle — relocated from DesktopShortcutsScreen.
@@ -63,8 +41,8 @@ class DisplaySettingsScreen extends StatelessWidget {
 /// [UiPrefs.desktopWideLayout] via [AppStore.setDesktopWideLayout]. The
 /// actual layout decision still happens at render time in main.dart
 /// (this flag combined with the window width).
-class _DesktopLayoutCard extends StatelessWidget {
-  const _DesktopLayoutCard();
+class WideLayoutCard extends StatelessWidget {
+  const WideLayoutCard({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -102,14 +80,14 @@ class _DesktopLayoutCard extends StatelessWidget {
 /// tracks a local value while dragging (so it stays smooth) and commits
 /// through [AppStore.setUiScale], which clamps + persists and triggers the
 /// whole-app rebuild that re-applies the scale.
-class _DisplayCard extends StatefulWidget {
-  const _DisplayCard();
+class AppTextSizeCard extends StatefulWidget {
+  const AppTextSizeCard({super.key});
 
   @override
-  State<_DisplayCard> createState() => _DisplayCardState();
+  State<AppTextSizeCard> createState() => _AppTextSizeCardState();
 }
 
-class _DisplayCardState extends State<_DisplayCard> {
+class _AppTextSizeCardState extends State<AppTextSizeCard> {
   // Local "in-flight" value while the thumb is being dragged. Null means
   // "not dragging — read the live value straight from the store".
   double? _dragValue;

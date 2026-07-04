@@ -17,7 +17,6 @@ import 'backup_restore_screen.dart';
 import 'botbooru_profile_screen.dart';
 import 'character_creator_screen.dart';
 import 'chat_settings_screen.dart';
-import 'display_settings_screen.dart';
 import 'lorebooks_screen.dart';
 import 'theme_settings_screen.dart';
 import 'about_pyre_screen.dart';
@@ -68,22 +67,13 @@ class MoreScreen extends StatelessWidget {
             // pick from.
           ]),
           const SizedBox(height: 12),
-          // WS-J: "App text size" moved out of an inline card into a dedicated
-          // Display settings screen (the future home for related display
-          // settings). Cross-platform, so it stays in the main More list.
-          // Wave B (theme-customization): "Theme" row re-added now that
-          // there are three curated palettes + an accent picker to choose
-          // from (it was removed in Wave CY.18.91 when only Ember existed).
+          // 2026-07-03: "Display" and "Theme" were two rows for one concept
+          // (how the app looks). Merged into a single "Appearance" screen
+          // holding theme palette, accent, app text size, and layout — which
+          // now also sync together as one unit.
           _MoreCard(rows: [
             _MoreRow(
-              label: 'Display',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                    builder: (_) => const DisplaySettingsScreen()),
-              ),
-            ),
-            _MoreRow(
-              label: 'Theme',
+              label: 'Appearance',
               trailing: _themeName(store.uiPrefs.activeThemeId),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(

@@ -1,8 +1,8 @@
 // WS-J — IA moves: two relocations with no behaviour change.
 //
-//   (1) "App text size" moved OUT of the inline More list into a NEW
-//       Display settings screen (DisplaySettingsScreen). This screen exists
-//       and hosts the global text-size slider, wired to AppStore.setUiScale.
+//   (1) "App text size" lives on the appearance screen (ThemeSettingsScreen,
+//       titled "Appearance" since Display+Theme merged 2026-07-03), wired to
+//       AppStore.setUiScale — verified here by pumping that screen.
 //   (2) "Import from SillyTavern" moved OUT of the More list and INTO the
 //       Backup & Restore screen, where it is reachable (an entry that runs
 //       the same bulk-import flow).
@@ -18,7 +18,7 @@ import 'package:provider/provider.dart';
 
 import 'package:pyre/models/models.dart' show UiPrefs;
 import 'package:pyre/screens/backup_restore_screen.dart';
-import 'package:pyre/screens/display_settings_screen.dart';
+import 'package:pyre/screens/theme_settings_screen.dart';
 import 'package:pyre/services/store_backend.dart';
 import 'package:pyre/state/app_store.dart';
 
@@ -48,16 +48,16 @@ void _useRoomyView(WidgetTester tester) {
 
 void main() {
   // ===========================================================================
-  // (1) Display settings screen — exists + hosts the App text size slider, and
-  //     dragging it commits through AppStore.setUiScale (identical behaviour).
+  // (1) Appearance screen — hosts the App text size slider, and dragging it
+  //     commits through AppStore.setUiScale (identical behaviour).
   // ===========================================================================
-  group('DisplaySettingsScreen — hosts the App text size slider', () {
+  group('Appearance screen — hosts the App text size slider', () {
     testWidgets('renders the "App text size" control with a Slider',
         (tester) async {
       _useRoomyView(tester);
       final store = AppStore(storage: _NoopBackend());
 
-      await tester.pumpWidget(_host(store, const DisplaySettingsScreen()));
+      await tester.pumpWidget(_host(store, const ThemeSettingsScreen()));
       await tester.pumpAndSettle();
 
       // The relocated control's label + its slider are present on this screen.
@@ -74,7 +74,7 @@ void main() {
       // Start at the default 1.0.
       expect(store.uiPrefs.clampedUiScale, 1.0);
 
-      await tester.pumpWidget(_host(store, const DisplaySettingsScreen()));
+      await tester.pumpWidget(_host(store, const ThemeSettingsScreen()));
       await tester.pumpAndSettle();
 
       // Drag the slider thumb to the right; onChangeEnd commits via setUiScale,

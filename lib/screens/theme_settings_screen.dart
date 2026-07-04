@@ -24,6 +24,9 @@ import 'package:provider/provider.dart';
 
 import '../state/app_store.dart';
 import '../theme.dart';
+// 2026-07-03: "Display" merged into this "Appearance" screen — reuse its cards.
+import 'display_settings_screen.dart'
+    show AppTextSizeCard, WideLayoutCard, isDesktopLikePlatform;
 
 // ---------------------------------------------------------------------------
 // Accent swatch palette (curated, ~10 options).
@@ -59,7 +62,10 @@ class ThemeSettingsScreen extends StatelessWidget {
     final accentArgb = store.uiPrefs.accentArgb;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Theme')),
+      // 2026-07-03: "Display" + "Theme" merged into one "Appearance" screen —
+      // theme palette, accent color, app text size, and layout are all the
+      // same concept (how the app looks) and now sync as one unit.
+      appBar: AppBar(title: const Text('Appearance')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
         children: [
@@ -109,6 +115,18 @@ class ThemeSettingsScreen extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(height: 20),
+          // ── Section: Text size (was the "Display" screen) ────────────────
+          _SectionLabel(label: 'Text size'),
+          const SizedBox(height: 8),
+          const AppTextSizeCard(),
+          // ── Section: Layout (desktop + web only) ─────────────────────────
+          if (isDesktopLikePlatform) ...[
+            const SizedBox(height: 20),
+            _SectionLabel(label: 'Layout'),
+            const SizedBox(height: 8),
+            const WideLayoutCard(),
+          ],
         ],
       ),
     );
