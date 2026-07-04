@@ -834,25 +834,33 @@ Set<String> requiredKeysFor(CreatorMode mode) {
 // ---------------------------------------------------------------------------
 // 2026-07-04 (Gui, granular editing)
 
-/// True when EVERY key names a TOP-LEVEL field of [mode]'s schema — i.e. one
-/// that renders outside the Description (first_mes, alternate_greetings,
-/// creator_notes, tags, tagline, scenario, dialogueExamples, …). This is the
+/// True when EVERY key names a field of [mode]'s schema — top-level
+/// (first_mes, alternate_greetings, creator_notes, tags, …) OR a Description
+/// section (background, apparentAge, detailedFeatures, …). This is the
 /// granular-edit contract: such fields can be rebuilt alone via a scoped
-/// `[[BUILD_SHEET: …]]` marker while the Description stays byte-untouched.
-/// Any Description-section key, unknown key, or an empty scope → false (the
+/// `[[BUILD_SHEET: …]]` marker. Unknown key or an empty scope → false (the
 /// caller falls back to the full rebuild — the safe default).
-bool keysAreTopLevelEditable(Iterable<String> keys, CreatorMode mode) {
-  final topLevel = <String>{
-    for (final f in schemaFor(mode))
-      if (f.kind == CardFieldKind.topLevel ||
-          f.kind == CardFieldKind.tags ||
-          f.kind == CardFieldKind.greetingsList ||
-          f.kind == CardFieldKind.dialogueExamples)
-        f.key,
-  };
+///
+/// Nested children (face, hair, …) are NOT individually addressable — the
+/// batches request their PARENT (detailedFeatures), so the scope must too.
+bool keysAreScopedEditable(Iterable<String> keys, CreatorMode mode) {
+  final all = <String>{for (final f in schemaFor(mode)) f.key};
   final list = keys.toList();
-  return list.isNotEmpty && list.every(topLevel.contains);
+  return list.isNotEmpty && list.every(all.contains);
 }
+
+/// The keys that render INSIDE the Description body for [mode] (prose /
+/// nestedBullets / bulletList sections). A scoped edit touching any of these
+/// re-renders the Description from the decomposed sections (untouched
+/// sections carried verbatim from the parse); a scope with NONE of these
+/// leaves the Description byte-untouched.
+Set<String> descriptionSectionKeys(CreatorMode mode) => <String>{
+      for (final f in schemaFor(mode))
+        if (f.kind == CardFieldKind.prose ||
+            f.kind == CardFieldKind.nestedBullets ||
+            f.kind == CardFieldKind.bulletList)
+          f.key,
+    };
 
 /// Narrows [batches] to the targeted [keys]: each batch keeps only its
 /// targeted keys (order preserved) and emptied batches are dropped. With the

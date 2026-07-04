@@ -23,6 +23,36 @@
 // go-ahead before emitting the marker. The user can also type `/build` as a
 // deterministic fallback.
 
+import 'creator_schema.dart' as cs;
+
+/// 2026-07-04 (Gui, granular editing): generated appendix listing the VALID
+/// scope names for the scoped build marker (`[[BUILD_SHEET: key1, key2]]`),
+/// appended to the EDIT architect prompt at assembly time
+/// (chat_prompt_builder) so the list can never drift from the schema. Covers
+/// character + scenario (the two card kinds the edit mode loads).
+String scopedEditVocabularyAppendix() {
+  String forMode(cs.CreatorMode mode) {
+    final sections = cs.descriptionSectionKeys(mode);
+    final top = [
+      for (final f in cs.schemaFor(mode))
+        if (!sections.contains(f.key)) f.key,
+    ];
+    // schemaFor lists sections in canonical order — re-walk it so the
+    // section list keeps that order (a Set has no ordering contract).
+    final orderedSections = [
+      for (final f in cs.schemaFor(mode))
+        if (sections.contains(f.key)) f.key,
+    ];
+    return 'Top-level: ${top.join(', ')}\n'
+        'Description sections: ${orderedSections.join(', ')}';
+  }
+
+  return '## VALID SCOPE NAMES (generated from the live schema — use '
+      'EXACTLY these)\n\n'
+      'For a CHARACTER card:\n${forMode(cs.CreatorMode.character)}\n\n'
+      'For a SCENARIO card:\n${forMode(cs.CreatorMode.scenario)}';
+}
+
 /// The conversational guide for the CHARACTER architect: drives the
 /// Phase-1 back-and-forth that develops a character idea with the user.
 /// It does NOT produce the card sheet — that's the deterministic build
@@ -683,35 +713,36 @@ Rules for the marker:
 
 ## SCOPED EDITS — PREFER THE NARROW TRIGGER
 
-When the change touches ONLY fields that live OUTSIDE the Description
-body, emit the SCOPED form instead, naming exactly the fields being
-changed:
+When the change maps onto SPECIFIC fields, emit the SCOPED form instead,
+naming exactly the fields being changed:
 
    [[BUILD_SHEET: alternate_greetings, creator_notes]]
 
-Pyre then regenerates ONLY those fields and leaves everything else —
-including the whole Description — byte-for-byte untouched. Much faster,
-much cheaper, and zero risk to the rest of the card. The ONLY valid
-scope names are:
+Pyre then regenerates ONLY those fields and leaves everything else
+untouched. Much faster, much cheaper, and zero risk to the rest of the
+card. Two tiers of scope names exist (the full generated list is at the
+END of this prompt — use EXACTLY those names):
 
-- `first_mes` — the opening/first message
-- `alternate_greetings` — alternate greetings (add/edit/remove)
-- `scenario` — the top-level scenario field
-- `dialogueExamples` — the example dialogue
-- `tags` — the tag list
-- `creator_notes` — the creator's notes
-- `tagline` — the short tagline
+- **Top-level fields** (first_mes, alternate_greetings, scenario,
+  dialogueExamples, tags, creator_notes, tagline, …): scoping to these
+  leaves the whole Description byte-for-byte untouched.
+- **Description sections** (apparentAge, background, coreTraits,
+  detailedFeatures, clothing, fetishesKinks, …): scoping to these
+  regenerates ONLY those sections inside the Description — every other
+  section is carried over verbatim. "Make her younger" is
+  `[[BUILD_SHEET: apparentAge]]`; "change her hair" is
+  `[[BUILD_SHEET: detailedFeatures]]` (sub-details always scope to
+  their parent section).
 
 Scope rules:
-- Use the scoped form whenever the request maps ONLY onto fields in
-  that list ("add a greeting", "rewrite the first message", "fix the
-  tags", "update the creator notes").
-- If ANY part of the change touches the Description body (appearance,
-  personality, background, kinks, etc.) — or you are unsure — emit the
-  plain `[[BUILD_SHEET]]` instead. The full build handles everything;
-  a wrong scope silently skips the rest of the request.
-- Never invent scope names outside the list; an unknown name makes
-  Pyre fall back to the FULL build.
+- Use the scoped form whenever the request names things you can map
+  confidently onto one or a few fields/sections.
+- If the change RESTRUCTURES the card, spans many sections, or you are
+  unsure which section a detail lives in, emit the plain
+  `[[BUILD_SHEET]]` instead. The full build handles everything; a wrong
+  scope silently skips the rest of the request.
+- Never invent scope names outside the generated list; an unknown name
+  makes Pyre fall back to the FULL build.
 
 When the build runs it sees the card's CURRENT field values and your
 conversation, so it knows exactly which field(s) to touch and what to

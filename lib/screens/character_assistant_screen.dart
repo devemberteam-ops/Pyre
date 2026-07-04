@@ -1061,7 +1061,13 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     if (_structuredBuilding || _generating) return;
     final scoped = _isEditSession(session) &&
         targetKeys != null &&
-        cs.keysAreTopLevelEditable(targetKeys, mode);
+        cs.keysAreScopedEditable(targetKeys, mode);
+    // Scope reaches INTO the Description (Gui: "esperava que Description
+    // pudesse ser alterado sem editar toda a description"): when a targeted
+    // key is a Description SECTION, only that section regenerates — the
+    // others are carried verbatim from the decomposed parse (below).
+    final sectionScoped = scoped &&
+        targetKeys.any(cs.descriptionSectionKeys(mode).contains);
 
     // Audit 2026-06-04 (Creator M2): a session switch/delete during this
     // (long, multi-pass) build must abort it cleanly — otherwise its
@@ -1357,12 +1363,19 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       // the current session canvas (preserve anything already there, e.g. a
       // user-typed name or an attached avatar).
       final rendered = renderCard(buildFields, mode);
-      // Granular edit: a scoped build must NEVER touch the Description — the
-      // targeted keys are all top-level, so carry the current text forward
-      // byte-verbatim (works for native AND foreign cards alike; a decompose
-      // → re-render round-trip is not byte-stable and has no business
-      // running for a greetings/notes/tags edit).
-      if (scoped) {
+      // Granular edit — Description policy:
+      //  - scope has NO Description-section keys → carry the current text
+      //    forward BYTE-VERBATIM (a greetings/notes/tags edit has no business
+      //    re-rendering the body);
+      //  - scope TARGETS sections on a NATIVE card → let the re-render stand:
+      //    only the targeted sections regenerated, every other section came
+      //    verbatim from the decomposed parse (strictly more faithful than
+      //    the full rebuild, where the model re-echoes everything);
+      //  - scope targets sections on a FOREIGN card → the parse is unreliable,
+      //    so keep the text verbatim and say so in the done message.
+      final sectionEditBlocked =
+          sectionScoped && foreignDescription.trim().isNotEmpty;
+      if (scoped && (!sectionScoped || sectionEditBlocked)) {
         final curDesc = (_sessionCanvas(store)['description'] ?? '').toString();
         rendered['description'] = curDesc;
       }
@@ -1399,12 +1412,19 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       store.flushPersist();
 
       // Soft missing-required note (informational — NEVER a retry loop).
-      final missing = missingRequired(fields, mode);
-      final doneMsg = missing.isEmpty
+      // Checked on the MERGED map — a scoped build only returned the targeted
+      // keys, so checking the raw result would flag everything untargeted.
+      final missing = missingRequired(buildFields, mode);
+      var doneMsg = missing.isEmpty
           ? '✓  Card\'s ready. Open the Sheet tab to review, tweak, or Save.'
           : '✓  Card built. A few fields came back empty '
                 '(${missing.join(', ')}) — you can re-run the build or fill them '
                 'by hand in the Sheet tab.';
+      if (sectionEditBlocked) {
+        doneMsg += '\n\n⚠ This card\'s Description uses a format Pyre can\'t '
+            'edit section-by-section, so it was left untouched — edit it by '
+            'hand in the Sheet tab, or ask for a change to the other fields.';
+      }
       _updateBuildStatus(store, doneMsg);
       if (mounted) setState(() => _showCanvas = true); // surface the Sheet
 

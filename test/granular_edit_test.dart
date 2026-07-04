@@ -48,37 +48,57 @@ void main() {
     });
   });
 
-  group('keysAreTopLevelEditable', () {
+  group('keysAreScopedEditable', () {
     test('top-level character fields pass', () {
       expect(
-          cs.keysAreTopLevelEditable(
+          cs.keysAreScopedEditable(
               ['alternate_greetings', 'creator_notes', 'tags', 'first_mes'],
               cs.CreatorMode.character),
           isTrue);
     });
 
-    test('a Description-section key forces the full rebuild', () {
+    test('Description-section keys are scoped-editable too (Gui: "esperava '
+        'que Description pudesse ser alterado sem editar toda a '
+        'description")', () {
       expect(
-          cs.keysAreTopLevelEditable(
+          cs.keysAreScopedEditable(
               ['background', 'creator_notes'], cs.CreatorMode.character),
-          isFalse);
+          isTrue);
+      expect(
+          cs.keysAreScopedEditable(
+              ['apparentAge', 'detailedFeatures'], cs.CreatorMode.character),
+          isTrue);
     });
 
     test('unknown keys and empty scope force the full rebuild', () {
-      expect(cs.keysAreTopLevelEditable(['bogus'], cs.CreatorMode.character),
+      expect(cs.keysAreScopedEditable(['bogus'], cs.CreatorMode.character),
           isFalse);
-      expect(cs.keysAreTopLevelEditable([], cs.CreatorMode.character),
+      expect(cs.keysAreScopedEditable([], cs.CreatorMode.character),
           isFalse);
     });
 
     test('persona mode: greetings are not part of the persona schema', () {
       expect(
-          cs.keysAreTopLevelEditable(
+          cs.keysAreScopedEditable(
               ['alternate_greetings'], cs.CreatorMode.persona),
           isFalse);
-      expect(
-          cs.keysAreTopLevelEditable(['tagline'], cs.CreatorMode.persona),
+      expect(cs.keysAreScopedEditable(['tagline'], cs.CreatorMode.persona),
           isTrue);
+      expect(cs.keysAreScopedEditable(['background'], cs.CreatorMode.persona),
+          isTrue);
+    });
+  });
+
+  group('descriptionSectionKeys', () {
+    test('sections in, top-level fields out', () {
+      final keys = cs.descriptionSectionKeys(cs.CreatorMode.character);
+      expect(keys, contains('background'));
+      expect(keys, contains('detailedFeatures'));
+      expect(keys, contains('apparentAge'));
+      expect(keys, isNot(contains('first_mes')));
+      expect(keys, isNot(contains('alternate_greetings')));
+      expect(keys, isNot(contains('tags')));
+      expect(keys, isNot(contains('creator_notes')));
     });
   });
 

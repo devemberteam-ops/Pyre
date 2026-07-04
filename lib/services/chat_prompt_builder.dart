@@ -1420,6 +1420,13 @@ String creatorArchitectPrompt({
   if (mode == 'scenario' || mode == 'persona') {
     prompt = '$prompt\n\n$kReadTheVibeShared';
   }
+  // 2026-07-04 (Gui, granular editing): the EDIT architect gets the generated
+  // scope-name vocabulary for the scoped `[[BUILD_SHEET: …]]` marker —
+  // appended at assembly (also on top of a user-forked edit prompt) so it can
+  // never drift from the schema.
+  if (mode == 'edit') {
+    prompt = '$prompt\n\n${scopedEditVocabularyAppendix()}';
+  }
   // Wave CY.18.101: flow is always freeform now, so the freeform appendix
   // applies to every block-mode session (character or scenario).
   final usesBlocks = mode == 'character' || mode == 'scenario';
