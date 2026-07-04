@@ -297,19 +297,21 @@ Future<void> startNewGroupChat(
   );
   if (memberIds == null || memberIds.isEmpty || !navigator.mounted) return;
 
-  String? personaPick;
+  // 2026-07-04 (Gui): the group flow picks multiple CHARACTERS, so the
+  // persona step matches — the multi-select party picker instead of the
+  // single-persona one. One pick = classic solo persona; several = persona
+  // party; none = explicit no persona (setChatPersonaParty handles all
+  // three).
+  List<String>? personaPicks;
   if (store.chatSettings.askPersonaOnNewChat) {
-    personaPick = await navigator.push<String>(
+    personaPicks = await navigator.push<List<String>>(
       MaterialPageRoute(
-        builder: (_) => PersonaPickerScreen(
-          title: 'Persona for the new group chat',
-          subtitle:
-              'Pick the persona to play as. "No persona" means no {{user}} identity for this chat.',
-          showCurrentSelection: false,
+        builder: (_) => const PersonaPartyPickerScreen(
+          title: 'Personas for the new group chat',
         ),
       ),
     );
-    if (personaPick == null || !navigator.mounted) return; // dismissed
+    if (personaPicks == null || !navigator.mounted) return; // dismissed
   }
 
   final members = [
@@ -320,12 +322,8 @@ Future<void> startNewGroupChat(
   for (final m in members.skip(1)) {
     store.addCharacterToChat(fresh.id, m);
   }
-  if (personaPick != null) {
-    store.setChatPersona(
-        fresh.id,
-        personaPick == pickerNoPersonaSentinel
-            ? kExplicitNoPersonaId
-            : personaPick);
+  if (personaPicks != null) {
+    store.setChatPersonaParty(fresh.id, personaPicks);
   }
   if (!navigator.mounted) return;
   navigator.push(
@@ -889,7 +887,14 @@ class CharacterPickerScreen extends StatelessWidget {
 /// (empty = No persona), or null if dismissed without applying.
 class PersonaPartyPickerScreen extends StatefulWidget {
   final List<String> initialSelected;
-  const PersonaPartyPickerScreen({super.key, this.initialSelected = const []});
+  /// Screen title — the in-chat switcher and the new-group flow phrase it
+  /// differently.
+  final String title;
+  const PersonaPartyPickerScreen({
+    super.key,
+    this.initialSelected = const [],
+    this.title = 'Persona for this chat',
+  });
 
   @override
   State<PersonaPartyPickerScreen> createState() =>
@@ -968,7 +973,7 @@ class _PersonaPartyPickerScreenState extends State<PersonaPartyPickerScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Persona for this chat')),
+      appBar: AppBar(title: Text(widget.title)),
       body: Column(
         children: [
           Padding(
