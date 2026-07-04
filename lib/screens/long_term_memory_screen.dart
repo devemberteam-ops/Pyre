@@ -195,10 +195,14 @@ class _LongTermMemoryScreenState extends State<LongTermMemoryScreen> {
           ),
           _SliderCard(
             label: 'Auto-checkpoint frequency',
+            // 2026-07-04 (Gui: "não dispara quando devia"): honest unit — the
+            // counter counts CHARACTER replies, not every message (a run of
+            // your own messages/OOC never trips it).
             subtitle:
-                'Drop a new checkpoint every N uncovered messages. Set 0 to '
-                'turn OFF auto-checkpoints across all chats — you can still '
-                'make them by hand with "Summarise now".',
+                'Drop a new checkpoint every N character replies (your own '
+                'messages don\'t count). Set 0 to turn OFF auto-checkpoints '
+                'across all chats — you can still make them by hand with '
+                '"Summarise now".',
             value: _draft.autoEvery.toDouble(),
             min: 0,
             max: 60,

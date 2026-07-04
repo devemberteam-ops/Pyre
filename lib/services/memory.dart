@@ -122,7 +122,11 @@ class MemoryErrors {
 /// checkpoint folds ALL of them in (cutoff = length - 1) and the
 /// anchor advances to that point. No silent "keep N recent verbatim"
 /// buffer that would push the real fire to N+buffer.
-const int _summarizeThreshold = 20;
+// v3 2026-07-04 (Gui: "não dispara quando devia"): 20 CHARACTER replies
+// meant ~40+ total messages before the first checkpoint — perceived as
+// "never fires". 10 replies ≈ 20 total messages matches the intuitive
+// reading of the setting.
+const int _summarizeThreshold = 10;
 
 /// Cap on how many valid checkpoints we feed back into the LLM as
 /// context when generating a fresh one, and how many we inject into
@@ -344,28 +348,25 @@ String _buildSummariserBody({
   required List<MemoryCheckpoint> priorContext,
 }) {
   final body = StringBuffer();
+  // v3 2026-07-04 (Gui): self-contained rolling recap — the prior recap is
+  // MATERIAL to retell compressed inside the new one (which REPLACES it),
+  // not a handoff line to continue from. See MemorySettings._defaultPrompt.
   if (priorContext.isNotEmpty) {
-    // Concatenate everything BUT the last checkpoint as the established
-    // canon. The last one gets called out separately as the handoff
-    // line so the model knows exactly where to pick up.
-    final tailIdx = priorContext.length - 1;
-    if (tailIdx > 0) {
-      body.writeln(
-          '## Story so far (already-told narrative — for context, do NOT retell):');
-      for (var i = 0; i < tailIdx; i++) {
-        body.writeln(priorContext[i].summary.trim());
-        body.writeln();
-      }
+    body.writeln(
+        '## Previous recap (the story so far up to a point — RETELL its '
+        'story compressed inside your new recap; your output REPLACES it, '
+        'so nothing may be assumed known):');
+    for (final c in priorContext) {
+      body.writeln(c.summary.trim());
+      body.writeln();
     }
     body.writeln(
-        '## The recap currently ends here — your NEW paragraph must continue directly from this point, in the same voice, without repeating any of it:');
-    body.writeln(priorContext[tailIdx].summary.trim());
-    body.writeln();
-    body.writeln(
-        '## What happens next in the conversation — tell THIS as the next part of the story, continuing straight from above (do not retell what came before):');
+        '## New events since that recap — fold these in as the latest part '
+        'of the story, giving them the most room:');
   } else {
     body.writeln(
-        '## What happens in the conversation below — tell it as the opening of the story:');
+        '## The conversation so far — tell it as one complete, '
+        'self-contained story so far:');
   }
   for (var i = startExclusive + 1; i <= endInclusive; i++) {
     if (i < 0 || i >= chat.messages.length) continue;
@@ -782,6 +783,9 @@ Future<MemoryCheckpoint?> _generateCheckpointBody({
       summary: summary,
       anchorMessageIdx: cutoff,
       pathHash: snapshotPathHash,
+      // v3: written under the self-contained rolling-recap prompt — injection
+      // uses this recap ALONE (see buildRecapBlock).
+      selfContained: true,
     );
   } catch (e) {
     MemoryErrors.record('generateCheckpoint', e);
@@ -889,6 +893,8 @@ Future<MemoryCheckpoint?> _regenerateCheckpointBody({
       anchorMessageIdx: target.anchorMessageIdx,
       pathHash: snapshotPathHash,
       createdAt: DateTime.now().millisecondsSinceEpoch,
+      // v3: regenerated under the self-contained rolling-recap prompt.
+      selfContained: true,
     );
   } catch (e) {
     MemoryErrors.record('regenerateCheckpoint', e);
@@ -945,6 +951,12 @@ String buildRecapBlock(Chat chat) {
   if (!chat.memoryEnabled) return '';
   final valid = findValidCheckpoints(chat);
   if (valid.isEmpty) return '';
+  // v3 2026-07-04 (Gui): a SELF-CONTAINED rolling recap retells the whole
+  // story every time, so when the newest valid checkpoint is one, it alone
+  // IS the recap — injecting the older chain under it would just duplicate
+  // the story (and waste the budget). Legacy chains (no flag) keep the old
+  // concatenation byte-identically.
+  if (valid.last.selfContained) return valid.last.summary.trim();
   final capped = valid.length > kMaxCheckpointsInPrompt
       ? valid.sublist(valid.length - kMaxCheckpointsInPrompt)
       : valid;

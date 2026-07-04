@@ -200,29 +200,32 @@ void main() {
     // GONE from every resolved prompt now.
     const flattenClause = 'nothing more';
 
-    test('no prior recap → arc framing, no flattening clause, past tense', () {
+    // v3 2026-07-04: the default prompt is now the SELF-CONTAINED rolling
+    // recap (see checkpoint_rolling_recap_test.dart) — assertions updated to
+    // its markers ('setup' belonged to the retired v2 arc framing).
+    test('no prior recap → self-contained framing, no flattening clause, '
+        'past tense', () {
       final out = resolveSystemPrompt(
         hasPriorContext: false,
         memorySettings: MemorySettings(),
       );
-      // Arc framing present.
       expect(out.toLowerCase(), contains('story so far'));
       expect(out.toLowerCase(), contains('situation'));
-      expect(out.toLowerCase(), contains('setup'));
+      expect(out.toLowerCase(), contains('self-contained'));
       // Past-tense framing present, flattening clause gone.
       expect(out.toLowerCase(), contains('past tense'));
       expect(out, isNot(contains(flattenClause)));
     });
 
-    test('with prior recap → arc framing, no flattening clause, past tense',
-        () {
+    test('with prior recap → self-contained framing, no flattening clause, '
+        'past tense', () {
       final out = resolveSystemPrompt(
         hasPriorContext: true,
         memorySettings: MemorySettings(),
       );
       expect(out.toLowerCase(), contains('story so far'));
       expect(out.toLowerCase(), contains('situation'));
-      expect(out.toLowerCase(), contains('setup'));
+      expect(out.toLowerCase(), contains('self-contained'));
       expect(out.toLowerCase(), contains('past tense'));
       expect(out, isNot(contains(flattenClause)));
     });
@@ -320,16 +323,18 @@ void main() {
       }
     });
 
-    test('default threshold (20): 19 char msgs → false, 20 → true', () {
-      final under = chatWith([for (var i = 0; i < 19; i++) charMsg()]);
-      final at = chatWith([for (var i = 0; i < 20; i++) charMsg()]);
-      final d19 = summarizeDecision(under);
-      final d20 = summarizeDecision(at);
-      expect(d19.shouldSummarize, isFalse);
-      expect(d19.newCharMsgs, 19);
-      expect(d19.threshold, 20);
-      expect(d20.shouldSummarize, isTrue);
-      expect(d20.newCharMsgs, 20);
+    // v3 2026-07-04: default dropped 20 → 10 (Gui: "não dispara quando
+    // devia" — 20 CHARACTER replies meant ~40+ total messages).
+    test('default threshold (10): 9 char msgs → false, 10 → true', () {
+      final under = chatWith([for (var i = 0; i < 9; i++) charMsg()]);
+      final at = chatWith([for (var i = 0; i < 10; i++) charMsg()]);
+      final d9 = summarizeDecision(under);
+      final d10 = summarizeDecision(at);
+      expect(d9.shouldSummarize, isFalse);
+      expect(d9.newCharMsgs, 9);
+      expect(d9.threshold, 10);
+      expect(d10.shouldSummarize, isTrue);
+      expect(d10.newCharMsgs, 10);
     });
 
     test('only MessageKind.char counts toward newCharMsgs', () {

@@ -829,6 +829,13 @@ class MemoryCheckpoint {
   /// Wave CY.18.62: LAN sync metadata. See Character.mtime for rationale.
   int mtime;
   bool deleted;
+  /// 2026-07-04 (Gui: "os resumos não dão para entender por si só"): true
+  /// when this checkpoint was written under the v3 SELF-CONTAINED ROLLING
+  /// RECAP design — it retells the WHOLE story so far and stands alone, so
+  /// injection uses it INSTEAD of concatenating the chain. False (and
+  /// omitted from json) for legacy "next paragraph" checkpoints, which keep
+  /// the old concatenation path byte-identically.
+  bool selfContained;
 
   MemoryCheckpoint({
     required this.id,
@@ -838,6 +845,7 @@ class MemoryCheckpoint {
     int? createdAt,
     this.mtime = 0,
     this.deleted = false,
+    this.selfContained = false,
   }) : createdAt = createdAt ?? DateTime.now().millisecondsSinceEpoch;
 
   factory MemoryCheckpoint.fromJson(Map<String, dynamic> j) =>
@@ -849,6 +857,7 @@ class MemoryCheckpoint {
         createdAt: _jInt(j['createdAt']),
         mtime: _jInt(j['mtime']) ?? 0,
         deleted: (j['deleted'] as bool?) ?? false,
+        selfContained: (j['selfContained'] as bool?) ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -859,6 +868,7 @@ class MemoryCheckpoint {
         'createdAt': createdAt,
         'mtime': mtime,
         if (deleted) 'deleted': true,
+        if (selfContained) 'selfContained': true,
       };
 }
 
@@ -2090,42 +2100,33 @@ class MemorySettings {
   /// manual "Summarise now" still work.
   bool newChatsEnabled;
 
-  /// Wave CY.18.2: each checkpoint is the NEXT PARAGRAPH of an
-  /// ongoing chapter, not a standalone synopsis. The prompt walks
-  /// the LLM through both modes — open the chapter when there is no
-  /// prior recap (clear inciting moment, leave a hook), continue
-  /// directly from the handoff line when there is one (open with a
-  /// connective, never re-introduce). The user prompt body the chat
-  /// turn builder sends explicitly tags the handoff text and the new
-  /// events, so this template stays generic and works for both cases.
+  /// v3, 2026-07-04 (Gui: "o resumo não conta uma história que dê para
+  /// entender por si só"): each checkpoint is now a SELF-CONTAINED ROLLING
+  /// RECAP — the complete "story so far" retold from the top every time
+  /// (prior recap compressed + new events folded in), so ANY single
+  /// checkpoint read alone tells the whole story. The v2 "next paragraph —
+  /// never re-introduce" chain produced connective fragments that neither
+  /// the user nor the model could follow once the oldest links fell out of
+  /// the prompt window. Injection now uses only the newest recap.
   static const _defaultPrompt =
-      'You are keeping the running "story so far" of an unfolding '
-      'roleplay — one continuous narrative arc told across paragraphs '
-      'over time, each picking up exactly where the previous left off. '
-      'Reading every paragraph in order should read as one unbroken '
-      'story, never a status report and never a bulleted log of '
-      'events.\n\n'
-      'If the user prompt includes a "Story so far" block AND a '
-      'handoff line: write ONE next paragraph that flows directly out '
-      'of that handoff. Open with a connective ("From there", "In the '
-      'hours that followed", "Soon after", "Meanwhile", "By the '
-      'time…") — never restart, never re-introduce characters or '
-      'places already named, never repeat or rephrase what the prior '
-      'recap already covered. Carry the new events forward as a shaped '
-      'continuation — what they did, how it shifted things between '
-      'them, what it cost or meant — and close on whatever was left '
-      'unresolved so the next paragraph has a thread to pick up.\n\n'
-      'If there is no prior recap: write the OPENING of the arc. '
-      'First ground the reader in who these people were, where they '
-      'were, and the situation that set things in motion — the actual '
-      'inciting circumstance of THIS roleplay as it appears in the '
-      'conversation below. Then carry the opening beats forward as a '
-      'shaped arc — setup, what happened, where things stood — not a '
-      '"then… then… then" list of moments strung together. This '
-      'opening sets the voice for every paragraph that follows, so '
-      'leave a clear thread hanging on the final line. Do NOT borrow '
-      'scenarios, settings, or names from this instruction; lift '
-      'everything from the conversation itself.\n\n'
+      'You are keeping the "story so far" of an unfolding roleplay as ONE '
+      'complete, self-contained recap. Someone who has read NOTHING else — '
+      'not the chat, not any earlier recap — must be able to read your '
+      'output alone and fully understand the story: who the people are, '
+      'where they are, what has happened between them, and where things '
+      'stand now.\n\n'
+      'Each time you run, RETELL the whole story from the beginning as one '
+      'flowing narrative: open by grounding the reader (who these people '
+      'were, where they were, the situation that set things in motion), '
+      'compress the earlier events into their essential arc — keep every '
+      'fact that still matters (names, relationships, promises, injuries, '
+      'secrets, items, stakes), let go of moment-to-moment detail that no '
+      'longer does — then give the MOST RECENT events the most room, and '
+      'close on where things stand and what hangs unresolved.\n\n'
+      'Your output REPLACES every earlier recap — never write "as '
+      'mentioned before" or assume prior knowledge; the reader has none. '
+      'Do NOT borrow scenarios, settings, or names from this instruction; '
+      'lift everything from the material provided.\n\n'
       'Always: third person, PAST tense; the real names of people and '
       'places exactly as the story names them; preserve relationship '
       'shifts and stakes; roughly {{words}} words; flowing prose only '
@@ -2144,11 +2145,12 @@ class MemorySettings {
   /// "Restore"). After the one reset the prompt is editable again as normal.
   ///   v0/absent — pre-1.1 (the original "story summariser" default)
   ///   v2        — Pyre 1.1 ("story so far / next paragraph" default)
+  ///   v3        — Pyre 1.2 (self-contained rolling recap; autoEvery 20→10)
   /// BUMP THIS the next time you change [_defaultPrompt].
-  static const int kSummaryPromptVersion = 2;
+  static const int kSummaryPromptVersion = 3;
 
   MemorySettings({
-    this.autoEvery = 20,
+    this.autoEvery = 10,
     this.memoryLimit = 1000,
     this.summaryPrompt = _defaultPrompt,
     this.summaryPromptVersion = kSummaryPromptVersion,
@@ -2166,8 +2168,17 @@ class MemorySettings {
     final mustReset = storedVersion < kSummaryPromptVersion ||
         stored == null ||
         stored.trim().isEmpty;
+    // v3 (2026-07-04, Gui: "não dispara quando devia"): the default trigger
+    // dropped from 20 to 10 character replies. An install still on the OLD
+    // STOCK 20 from an older version gets migrated once (a deliberate custom
+    // value — anything other than 20 — is preserved; 20 chosen on v3+ sticks).
+    final storedAutoEvery = _jInt(j['autoEvery']);
+    final autoEvery = (storedAutoEvery == 20 &&
+            storedVersion < kSummaryPromptVersion)
+        ? 10
+        : storedAutoEvery ?? 10;
     return MemorySettings(
-      autoEvery: _jInt(j['autoEvery']) ?? 20,
+      autoEvery: autoEvery,
       memoryLimit: _jInt(j['memoryLimit']) ?? 1000,
       summaryPrompt: mustReset ? _defaultPrompt : stored,
       // Stamp the current version so the reset happens exactly once.
