@@ -47,6 +47,28 @@ void main() {
     });
   });
 
+  group('firstCharMessage (the greeting slot)', () {
+    test('finds the greeting BEHIND a scenario note at index 0 — the + on '
+        'the greeting must reopen Fill-In, not blind-regen', () {
+      final msgs = [
+        _m('note', MessageKind.ooc, 'Scenario: x', greetingVariant: 1),
+        Message(
+          id: 'greet',
+          kind: MessageKind.char,
+          variants: const ['g1', 'g2'],
+          createdAt: 0,
+        ),
+        _m('u1', MessageKind.user, 'hi'),
+      ];
+      expect(firstCharMessage(msgs)?.id, 'greet');
+    });
+
+    test('null when the chat has no char message yet', () {
+      expect(firstCharMessage([_m('n', MessageKind.ooc, 'note')]), isNull);
+      expect(firstCharMessage(const []), isNull);
+    });
+  });
+
   group('hiddenByGreetingVariant', () {
     List<Message> chatMsgs({required int selected}) => [
           _m('ooc0', MessageKind.ooc, 'Scenario: tavern', greetingVariant: 1),

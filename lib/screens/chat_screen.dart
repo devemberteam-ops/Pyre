@@ -4056,7 +4056,14 @@ class _ChatScreenState extends State<ChatScreen> {
   /// first message if the chat is empty). Mirrors HTML's `attachVariantToFirst`.
   void _attachVariantToFirst(Chat chat, String? responderId, String text) {
     final store = context.read<AppStore>();
-    if (chat.messages.isEmpty) {
+    // 2026-07-05 (Gui): the greeting slot is the first CHAR message, found
+    // by kind — a bound Fill-In scenario note can sit above it at index 0,
+    // and the old `messages.first` would have grown greeting variants on
+    // the NOTE (stashing the real greeting away as the note's "tail").
+    final gi = chat.messages.indexWhere((m) => m.kind == MessageKind.char);
+    if (gi < 0) {
+      // Empty chat (or notes only): append a fresh greeting message —
+      // scenario notes stay above it, scene below.
       store.addMessage(
         chat.id,
         Message(
@@ -4068,7 +4075,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       return;
     }
-    final first = chat.messages.first;
+    final first = chat.messages[gi];
     // chat-core-2-01 (2026-06-04): before selecting the new greeting variant,
     // stash the currently-visible downstream tail under the OLD variant and
     // hide it — exactly the dance selectVariant / _regenerateMessage /
@@ -4078,11 +4085,11 @@ class _ChatScreenState extends State<ChatScreen> {
     // greeting's whole conversation appears to vanish (recoverable, but
     // mis-associated). Snapshotting it here keeps each variant's tail with the
     // variant it belongs to, so the new custom greeting opens on a clean slate.
-    if (chat.messages.length > 1) {
-      final tail = chat.messages.sublist(1);
+    if (chat.messages.length > gi + 1) {
+      final tail = chat.messages.sublist(gi + 1);
       first.downstreamByVariant[first.selectedVariant] =
           List<Message>.from(tail);
-      chat.messages.removeRange(1, chat.messages.length);
+      chat.messages.removeRange(gi + 1, chat.messages.length);
     }
     first.variants.add(text);
     first.selectedVariant = first.variants.length - 1;
@@ -4917,8 +4924,14 @@ class _ChatScreenState extends State<ChatScreen> {
                         // adds a sibling variant that can't easily be
                         // undone (and used to take the original with
                         // it on delete pre-CY.8).
+                        // 2026-07-05 (Gui): the greeting slot is the first
+                        // CHAR message, not messages.first — a bound Fill-In
+                        // scenario note sits ABOVE it at index 0, and the
+                        // old `messages.first.id` check made the greeting's
+                        // + fall through to a blind regen instead of
+                        // reopening the Fill-In sheet.
                         onRegenerate: m.kind == MessageKind.char
-                            ? (chat.messages.first.id == m.id
+                            ? (firstCharMessage(chat.messages)?.id == m.id
                                 ? () => _promptFillIn(chat)
                                 : () => _regenerateMessage(chat, m))
                             : null,

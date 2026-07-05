@@ -817,10 +817,21 @@ class Message {
 bool hiddenByGreetingVariant(List<Message> messages, Message m) {
   final bound = m.greetingVariant;
   if (bound == null || m.kind != MessageKind.ooc) return false;
-  for (final x in messages) {
-    if (x.kind == MessageKind.char) return x.selectedVariant != bound;
+  final greet = firstCharMessage(messages);
+  if (greet == null) return false; // no greeting yet — nothing to scope against
+  return greet.selectedVariant != bound;
+}
+
+/// The chat's greeting slot: the first CHAR message. NOT `messages.first` —
+/// a bound Fill-In scenario note (or any aux note) can sit above it at
+/// index 0, and code that assumed "first message == greeting" mis-routed
+/// (e.g. the greeting's `+` fell through to a blind regen instead of
+/// reopening the Fill-In sheet). Null when the chat has no char message.
+Message? firstCharMessage(List<Message> messages) {
+  for (final m in messages) {
+    if (m.kind == MessageKind.char) return m;
   }
-  return false; // no greeting yet — nothing to scope against
+  return null;
 }
 
 /// 2026-07-05 (Gui): aux notes (OOC / Scene) get ALWAYS-VISIBLE variant
