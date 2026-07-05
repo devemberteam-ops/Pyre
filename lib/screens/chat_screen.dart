@@ -2929,6 +2929,13 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _showMessageMenu(Chat chat, Message m) async {
     // Sub-task B: haptic on long-press toolbar open (mobile only).
     if (_isMobileForHaptics) HapticFeedback.selectionClick();
+    // 2026-07-05 (Gui: editing an OOC focused the MAIN input): if the chat
+    // input holds focus when this sheet opens, the sheet's route SAVES that
+    // focus and RESTORES it after popping — stealing focus from the inline
+    // editor that "Edit text" just opened (its autofocus fires before the
+    // pop animation finishes). Dropping focus BEFORE the sheet opens means
+    // there is nothing to restore, so the editor keeps the keyboard.
+    FocusManager.instance.primaryFocus?.unfocus();
     final store = context.read<AppStore>();
     final messenger = ScaffoldMessenger.of(context);
     final isLast = chat.messages.isNotEmpty && chat.messages.last.id == m.id;
@@ -3525,7 +3532,12 @@ class _ChatScreenState extends State<ChatScreen> {
               offset: cleaned.length,
             );
           }
-          _inputFocus.requestFocus();
+          // 2026-07-05 (Gui): don't force-focus on MOBILE — it pops the
+          // keyboard over the drafted text even when the user just wants to
+          // read it and hit send. Desktop keeps the focus (type/Enter flow).
+          final mobile = defaultTargetPlatform == TargetPlatform.android ||
+              defaultTargetPlatform == TargetPlatform.iOS;
+          if (!mobile) _inputFocus.requestFocus();
           // chat-core-1-02: invoked for parity across completion paths. An
           // Impersonate only writes to the input box (no new char turn), so the
           // chain's own guards make this a cheap no-op — but it keeps the
@@ -5950,14 +5962,16 @@ class _MessageBubbleState extends State<_MessageBubble> {
             Padding(
               padding: const EdgeInsets.only(left: 48, bottom: 4),
               child: Text(
-                // Party mode (owner decision 2026-07, revised after live
-                // testing): no single speaker — the header reads "Narrator"
-                // (matches the prompt-side framing, where the preset's
-                // {{char}} resolves to Narrator and the joint instruction
-                // casts the model as the scene's narrator). WHO is in the
-                // party is already shown by the stacked avatar cluster.
+                // Party mode: no single speaker. 2026-07-05 (Gui): the
+                // header now reads "Scene" — with persona parties in the
+                // mix, "Narrator" as a speaker name read oddly. DISPLAY
+                // label only: the prompt-side narrator framing (preset
+                // {{char}} → 'Narrator', joint instruction) is untouched
+                // (golden-guarded prompt bytes + it's what steers the
+                // model). WHO is in the party is already shown by the
+                // stacked avatar cluster.
                 widget.character?.name ??
-                    (widget.isPartySceneMessage ? 'Narrator' : ''),
+                    (widget.isPartySceneMessage ? 'Scene' : ''),
                 key: const Key('speakerNameHeader'),
                 style: TextStyle(
                   color: EmberColors.primary,
