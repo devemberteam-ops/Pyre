@@ -5446,7 +5446,17 @@ class _MessageBubbleState extends State<_MessageBubble> {
         // every action available via long-press is available via
         // right-click; no UX divergence between mobile and desktop.
         onSecondaryTap: widget.onLongPress,
-        child: Padding(
+        // 2026-07-05 (Gui, round 3): the `+` chip is NOT always-on — tap
+        // the note to flash it (~3s), hover keeps it on desktop. Same
+        // show/hide state the regular bubbles use.
+        onTap: _flashControls,
+        child: MouseRegion(
+          onEnter: (_) {
+            _hideTimer?.cancel();
+            setState(() => _showControls = true);
+          },
+          onExit: (_) => setState(() => _showControls = false),
+          child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -5497,7 +5507,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
                             ),
                     ),
                   ),
-                  if (!widget.isEditing &&
+                  if (_showControls &&
+                      !widget.isEditing &&
                       auxNoteShowsBranchChip(m) &&
                       widget.onBranchUser != null)
                     Positioned(
@@ -5567,6 +5578,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                   ),
                 ),
             ],
+            ),
           ),
         ),
       );
