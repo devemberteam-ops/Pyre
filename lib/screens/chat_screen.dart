@@ -5451,107 +5451,118 @@ class _MessageBubbleState extends State<_MessageBubble> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: EmberColors.bgElevated,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: EmberColors.stroke),
-                ),
-                // The "Edit text" action flips edit mode for aux bubbles.
-                child: widget.isEditing
-                    ? _InlineMessageEditor(
-                        initialText: m.text,
-                        onCommit: widget.onCommitEdit ?? (_) {},
-                        onCancel: widget.onCancelEdit ?? () {},
-                      )
-                    : Text(
-                        // Wave CY.18.157: aux bubbles also substitute
-                        // {{user}}/{{char}} at display time.
-                        _fillNamePlaceholders(
-                          m.text,
-                          charName: widget.character?.name,
-                          personaName:
-                                        personaPartyFillName(
-                                                widget.personaParty) ??
-                                            widget.persona?.name,
-                        ),
-                        style: TextStyle(
-                          color: EmberColors.textMid,
-                          fontStyle: FontStyle.italic,
-                          fontSize: 13,
-                        ),
-                        textAlign: TextAlign.center,
+              // 2026-07-05 (Gui, round 2): the `+` branch chip floats on
+              // the note's RIGHT EDGE — same lateral geometry as the chips
+              // on regular messages (36px chip, 18px overhang reserved
+              // PERMANENTLY so the note never reflows when the chip hides
+              // during inline editing). Bound Fill-In scenario notes never
+              // show it (auxNoteShowsBranchChip).
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: EmberColors.bgElevated,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: EmberColors.stroke),
                       ),
+                      // The "Edit text" action flips edit mode for aux
+                      // bubbles.
+                      child: widget.isEditing
+                          ? _InlineMessageEditor(
+                              initialText: m.text,
+                              onCommit: widget.onCommitEdit ?? (_) {},
+                              onCancel: widget.onCancelEdit ?? () {},
+                            )
+                          : Text(
+                              // Wave CY.18.157: aux bubbles also substitute
+                              // {{user}}/{{char}} at display time.
+                              _fillNamePlaceholders(
+                                m.text,
+                                charName: widget.character?.name,
+                                personaName: personaPartyFillName(
+                                        widget.personaParty) ??
+                                    widget.persona?.name,
+                              ),
+                              style: TextStyle(
+                                color: EmberColors.textMid,
+                                fontStyle: FontStyle.italic,
+                                fontSize: 13,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                    ),
+                  ),
+                  if (!widget.isEditing &&
+                      auxNoteShowsBranchChip(m) &&
+                      widget.onBranchUser != null)
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: Center(
+                        child: _LateralChip(
+                          icon: Icons.add,
+                          accent: true,
+                          onPressed: widget.onBranchUser,
+                        ),
+                      ),
+                    ),
+                ],
               ),
               // 2026-07 (owner): branched aux notes (OOC) get the same
               // variant NAVIGATION regular messages have — a compact
               // centred `< n/N >` row, always visible when there is more
               // than one variant (no tap-to-flash dance on the small note).
-              // 2026-07-05 (Gui): plus an always-visible `+` chip that
-              // branches a new version of the note — the long-press menu
-              // never actually carried the branch action, so notes could
-              // never gain a second variant and the row stayed invisible.
-              // Fill-In scenario notes BOUND to a greeting variant get NO
-              // controls (auxNoteShows* return false for them): those swap
-              // by swiping the greeting itself. Hidden while the inline
-              // editor is open.
+              // The `+` that CREATES variants floats on the note's right
+              // edge above. Fill-In scenario notes BOUND to a greeting
+              // variant get NO controls (auxNoteShows* return false):
+              // those swap by swiping the greeting itself. Hidden while
+              // the inline editor is open.
               if (!widget.isEditing &&
-                  ((auxNoteShowsVariantArrows(m) &&
-                          widget.onSelectVariant != null) ||
-                      (auxNoteShowsBranchChip(m) &&
-                          widget.onBranchUser != null)))
+                  auxNoteShowsVariantArrows(m) &&
+                  widget.onSelectVariant != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (auxNoteShowsVariantArrows(m) &&
-                          widget.onSelectVariant != null) ...[
-                        _LateralChip(
-                          icon: Icons.chevron_left,
-                          onPressed: m.selectedVariant > 0
-                              ? () {
-                                  if (_isMobileForHaptics) {
-                                    HapticFeedback.selectionClick();
-                                  }
-                                  widget
-                                      .onSelectVariant!(m.selectedVariant - 1);
+                      _LateralChip(
+                        icon: Icons.chevron_left,
+                        onPressed: m.selectedVariant > 0
+                            ? () {
+                                if (_isMobileForHaptics) {
+                                  HapticFeedback.selectionClick();
                                 }
-                              : null,
+                                widget
+                                    .onSelectVariant!(m.selectedVariant - 1);
+                              }
+                            : null,
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: Text(
+                          '${m.selectedVariant + 1}/${m.variants.length}',
+                          style: TextStyle(
+                              color: EmberColors.textMid, fontSize: 10),
                         ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 6),
-                          child: Text(
-                            '${m.selectedVariant + 1}/${m.variants.length}',
-                            style: TextStyle(
-                                color: EmberColors.textMid, fontSize: 10),
-                          ),
-                        ),
-                        _LateralChip(
-                          icon: Icons.chevron_right,
-                          onPressed: m.selectedVariant < m.variants.length - 1
-                              ? () {
-                                  if (_isMobileForHaptics) {
-                                    HapticFeedback.selectionClick();
-                                  }
-                                  widget
-                                      .onSelectVariant!(m.selectedVariant + 1);
+                      ),
+                      _LateralChip(
+                        icon: Icons.chevron_right,
+                        onPressed: m.selectedVariant < m.variants.length - 1
+                            ? () {
+                                if (_isMobileForHaptics) {
+                                  HapticFeedback.selectionClick();
                                 }
-                              : null,
-                        ),
-                      ],
-                      if (auxNoteShowsBranchChip(m) &&
-                          widget.onBranchUser != null)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 4),
-                          child: _LateralChip(
-                            icon: Icons.add,
-                            accent: true,
-                            onPressed: widget.onBranchUser,
-                          ),
-                        ),
+                                widget
+                                    .onSelectVariant!(m.selectedVariant + 1);
+                              }
+                            : null,
+                      ),
                     ],
                   ),
                 ),
