@@ -338,6 +338,11 @@ Future<void> startNewGroupChat(
         content: const Text(
             'Group created! Party mode makes everyone reply in one scene.'),
         duration: const Duration(seconds: 6),
+        // 2026-07-05 (Gui: "esse aviso simplesmente não sai"): with an ACTION
+        // present, Flutter deliberately holds the snackbar forever whenever
+        // the device runs accessible navigation (screen reader etc.) — the
+        // 6s timer never fires. The close icon guarantees a way out.
+        showCloseIcon: true,
         action: SnackBarAction(
           label: 'Enable',
           onPressed: () => store.setChatPartyMode(fresh.id, true),

@@ -434,6 +434,10 @@ Future<void> _showAddMember(BuildContext context, String chatId) async {
         content: const Text(
             'Group formed! Party mode makes everyone reply in one scene.'),
         duration: const Duration(seconds: 6),
+        // 2026-07-05 (Gui): see the twin snackbar in chat_picker_screens —
+        // an action-carrying snackbar can persist forever under accessible
+        // navigation; the close icon guarantees a way out.
+        showCloseIcon: true,
         action: SnackBarAction(
           label: 'Enable',
           onPressed: () => store.setChatPartyMode(chatId, true),
