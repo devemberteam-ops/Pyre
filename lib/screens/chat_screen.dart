@@ -4099,17 +4099,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
     // Wave CY.11: the scenario rides as an OOC turn so `_buildTurns` re-sends
     // it as `[OOC]: ...` every turn (it stays canon instead of evaporating
-    // after the opener).
+    // after the opener). It sits ABOVE the greeting (owner 2026-07 —
+    // scenario first, then the scene).
     //
-    // 2026-07 (owner): the note now sits ABOVE the greeting ("assim que ele é
-    // criado, ele fica abaixo da primeira mensagem do char sendo que deveria
-    // ficar em cima") — scenario first, then the scene, both visually and in
-    // the replayed prompt. This deliberately REVERSES CY.18.269's
-    // branch-scoping (which parked it in the variant's downstream tail so it
-    // couldn't leak across greeting branches): the scenario is now CHAT-LEVEL
-    // canon — it applies to every greeting variant and stays until the next
-    // Fill-In REPLACES it (`_removeScenarioNotesAbove` below dedupes, so at
-    // most one scenario note ever sits above the greeting).
+    // 2026-07-05 (Gui, "grande bug"): the note is now BOUND to the greeting
+    // variant it generates (`greetingVariant`, stamped below once the
+    // variant index exists) — it shows and replays ONLY while that greeting
+    // is selected, so a custom scenario never leaks onto the card's other
+    // greetings. This replaces the earlier chat-level-canon behavior.
     final oocMsg = (scenarioForOoc != null && scenarioForOoc.trim().isNotEmpty)
         ? Message(
             id: newId('msg'),
@@ -4118,11 +4115,12 @@ class _ChatScreenState extends State<ChatScreen> {
           )
         : null;
 
-    // Remove previous Fill-In scenario notes sitting above the greeting so a
-    // re-run replaces the old scenario instead of stacking a second note.
-    // Deliberately narrow: only OOC messages ABOVE the first char message
-    // whose text carries the Fill-In's own 'Scenario: ' prefix — a manual
-    // user OOC (any position, any text) is never touched.
+    // Migration sweep: remove LEGACY (unbound) Fill-In scenario notes above
+    // the greeting — those still leaked across every variant. Bound notes
+    // belong to their own greeting variant and are kept. Deliberately
+    // narrow: only OOC messages ABOVE the first char message whose text
+    // carries the Fill-In's own 'Scenario: ' prefix — a manual user OOC
+    // (any position, any text) is never touched.
     void removeScenarioNotesAbove() {
       final gi =
           chat.messages.indexWhere((m) => m.kind == MessageKind.char);
@@ -4130,6 +4128,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final toRemove = <String>{
         for (var i = 0; i < gi; i++)
           if (chat.messages[i].kind == MessageKind.ooc &&
+              chat.messages[i].greetingVariant == null &&
               chat.messages[i].text.startsWith('Scenario: '))
             chat.messages[i].id,
       };
@@ -4161,11 +4160,12 @@ class _ChatScreenState extends State<ChatScreen> {
       firstId = m.id;
       vIdx = 0;
       // Place the scenario note ABOVE the freshly-added greeting (owner
-      // 2026-07 — scenario first, then the scene), replacing any older one.
+      // 2026-07 — scenario first, then the scene), BOUND to this variant.
       if (oocMsg != null) {
         removeScenarioNotesAbove();
         final gi = chat.messages.indexWhere((x) => x.id == m.id);
         if (gi >= 0) {
+          oocMsg.greetingVariant = vIdx;
           chat.messages.insert(gi, oocMsg);
           store.touchChat(chat); // F1: OOC-message insert syncs
         }
@@ -4192,14 +4192,14 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       vIdx = store.addVariant(chat.id, firstId);
       if (vIdx < 0) return;
-      // Place the scenario note ABOVE the greeting (owner 2026-07 — chat-
-      // level canon, see the block comment above), replacing any previous
-      // Fill-In note so re-runs never stack. Index recomputed by id: the
-      // dedupe sweep may have shifted positions.
+      // Place the scenario note ABOVE the greeting, BOUND to the fresh
+      // variant (2026-07-05 — see the block comment above). The legacy
+      // sweep may have shifted positions, so the index is recomputed by id.
       if (oocMsg != null) {
         removeScenarioNotesAbove();
         final gi = chat.messages.indexWhere((x) => x.id == firstId);
         if (gi >= 0) {
+          oocMsg.greetingVariant = vIdx;
           chat.messages.insert(gi, oocMsg);
           store.touchChat(chat); // F1: OOC-message insert syncs
         }
@@ -4789,6 +4789,13 @@ class _ChatScreenState extends State<ChatScreen> {
                     itemCount: chat.messages.length,
                     itemBuilder: (_, i) {
                       final m = chat.messages[i];
+                      // 2026-07-05 (Gui): a Fill-In scenario note bound to
+                      // another greeting variant is invisible while that
+                      // greeting isn't selected (also skipped in the prompt
+                      // replay — chat_prompt_builder).
+                      if (hiddenByGreetingVariant(chat.messages, m)) {
+                        return const SizedBox.shrink();
+                      }
                       final isLast = i == chat.messages.length - 1;
                       final hasCheckpoint = anchorIdxs.contains(i);
                       // Read shared values once at the list level so they

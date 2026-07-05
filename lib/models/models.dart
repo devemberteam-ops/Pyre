@@ -703,6 +703,13 @@ class Message {
   /// long chat doesn't have to push the whole chat object.
   int mtime;
   bool deleted;
+  /// 2026-07-05 (Gui, "grande bug"): when set on an OOC note, binds it to
+  /// ONE variant of the chat's first character message (the greeting). The
+  /// Fill-In scenario note carries the variant it generated, so it shows —
+  /// and replays into the prompt — only while that greeting is selected
+  /// (see [hiddenByGreetingVariant]). Null (every pre-existing message) =
+  /// unbound, behavior identical to before.
+  int? greetingVariant;
 
   Message({
     required this.id,
@@ -779,7 +786,7 @@ class Message {
       downstreamByVariant: ds,
       mtime: _jInt(j['mtime']) ?? 0,
       deleted: (j['deleted'] as bool?) ?? false,
-    );
+    )..greetingVariant = _jInt(j['greetingVariant']);
   }
 
   Map<String, dynamic> toJson() => {
@@ -795,7 +802,25 @@ class Message {
           ),
         'mtime': mtime,
         if (deleted) 'deleted': true,
+        // Omitted when null — legacy blobs stay byte-identical.
+        if (greetingVariant != null) 'greetingVariant': greetingVariant,
       };
+}
+
+/// 2026-07-05 (Gui, "grande bug"): true when [m] is a Fill-In scenario note
+/// BOUND to a greeting variant (`Message.greetingVariant`) that is NOT the
+/// one currently selected on the chat's first character message. Hidden
+/// notes are skipped by BOTH the chat display and the prompt replay, so a
+/// custom scenario stays glued to the greeting it generated instead of
+/// leaking onto every other greeting. Unbound notes (manual OOCs, legacy
+/// Fill-In notes) are never hidden — behavior identical to before.
+bool hiddenByGreetingVariant(List<Message> messages, Message m) {
+  final bound = m.greetingVariant;
+  if (bound == null || m.kind != MessageKind.ooc) return false;
+  for (final x in messages) {
+    if (x.kind == MessageKind.char) return x.selectedVariant != bound;
+  }
+  return false; // no greeting yet — nothing to scope against
 }
 
 /// Wave CY.18: branch-aware long-term memory checkpoint.

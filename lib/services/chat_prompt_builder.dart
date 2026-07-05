@@ -883,6 +883,12 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   final historyTurns = <ChatTurn>[];
   for (final m in windowed) {
     if (m.id == inputs.inFlightMessageId) continue;
+    // 2026-07-05 (Gui): a Fill-In scenario note bound to another greeting
+    // variant is NOT part of this branch's canon — skip it, exactly like
+    // the display does. Checked against the FULL message list (the greeting
+    // may sit outside the replay window). Unbound messages (every message
+    // that existed before this field) pass through byte-identically.
+    if (hiddenByGreetingVariant(inputs.chat.messages, m)) continue;
     // Wave CY.18.157: substitute {{user}}/{{char}} in the message BODY too.
     // Persona party: {{user}} = the joined roster (personaUserName), the ONE
     // canonical value everywhere in the prompt — derives to the single

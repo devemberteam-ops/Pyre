@@ -2944,7 +2944,19 @@ class AppStore extends ChangeNotifier {
       {bool? cascadeOverride}) {
     final chat = _chatById(chatId);
     if (chat == null) return;
-    final cascade = cascadeOverride ?? chatSettings.cascadeDelete;
+    // 2026-07-05 (Gui, "grande bug"): the preference-driven cascade NEVER
+    // applies to aux notes (OOC / Scene / System) — deleting the Fill-In
+    // scenario note at index 0 was wiping the ENTIRE chat (greeting message
+    // with all its variants + stashed branches). "Delete from here" is a
+    // timeline gesture; a note isn't a timeline point. The EXPLICIT
+    // cascadeOverride ("Truncate from here") still cascades.
+    final target = chat.messages.where((m) => m.id == messageId).toList();
+    final isAuxNote = target.isNotEmpty &&
+        (target.first.kind == MessageKind.ooc ||
+            target.first.kind == MessageKind.scene ||
+            target.first.kind == MessageKind.system);
+    final cascade =
+        cascadeOverride ?? (chatSettings.cascadeDelete && !isAuxNote);
     if (cascade) {
       final idx = chat.messages.indexWhere((m) => m.id == messageId);
       if (idx < 0) return;
