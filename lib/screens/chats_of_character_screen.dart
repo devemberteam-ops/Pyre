@@ -179,6 +179,39 @@ class _ChatRow extends StatelessWidget {
                       ],
                     ],
                   ),
+                  // 2026-07-05 (Gui): group / party indication per chat —
+                  // roster (+ Party mode) and the persona party ("as A, B").
+                  Builder(builder: (_) {
+                    final parts = <String>[];
+                    if (chat.characterIds.length > 1) {
+                      final names = chat.characterIds
+                          .map((id) => (chat.characterSnapshots[id] ??
+                                  store.characterById(id))
+                              ?.name)
+                          .whereType<String>()
+                          .toList();
+                      parts.add('Group: ${names.join(', ')}'
+                          '${chat.partyMode ? ' · Party mode' : ''}');
+                    }
+                    if (chat.personaIds.length > 1) {
+                      final names = chat.personaIds
+                          .map((id) => store.personaById(id)?.name)
+                          .whereType<String>()
+                          .toList();
+                      if (names.isNotEmpty) parts.add('as ${names.join(', ')}');
+                    }
+                    if (parts.isEmpty) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        parts.join('  ·  '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: EmberColors.textMid, fontSize: 12),
+                      ),
+                    );
+                  }),
                   const SizedBox(height: 4),
                   Text(
                     lastText,

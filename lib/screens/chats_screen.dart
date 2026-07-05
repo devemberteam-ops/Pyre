@@ -176,6 +176,26 @@ class _CharacterChatsRow extends StatelessWidget {
         ? 'No messages yet.'
         : latest.messages.last.text;
     final count = chats.length;
+    // 2026-07-05 (Gui): the list gave NO hint a chat is a group / party.
+    // Build a compact info line from the LATEST chat: member roster (+ Party
+    // mode) and the persona party ("as A, B").
+    final infoParts = <String>[];
+    if (latest.characterIds.length > 1) {
+      final names = latest.characterIds
+          .map((id) =>
+              (latest.characterSnapshots[id] ?? store.characterById(id))?.name)
+          .whereType<String>()
+          .toList();
+      infoParts.add(
+          'Group: ${names.join(', ')}${latest.partyMode ? ' · Party mode' : ''}');
+    }
+    if (latest.personaIds.length > 1) {
+      final names = latest.personaIds
+          .map((id) => store.personaById(id)?.name)
+          .whereType<String>()
+          .toList();
+      if (names.isNotEmpty) infoParts.add('as ${names.join(', ')}');
+    }
     return InkWell(
       onTap: () => _open(context),
       child: Padding(
@@ -210,6 +230,18 @@ class _CharacterChatsRow extends StatelessWidget {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
+                  if (infoParts.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      infoParts.join('  ·  '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: EmberColors.textMid,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 2),
                   Text(
                     lastText,

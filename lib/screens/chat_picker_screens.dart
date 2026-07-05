@@ -289,13 +289,13 @@ Future<void> startNewGroupChat(
   // Capture the long-lived navigator + messenger up front; gate on
   // `navigator.mounted`, never on the dead originating context.
   final navigator = Navigator.of(context);
-  final messenger = ScaffoldMessenger.of(context);
-  final memberIds = await navigator.push<List<String>>(
+  final pick = await navigator.push<GroupChatPick>(
     MaterialPageRoute(
       builder: (_) => GroupCharacterPickerScreen(primary: primary),
     ),
   );
-  if (memberIds == null || memberIds.isEmpty || !navigator.mounted) return;
+  if (pick == null || pick.memberIds.isEmpty || !navigator.mounted) return;
+  final memberIds = pick.memberIds;
 
   // 2026-07-04 (Gui): the group flow picks multiple CHARACTERS, so the
   // persona step matches — the multi-select party picker instead of the
@@ -325,31 +325,15 @@ Future<void> startNewGroupChat(
   if (personaPicks != null) {
     store.setChatPersonaParty(fresh.id, personaPicks);
   }
+  // 2026-07-05 (Gui): Party mode is chosen right in the member picker now —
+  // no more post-creation suggestion snackbar (the choice was explicit).
+  if (pick.partyMode && members.length > 1) {
+    store.setChatPartyMode(fresh.id, true);
+  }
   if (!navigator.mounted) return;
   navigator.push(
     MaterialPageRoute(builder: (_) => ChatScreen(chatId: fresh.id)),
   );
-  // Party suggestion — same affordance as forming a group via "Add
-  // character to chat". Root-level ScaffoldMessenger, so it shows on top of
-  // the freshly pushed chat.
-  if (members.length > 1) {
-    messenger.showSnackBar(
-      SnackBar(
-        content: const Text(
-            'Group created! Party mode makes everyone reply in one scene.'),
-        duration: const Duration(seconds: 6),
-        // 2026-07-05 (Gui: "esse aviso simplesmente não sai"): with an ACTION
-        // present, Flutter deliberately holds the snackbar forever whenever
-        // the device runs accessible navigation (screen reader etc.) — the
-        // 6s timer never fires. The close icon guarantees a way out.
-        showCloseIcon: true,
-        action: SnackBarAction(
-          label: 'Enable',
-          onPressed: () => store.setChatPartyMode(fresh.id, true),
-        ),
-      ),
-    );
-  }
 }
 
 /// Shared organized body for the character pickers: subtitle + search +
@@ -551,8 +535,13 @@ class _OrganizedCharacterPickerBodyState
   }
 }
 
-/// Multi-select character picker for [startNewGroupChat]. Pops with the
-/// ordered member id list (the primary first), or null if dismissed.
+/// What [GroupCharacterPickerScreen] pops with: the ordered member id list
+/// (primary first) + whether Party mode should start ON (2026-07-05, Gui:
+/// "deveria ter a opção de já selecionar o modo party ao criar").
+typedef GroupChatPick = ({List<String> memberIds, bool partyMode});
+
+/// Multi-select character picker for [startNewGroupChat]. Pops with a
+/// [GroupChatPick], or null if dismissed.
 /// [primary] pre-selects + locks that character; when null, the FIRST
 /// member picked becomes the one whose greeting opens the chat.
 class GroupCharacterPickerScreen extends StatefulWidget {
@@ -571,6 +560,10 @@ class _GroupCharacterPickerScreenState
   late final List<String> _selected = [
     if (widget.primary != null) widget.primary!.id,
   ];
+
+  // Party mode chosen right here (defaults ON — it's the group experience
+  // the suggestion snackbar used to nag about; only applies with 2+).
+  bool _partyMode = true;
 
   @override
   Widget build(BuildContext context) {
@@ -638,40 +631,66 @@ class _GroupCharacterPickerScreenState
           const Divider(height: 1),
           SafeArea(
             top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      n == 0
-                          ? 'Pick at least one member'
-                          : n == 1
-                              ? 'Just 1 member — a regular 1:1 chat'
-                              : '$n members',
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 2026-07-05 (Gui): Party mode chosen at creation — no more
+                // post-creation suggestion snackbar. Only meaningful with
+                // 2+ members, so it greys out for a solo pick.
+                if (n > 1)
+                  SwitchListTile(
+                    dense: true,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 16),
+                    activeThumbColor: EmberColors.primary,
+                    title: const Text('Party mode',
+                        style: TextStyle(fontSize: 14)),
+                    subtitle: Text(
+                      'Everyone replies together in one scene.',
                       style: TextStyle(
-                        color: n > 1
-                            ? EmberColors.primary
-                            : EmberColors.textMid,
-                        fontSize: 12,
-                        fontWeight:
-                            n > 1 ? FontWeight.w600 : FontWeight.w400,
+                          color: EmberColors.textMid, fontSize: 12),
+                    ),
+                    value: _partyMode,
+                    onChanged: (v) => setState(() => _partyMode = v),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          n == 0
+                              ? 'Pick at least one member'
+                              : n == 1
+                                  ? 'Just 1 member — a regular 1:1 chat'
+                                  : '$n members',
+                          style: TextStyle(
+                            color: n > 1
+                                ? EmberColors.primary
+                                : EmberColors.textMid,
+                            fontSize: 12,
+                            fontWeight:
+                                n > 1 ? FontWeight.w600 : FontWeight.w400,
+                          ),
+                        ),
                       ),
-                    ),
+                      FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: EmberColors.primary,
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: n == 0
+                            ? null
+                            : () => Navigator.pop(context, (
+                                  memberIds: List<String>.from(_selected),
+                                  partyMode: _partyMode && n > 1,
+                                )),
+                        child: const Text('Create chat'),
+                      ),
+                    ],
                   ),
-                  FilledButton(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: EmberColors.primary,
-                      foregroundColor: Colors.white,
-                    ),
-                    onPressed: n == 0
-                        ? null
-                        : () => Navigator.pop(
-                            context, List<String>.from(_selected)),
-                    child: const Text('Create chat'),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ],

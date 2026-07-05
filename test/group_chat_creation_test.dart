@@ -34,14 +34,14 @@ void main() {
     final c = _char('cc', 'Orin');
     store.characters.addAll([a, b, c]);
 
-    List<String>? popped;
+    GroupChatPick? popped;
     await tester.pumpWidget(ChangeNotifierProvider<AppStore>.value(
       value: store,
       child: MaterialApp(
         home: Builder(
           builder: (context) => ElevatedButton(
             onPressed: () async {
-              popped = await Navigator.of(context).push<List<String>>(
+              popped = await Navigator.of(context).push<GroupChatPick>(
                 MaterialPageRoute(
                   builder: (_) => GroupCharacterPickerScreen(primary: a),
                 ),
@@ -75,7 +75,9 @@ void main() {
     await tester.tap(find.text('Create chat'));
     await tester.pumpAndSettle();
 
-    expect(popped, ['ca', 'cc', 'cb']); // primary first, then tap order
+    expect(popped?.memberIds, ['ca', 'cc', 'cb']); // primary first, then tap order
+    // 2026-07-05 (Gui): Party mode is chosen in the picker — defaults ON.
+    expect(popped?.partyMode, isTrue);
   });
 
   testWidgets(

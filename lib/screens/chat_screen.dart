@@ -5091,6 +5091,19 @@ String? personaPartyFillName(List<Persona> personaParty) {
 /// the cluster needs, decoupled from the model type so BOTH a character
 /// party (Character members) and a persona party (the user's own Personas)
 /// render through the same widget.
+/// 2026-07-05 (Gui — original owner design restored): a party-scene bubble's
+/// header names EVERYONE in the scene (like the persona party's "as A, B"),
+/// abbreviated past 4 members. Pure so it's unit-testable.
+String partySceneHeaderNames(List<Character> members) {
+  final names = [
+    for (final c in members)
+      if (c.name.trim().isNotEmpty) c.name.trim(),
+  ];
+  if (names.isEmpty) return 'Scene';
+  if (names.length <= 4) return names.join(', ');
+  return '${names.take(3).join(', ')} +${names.length - 3}';
+}
+
 typedef PartyAvatarEntry = ({
   String name,
   String? avatar,
@@ -5962,16 +5975,17 @@ class _MessageBubbleState extends State<_MessageBubble> {
             Padding(
               padding: const EdgeInsets.only(left: 48, bottom: 4),
               child: Text(
-                // Party mode: no single speaker. 2026-07-05 (Gui): the
-                // header now reads "Scene" — with persona parties in the
-                // mix, "Narrator" as a speaker name read oddly. DISPLAY
-                // label only: the prompt-side narrator framing (preset
-                // {{char}} → 'Narrator', joint instruction) is untouched
-                // (golden-guarded prompt bytes + it's what steers the
-                // model). WHO is in the party is already shown by the
-                // stacked avatar cluster.
+                // Party mode: no single speaker. 2026-07-05 (Gui — the
+                // original owner design restored): the header names
+                // EVERYONE in the scene, like the persona party's
+                // "as A, B". DISPLAY label only: the prompt-side narrator
+                // framing (preset {{char}} → 'Narrator', joint
+                // instruction) is untouched — golden-guarded prompt bytes
+                // and it's what steers the model.
                 widget.character?.name ??
-                    (widget.isPartySceneMessage ? 'Scene' : ''),
+                    (widget.isPartySceneMessage
+                        ? partySceneHeaderNames(widget.partyMembers)
+                        : ''),
                 key: const Key('speakerNameHeader'),
                 style: TextStyle(
                   color: EmberColors.primary,

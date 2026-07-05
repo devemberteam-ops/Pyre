@@ -6,8 +6,8 @@ library;
 // OWNER DECISION (2026-07, revised after live testing): a party-scene message
 // (a char message with `characterId == null` in a party-mode group chat)
 // renders with:
-//   1. A "Scene" header (2026-07-05, Gui: display label only — the
-//      prompt-side framing keeps the Narrator concept; who is in the
+//   1. A header naming EVERY member (2026-07-05, Gui: the original owner
+//      design; the prompt-side framing keeps the Narrator concept; who is in the
 //      party is conveyed by the avatar cluster, not the header).
 //   2. A stacked mini-avatar cluster (up to 3 circles) instead of one portrait.
 // A normal single-responder group message (characterId set) keeps rendering
@@ -81,8 +81,8 @@ void main() {
   }
 
   testWidgets(
-      'party-scene message (characterId null, partyMode on) shows a '
-      '"Scene" header and a stacked avatar cluster', (tester) async {
+      'party-scene message (characterId null, partyMode on) shows every '
+      "member's name in the header and a stacked avatar cluster", (tester) async {
     final sera = Character(id: 'a', name: 'Sera', createdAt: 0, updatedAt: 0);
     final talia =
         Character(id: 'b', name: 'Talia', createdAt: 0, updatedAt: 0);
@@ -107,13 +107,13 @@ void main() {
       ],
     );
 
-    // Header reads "Scene" (2026-07-05, Gui — display label only; matches
-    // the prompt-side framing; WHO is in the party is shown by the avatar
-    // cluster). Scoped to the speaker-name header widget (Key) to avoid
-    // colliding with the AppBar title / avatar fallback-letter text.
+    // Header names EVERYONE in the scene (2026-07-05, Gui — the original
+    // owner design restored; like the persona party's "as A, B"). Scoped to
+    // the speaker-name header widget (Key) to avoid colliding with the
+    // AppBar title / avatar fallback-letter text.
     final header = find.byKey(const Key('speakerNameHeader'));
     expect(header, findsOneWidget);
-    expect(tester.widget<Text>(header).data, 'Scene');
+    expect(tester.widget<Text>(header).data, 'Sera, Talia, Orin');
 
     // Stacked cluster: 3 mini AvatarBubbles for the party message (one per
     // member), scoped to the message LIST (excludes the AppBar's own
