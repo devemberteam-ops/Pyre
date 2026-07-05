@@ -652,8 +652,16 @@ class _ChatScreenState extends State<ChatScreen> {
     // Add a blank variant and select it so the bubble renders empty.
     // addVariant() also sets selectedVariant to the new index.
     store.addVariant(chat.id, m.id);
-    _inputCtl.clear();
-    _inputFocus.requestFocus();
+    if (isReadOnlyAuxKind(m.kind)) {
+      // 2026-07-05 (Gui): aux notes are written IN PLACE — open the inline
+      // editor on the fresh empty variant right away. The old flow pointed
+      // the user at the main input (which never edits the note) and left a
+      // blank box that needed a long-press → Edit text to fill.
+      _editMessageText(chat, m);
+    } else {
+      _inputCtl.clear();
+      _inputFocus.requestFocus();
+    }
   }
 
   Chat? _chat(AppStore store) {
@@ -4293,11 +4301,33 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _commitMessageEdit(Chat chat, Message m, String newText) {
-    context.read<AppStore>().updateMessageText(chat.id, m.id, newText);
+    final store = context.read<AppStore>();
+    // 2026-07-05 (Gui): committing EMPTY text on a multi-variant aux note
+    // (the fresh slot the `+` branch chip just opened) undoes the branch
+    // instead of leaving a blank note box — removeMessageVariant selects
+    // the previous variant back and restores its stashed downstream.
+    if (isReadOnlyAuxKind(m.kind) &&
+        m.variants.length > 1 &&
+        newText.trim().isEmpty) {
+      store.removeMessageVariant(chat.id, m.id);
+      setState(() => _editingMessageId = null);
+      return;
+    }
+    store.updateMessageText(chat.id, m.id, newText);
     setState(() => _editingMessageId = null);
   }
 
-  void _cancelMessageEdit() {
+  void _cancelMessageEdit([Chat? chat, Message? m]) {
+    // Same undo as an empty commit — cancelling out of the fresh empty
+    // variant the `+` branch created removes the slot again rather than
+    // abandoning a blank note in the chat.
+    if (chat != null &&
+        m != null &&
+        isReadOnlyAuxKind(m.kind) &&
+        m.variants.length > 1 &&
+        m.text.trim().isEmpty) {
+      context.read<AppStore>().removeMessageVariant(chat.id, m.id);
+    }
     setState(() => _editingMessageId = null);
   }
 
@@ -4866,7 +4896,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         isSelecting: _selectingMessageId == m.id,
                         onCommitEdit: (text) =>
                             _commitMessageEdit(chat, m, text),
-                        onCancelEdit: _cancelMessageEdit,
+                        onCancelEdit: () => _cancelMessageEdit(chat, m),
                         onExitSelect: _exitSelectMode,
                         onSelectVariant: (idx) {
                           context
@@ -5459,45 +5489,69 @@ class _MessageBubbleState extends State<_MessageBubble> {
               // variant NAVIGATION regular messages have — a compact
               // centred `< n/N >` row, always visible when there is more
               // than one variant (no tap-to-flash dance on the small note).
-              // Branching itself stays in the long-press menu.
-              if (m.variants.length > 1 && widget.onSelectVariant != null)
+              // 2026-07-05 (Gui): plus an always-visible `+` chip that
+              // branches a new version of the note — the long-press menu
+              // never actually carried the branch action, so notes could
+              // never gain a second variant and the row stayed invisible.
+              // Fill-In scenario notes BOUND to a greeting variant get NO
+              // controls (auxNoteShows* return false for them): those swap
+              // by swiping the greeting itself. Hidden while the inline
+              // editor is open.
+              if (!widget.isEditing &&
+                  ((auxNoteShowsVariantArrows(m) &&
+                          widget.onSelectVariant != null) ||
+                      (auxNoteShowsBranchChip(m) &&
+                          widget.onBranchUser != null)))
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _LateralChip(
-                        icon: Icons.chevron_left,
-                        onPressed: m.selectedVariant > 0
-                            ? () {
-                                if (_isMobileForHaptics) {
-                                  HapticFeedback.selectionClick();
+                      if (auxNoteShowsVariantArrows(m) &&
+                          widget.onSelectVariant != null) ...[
+                        _LateralChip(
+                          icon: Icons.chevron_left,
+                          onPressed: m.selectedVariant > 0
+                              ? () {
+                                  if (_isMobileForHaptics) {
+                                    HapticFeedback.selectionClick();
+                                  }
+                                  widget
+                                      .onSelectVariant!(m.selectedVariant - 1);
                                 }
-                                widget
-                                    .onSelectVariant!(m.selectedVariant - 1);
-                              }
-                            : null,
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6),
-                        child: Text(
-                          '${m.selectedVariant + 1}/${m.variants.length}',
-                          style: TextStyle(
-                              color: EmberColors.textMid, fontSize: 10),
+                              : null,
                         ),
-                      ),
-                      _LateralChip(
-                        icon: Icons.chevron_right,
-                        onPressed: m.selectedVariant < m.variants.length - 1
-                            ? () {
-                                if (_isMobileForHaptics) {
-                                  HapticFeedback.selectionClick();
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          child: Text(
+                            '${m.selectedVariant + 1}/${m.variants.length}',
+                            style: TextStyle(
+                                color: EmberColors.textMid, fontSize: 10),
+                          ),
+                        ),
+                        _LateralChip(
+                          icon: Icons.chevron_right,
+                          onPressed: m.selectedVariant < m.variants.length - 1
+                              ? () {
+                                  if (_isMobileForHaptics) {
+                                    HapticFeedback.selectionClick();
+                                  }
+                                  widget
+                                      .onSelectVariant!(m.selectedVariant + 1);
                                 }
-                                widget
-                                    .onSelectVariant!(m.selectedVariant + 1);
-                              }
-                            : null,
-                      ),
+                              : null,
+                        ),
+                      ],
+                      if (auxNoteShowsBranchChip(m) &&
+                          widget.onBranchUser != null)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 4),
+                          child: _LateralChip(
+                            icon: Icons.add,
+                            accent: true,
+                            onPressed: widget.onBranchUser,
+                          ),
+                        ),
                     ],
                   ),
                 ),

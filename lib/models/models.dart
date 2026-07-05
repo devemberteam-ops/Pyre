@@ -823,6 +823,23 @@ bool hiddenByGreetingVariant(List<Message> messages, Message m) {
   return false; // no greeting yet — nothing to scope against
 }
 
+/// 2026-07-05 (Gui): aux notes (OOC / Scene) get ALWAYS-VISIBLE variant
+/// controls under the note — the `< n/N >` arrows plus a `+` chip that
+/// branches a new version — EXCEPT Fill-In scenario notes bound to a
+/// greeting variant ([Message.greetingVariant] != null): those swap in and
+/// out by swiping the GREETING, so controls on the note itself would add a
+/// second, conflicting navigation axis.
+bool auxNoteShowsVariantArrows(Message m) =>
+    m.greetingVariant == null && m.variants.length > 1;
+
+/// Companion to [auxNoteShowsVariantArrows]: whether the aux note offers
+/// the `+` branch chip. Suppressed on bound scenario notes and on an empty
+/// current variant (no branching a slot the user hasn't committed yet).
+/// Unlike regular bubbles the `+` is not restricted to the last variant —
+/// addVariant appends and selects the new slot from any position.
+bool auxNoteShowsBranchChip(Message m) =>
+    m.greetingVariant == null && m.text.trim().isNotEmpty;
+
 /// Wave CY.18: branch-aware long-term memory checkpoint.
 ///
 /// One checkpoint = one summary of the chat up to a specific message
