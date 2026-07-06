@@ -181,27 +181,22 @@ Future<void> startNewChatWithPersonaPrompt(
     }
     return;
   }
-  final picked = await navigator.push<String>(
+  // 2026-07-05 (Gui): every solo chat-start surface funnels through here,
+  // so the persona step is the same MULTI-select picker the group flow
+  // uses — one pick = classic solo, several = persona party, none =
+  // explicit no persona (setChatPersonaParty handles all three). Before
+  // this, a persona party was only reachable by creating the chat and
+  // switching from inside it.
+  final picks = await navigator.push<List<String>>(
     MaterialPageRoute(
-      builder: (_) => PersonaPickerScreen(
-        title: 'Persona for new chat with ${primary.name}',
-        subtitle:
-            'Pick the persona to play as. "No persona" means no {{user}} identity for this chat.',
-        // Wave CY.18.13: this is a fresh chat — no "current" persona
-        // exists yet, so don't pre-mark "No persona" (or any other
-        // row) as if it were the active state. The user is making an
-        // active pick, not changing one.
-        showCurrentSelection: false,
+      builder: (_) => PersonaPartyPickerScreen(
+        title: 'Personas for the chat with ${primary.name}',
       ),
     ),
   );
-  if (!navigator.mounted || picked == null) return;
+  if (!navigator.mounted || picks == null) return;
   final fresh = store.startChatWith(primary);
-  if (picked == pickerNoPersonaSentinel) {
-    store.setChatPersona(fresh.id, kExplicitNoPersonaId);
-  } else {
-    store.setChatPersona(fresh.id, picked);
-  }
+  store.setChatPersonaParty(fresh.id, picks);
   final route = MaterialPageRoute(
     builder: (_) => ChatScreen(chatId: fresh.id),
   );

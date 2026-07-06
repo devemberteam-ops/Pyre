@@ -2149,6 +2149,23 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
               startNewChatWithPersonaPrompt(context, c);
             },
           ),
+          // 2026-07-05 (Gui): group creation reachable from the library
+          // kebab too — mirrors the details sheet's "Group" action (same
+          // gate: someone else to group with).
+          if (store.characters.length > 1)
+            ListTile(
+              leading:
+                  Icon(Icons.groups_outlined, color: EmberColors.primary),
+              title: const Text('Start group chat'),
+              subtitle: Text(
+                'Pick the whole cast up front — ${c.name} is already in.',
+                style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+              ),
+              onTap: () {
+                Navigator.pop(sheet);
+                startNewGroupChat(context, c);
+              },
+            ),
           if (existingChat != null)
             ListTile(
               leading: Icon(Icons.play_arrow_rounded,
