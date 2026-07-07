@@ -113,6 +113,19 @@ bool creatorShouldStartEmbeddedLorebookFlow({
       isExplicitLorebookEntryRequest(text);
 }
 
+/// Build the "reference card" attachment text the Creator stages — shared by
+/// the device-file path and the library-pick path so both read identically to
+/// the architect. [label] names the source (a filename, or `Name (from your
+/// library)`); [raw] is the full chara_card_v2 map.
+String buildCardReferenceExtract(String label, Map<String, dynamic> raw) {
+  final pretty = const JsonEncoder.withIndent('  ').convert(raw);
+  return 'Reference card I attached (full chara_card_v2 metadata from '
+      '`$label`):\n\n```json\n$pretty\n```\n\n'
+      'Treat this as authoritative context. If I ask for edits, '
+      'apply them to this card; if I ask for a new card "in this '
+      'style", use it as inspiration.';
+}
+
 class CharacterAssistantScreen extends StatefulWidget {
   /// Wave CS: when set, the screen opens a fresh Creator session
   /// pre-loaded with this character's data (canvas filled, contextual
@@ -2522,8 +2535,87 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
   /// Pick a chara_card_v2 PNG/JSON, parse the embedded metadata, and
   /// STAGE it as a pending attachment. The actual LLM turn doesn't
   /// fire until the user hits send — so they can type context first.
+  /// "Attach character card" now offers two sources: a card ALREADY in the
+  /// library (2026-07-07 Gui) or a file on the device. Both funnel into
+  /// [_stageCardAttachment] so the staged reference text is byte-identical.
   Future<void> _attachCard() async {
     if (_generating) return;
+    final store = context.read<AppStore>();
+    final hasLibrary = store.characters.any((c) => !c.deleted);
+    final source = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: EmberColors.bgPanel,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hasLibrary)
+              ListTile(
+                leading:
+                    Icon(Icons.folder_shared_outlined,
+                        color: EmberColors.primary),
+                title: const Text('From your library'),
+                subtitle: Text(
+                  'Pick a character you already have in the app.',
+                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+                ),
+                onTap: () => Navigator.pop(sheet, 'library'),
+              ),
+            ListTile(
+              leading:
+                  Icon(Icons.folder_open_outlined, color: EmberColors.primary),
+              title: const Text('Browse device'),
+              subtitle: Text(
+                'Import a .png or .json chara_card_v2 file.',
+                style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+              ),
+              onTap: () => Navigator.pop(sheet, 'device'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+    if (source == 'library') {
+      await _attachCardFromLibrary();
+    } else {
+      await _attachCardFromDevice();
+    }
+  }
+
+  /// Pick a character from the library and stage its chara_card_v2 metadata
+  /// (with any bound lorebook merged in, exactly like PNG export does).
+  Future<void> _attachCardFromLibrary() async {
+    final store = context.read<AppStore>();
+    final navigator = Navigator.of(context);
+    final pickedId = await navigator.push<String>(
+      MaterialPageRoute(
+        builder: (_) => const CharacterPickerScreen(
+          title: 'Attach a card',
+          subtitle: 'Pick a character to hand the Creator as a reference.',
+        ),
+      ),
+    );
+    if (pickedId == null || !mounted) return;
+    final c = store.characterById(pickedId);
+    if (c == null) return;
+    // Merge bound lorebooks into a single character_book so the lore travels
+    // with the reference (mirrors export — D3).
+    final boundBooks = c.lorebookIds
+        .map(store.lorebookById)
+        .whereType<Lorebook>()
+        .where((b) => !b.deleted)
+        .toList(growable: false);
+    final mergedLorebook = mergeBoundLorebooksForExport(boundBooks);
+    final raw = buildCharaCardV2Json(c, lorebook: mergedLorebook);
+    final extracted =
+        buildCardReferenceExtract('${c.name} (from your library)', raw);
+    await _stageCardAttachment(filename: '${c.name} (library card)',
+        extracted: extracted);
+  }
+
+  /// Pick a chara_card_v2 file from the device and stage it.
+  Future<void> _attachCardFromDevice() async {
     final messenger = ScaffoldMessenger.of(context);
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -2552,44 +2644,45 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
         );
         return;
       }
-      final pretty = const JsonEncoder.withIndent('  ').convert(card.raw);
-      final extracted =
-          'Reference card I attached (full chara_card_v2 metadata from '
-          '`${f.name}`):\n\n```json\n$pretty\n```\n\n'
-          'Treat this as authoritative context. If I ask for edits, '
-          'apply them to this card; if I ask for a new card "in this '
-          'style", use it as inspiration.';
-
-      if (extracted.length > _bigFileThreshold && mounted) {
-        final ok = await confirmDelete(
-          context,
-          title: 'Big reference card',
-          message:
-              'This card is ${(extracted.length / 1000).toStringAsFixed(0)}k chars '
-              '(~${(extracted.length / 4 / 1000).toStringAsFixed(0)}k tokens). '
-              'Some models may reject the request. Pyre never truncates — '
-              'the full content will be sent. Continue?',
-          confirmLabel: 'Attach',
-          cancelLabel: 'Cancel',
-        );
-        if (!ok) return;
-      }
-
-      setState(() {
-        _pendingAttachments.add(
-          _PendingAttachment(
-            kind: 'card',
-            filename: f.name,
-            extracted: extracted,
-          ),
-        );
-      });
-      // Wave AY: the unified _greeting already explains attachments are
-      // welcome. No need to swap the greeting on attach — the chip row
-      // above the input + the user's typed context tell the story.
+      final extracted = buildCardReferenceExtract(f.name, card.raw);
+      await _stageCardAttachment(filename: f.name, extracted: extracted);
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Attach failed: $e')));
     }
+  }
+
+  /// Shared tail for both card-attach paths: big-card confirm + stage the
+  /// pending chip.
+  Future<void> _stageCardAttachment({
+    required String filename,
+    required String extracted,
+  }) async {
+    if (extracted.length > _bigFileThreshold && mounted) {
+      final ok = await confirmDelete(
+        context,
+        title: 'Big reference card',
+        message:
+            'This card is ${(extracted.length / 1000).toStringAsFixed(0)}k chars '
+            '(~${(extracted.length / 4 / 1000).toStringAsFixed(0)}k tokens). '
+            'Some models may reject the request. Pyre never truncates — '
+            'the full content will be sent. Continue?',
+        confirmLabel: 'Attach',
+        cancelLabel: 'Cancel',
+      );
+      if (!ok) return;
+    }
+    setState(() {
+      _pendingAttachments.add(
+        _PendingAttachment(
+          kind: 'card',
+          filename: filename,
+          extracted: extracted,
+        ),
+      );
+    });
+    // Wave AY: the unified _greeting already explains attachments are
+    // welcome. No need to swap the greeting on attach — the chip row
+    // above the input + the user's typed context tell the story.
   }
 
   /// Pick a reference image and stage it. Attach is INSTANT — the
