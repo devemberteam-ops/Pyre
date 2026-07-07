@@ -5024,7 +5024,6 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
             ],
           ),
         ),
-        _SessionSizeBanner(messages: messages),
         // Wave CY.18.242 (Build by message): the floating "Build the sheet" /
         // "Apply changes" pill was removed. The structured build is now
         // triggered conversationally — the architect emits `[[BUILD_SHEET]]`
@@ -7004,77 +7003,6 @@ class _PendingChipState extends State<_PendingChip> {
 // save but REQUIRED for the PNG export (chara_card_v2 PNGs need real
 // image bytes to embed metadata into). Cropping reuses the existing
 // avatar_crop_screen.dart so the output is always a 256x256 PNG.
-
-// =============================================================================
-// Context-size banner — sits above the input when the session has
-// piled up enough chars to start crowding common context windows.
-// Only renders past a soft threshold (~60k chars ≈ 15k tokens), so
-// short sessions never see it. Suggests starting a new session and
-// saving the current one — long sessions burn money on every turn
-// because the whole transcript replays.
-
-class _SessionSizeBanner extends StatelessWidget {
-  final List<CreatorMessage> messages;
-  const _SessionSizeBanner({required this.messages});
-
-  static const int _softThreshold = 60 * 1000; // chars (~15k tokens)
-  static const int _hardThreshold = 120 * 1000; // chars (~30k tokens)
-
-  @override
-  Widget build(BuildContext context) {
-    var totalChars = 0;
-    for (final m in messages) {
-      totalChars += m.content.length;
-      for (final a in m.attachments) {
-        totalChars += a.extracted.length;
-      }
-    }
-    if (totalChars < _softThreshold) return const SizedBox.shrink();
-    final hard = totalChars >= _hardThreshold;
-    final tokens = (totalChars / 4).round();
-    final tokenLabel = tokens < 1000
-        ? '$tokens'
-        : '${(tokens / 1000).toStringAsFixed(tokens < 10000 ? 1 : 0)}k';
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: (hard ? EmberColors.danger : Color(0xFFE9A35A)).withValues(
-          alpha: 0.12,
-        ),
-        border: Border(
-          top: BorderSide(
-            color: (hard ? EmberColors.danger : Color(0xFFE9A35A)).withValues(
-              alpha: 0.35,
-            ),
-          ),
-        ),
-      ),
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
-      child: Row(
-        children: [
-          Icon(
-            hard ? Icons.error_outline : Icons.warning_amber_outlined,
-            color: hard ? EmberColors.danger : Color(0xFFE9A35A),
-            size: 14,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              hard
-                  ? 'Session ~$tokenLabel tokens — many models will reject this. Save the card and start a new session.'
-                  : 'Session ~$tokenLabel tokens — approaching common context limits. Consider saving + starting fresh.',
-              style: TextStyle(
-                color: hard ? EmberColors.danger : EmberColors.textHigh,
-                fontSize: 11,
-                height: 1.3,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 // =============================================================================
 // Sticky sheet-status pill — sits above the chat ListView so the user
