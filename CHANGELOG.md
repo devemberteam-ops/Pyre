@@ -5,6 +5,100 @@ All notable changes to Pyre are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and Pyre follows a leading-digit `MAJOR.MINOR.PATCH` version.
 
+## [1.2.0] - 2026-07-07
+
+The "group & party" release, plus a Creator that finally edits like you'd
+expect. Chat with a whole cast at once, be a group yourself, edit any part of
+a card in place (even cards not built in Pyre), and hand the Creator one of
+your own characters, personas, or lorebooks as a reference. On top of that: a
+rebuilt Checkpoints that summarises like chapters, per-preset prefill and
+sampler controls, and a broad polish and data-integrity pass.
+
+### Added
+
+- **Group chats.** Start a chat with several characters at once. The header
+  shows the whole cast (stacked avatars + names), and each member answers on
+  their own turn as before.
+- **Party mode.** In a group chat, turn Party mode on and the whole cast
+  answers together as one scene — a "Narrator" voices everyone at once instead
+  of one character at a time. Reply length scales with the number of members.
+- **Persona party.** The *user* side can be a group too. Pick several personas
+  for a chat and your messages speak for the whole group; Impersonate and Guide
+  are group-aware and write for every member, not just the first.
+- **Create groups from anywhere.** New chat → *Group chat* on the Chats tab,
+  or *Start group chat* from a character's menu / details. Pick the whole cast
+  (and Party mode, and your personas) up front instead of adding members one by
+  one after the fact.
+- **Creator — edit any part of a card in place.** Ask for a change and it edits
+  only what you named (a field, or even a single section of the Description),
+  leaving everything else — including your hand-written text — byte-for-byte
+  untouched.
+- **Creator — edit cards that aren't in Pyre's format.** Imported a card with a
+  free-form description? The Creator now makes surgical text edits to just the
+  part you asked about instead of refusing or rewriting the whole thing.
+- **Creator — edit a card and its bound lorebook in one session**, and
+  *Edit-with-AI* now updates lorebook entries in place.
+- **Creator knows good craft.** Each mode (character, scenario, persona,
+  lorebook) now carries a "what makes this good" doctrine, so the build reasons
+  from craft instead of filling blanks — and scenario/persona builds read the
+  vibe of what you asked for.
+- **Creator — attach a card, persona, or lorebook from your library** as a
+  reference, not only a file from your device. Great for "make a new character
+  in this style" or grounding a build in one of your worlds.
+- **Native gallery for images.** Attaching a reference image, avatars,
+  backgrounds and gallery photos now open your phone's photo gallery instead of
+  the file browser. (Card imports still use the file browser so embedded data
+  is preserved.)
+- **Checkpoints are chapters now.** Each checkpoint summarises only its own span
+  of the story and never re-tells what an earlier one already covered — so the
+  chain reads like chapters you can follow on their own. They also trigger more
+  honestly, and checkpoints from other branches surface with a banner instead of
+  silently vanishing.
+- **Prefill "Start reply with."** Per preset, seed the start of the model's
+  reply (native on Anthropic, emulated elsewhere).
+- **Sampler passthrough.** Repetition penalty, DRY, banned words / strings and
+  logit bias now pass through to providers that support them.
+- **OOC / Scene notes get variant controls** — a compact `‹ n/N ›` navigator
+  plus a `+` to write an alternate version of a note.
+- **Lorebooks moved into the library.** They now live as a segment in the
+  Characters/Personas tab instead of buried under More.
+- **Web send through a paired hub.** A browser/PWA paired to a desktop or
+  headless hub can now send chats through it even without its own provider
+  configured.
+- **In-app debug log viewer.** Read the raw LLM request/response log inside the
+  app (More → Storage → Developer).
+
+### Changed
+
+- **Rename chat** moved out of the in-chat menu onto the chat rows, where
+  list-organising actions belong.
+- **"Display" and "Theme" merged** into a single **Appearance** screen.
+- The standalone AI Lorebook Creator screen was removed — building a lorebook
+  now happens inside the Creator canvas (the focused entry builder is still
+  reachable from library lorebook management).
+- Impersonate and Guide no longer have their own provider routing (they follow
+  the main chat provider) — one less thing to misconfigure.
+- Dropped the Creator's "experimental" tags, the session-count badge and the
+  running token banner for a calmer screen.
+
+### Fixed
+
+- **Custom scenarios stay put.** A Fill-In-Your-Own scenario is now bound to the
+  greeting it was written for (it no longer leaks onto the card's other
+  greetings), and deleting that note can never cascade-delete the rest of the
+  chat.
+- **Continue extends cleanly** — the seam where it rejoined the previous text no
+  longer duplicates or drops words.
+- **No more blank streaming.** A regression that showed an empty bubble until the
+  whole reply finished is fixed; replies render token-by-token again.
+- **Data integrity.** Fixed backup/restore data-loss cases, cross-device sync
+  losing sibling edits (clock-domain mismatches), and a tombstone-resurrection
+  bug that could bring back deleted items.
+- **Creator survives strict local servers** and keeps the whole build coherent
+  under context pressure (reactive trim-and-retry on overflow).
+- Assorted party / persona-party correctness (Narrator vs. your persona group,
+  `{{char}}`/`{{user}}` fill, group lorebook de-duplication, token scaling).
+
 ## [1.1.3] - 2026-06-17
 
 The biggest update since 1.1: an AI Lorebook Creator, app-wide color themes,

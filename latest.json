@@ -1,5 +1,5 @@
 {
-  "latest": "1.1.3",
+  "latest": "1.2.0",
   "url": "https://github.com/devemberteam-ops/pyre/releases/latest",
-  "notes": "Pyre 1.1.3 — AI Lorebook Creator, app-wide color themes, BotBooru built into the web client, per-function model routing, native Anthropic support, plus a large stability and data-integrity pass (sync, Checkpoints/Live Sheet, and the Creator now working on local models like LM Studio)."
+  "notes": "Pyre 1.2 — group chats and Party mode (both characters and personas act as one scene), a far smarter Creator (edit any part of a card in place, attach a card/persona/lorebook from your library as reference, craft doctrine so it knows what makes a good card), self-contained Checkpoint 'chapters', Lorebooks moved into the library, per-preset prefill + sampler passthrough, and a large polish and data-integrity pass."
 }
