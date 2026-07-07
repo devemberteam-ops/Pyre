@@ -103,12 +103,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     ),
                     _bulletRow(
                       Icons.auto_awesome,
-                      'Experimental power tools',
+                      'Power tools',
                       'AI Character Creator for characters, scenarios & '
                           'personas, branch-aware Checkpoints, Live '
                           'Sheet state tracking, Script story-direction, and '
-                          'scene-aware dynamic backgrounds. Heavier features, '
-                          'tuned but evolving.',
+                          'scene-aware dynamic backgrounds.',
                     ),
                     _bulletRow(
                       Icons.check_circle_outline,

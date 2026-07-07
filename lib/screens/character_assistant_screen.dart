@@ -4664,40 +4664,16 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     return Scaffold(
       key: _scaffoldKey,
       appBar: AppBar(
-        // Wave CY.18.200: experimental badge next to the title.
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Wave 271: Flexible + ellipsis so a narrow screen (small
-            // logical width or a large system font scale) TRUNCATES the
-            // title instead of overflowing the title slot and painting on
-            // top of the actions — that overflow was what made the title,
-            // the "(experimental)" badge and the Sheet/Chat toggle collide
-            // into garbled overlapping text on small phones.
-            const Flexible(
-              child: Text(
-                'Character Creator',
-                overflow: TextOverflow.ellipsis,
-                softWrap: false,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: EmberColors.primary.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: Text(
-                'experimental',
-                style: TextStyle(
-                  color: EmberColors.primary,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
+        // Wave 271: Flexible + ellipsis so a narrow screen (small
+        // logical width or a large system font scale) TRUNCATES the
+        // title instead of overflowing the title slot and painting on
+        // top of the actions — that overflow was what made the title
+        // and the Sheet/Chat toggle collide into garbled overlapping
+        // text on small phones.
+        title: const Text(
+          'Character Creator',
+          overflow: TextOverflow.ellipsis,
+          softWrap: false,
         ),
         // Two icons in the leading slot: the standard back arrow
         // (lost when we set `leading` on its own — Flutter only
@@ -4705,29 +4681,24 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
         // sessions hamburger. leadingWidth bumped so they don't
         // squeeze the title.
         automaticallyImplyLeading: false,
-        // Bumped from 88 → 100 so the sessions-count Badge has room and isn't
-        // clipped by the title area.
-        leadingWidth: 100,
+        leadingWidth: 96,
         leading: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             const BackButton(),
-            // liveoaktripper: he wanted to "resume a prior session instead of
-            // always starting new" — but never found the drawer. The resume
-            // feature already exists here; the gap was discovery. A count badge
-            // appears once there's more than one saved session, drawing the eye
-            // to the drawer, plus a clearer tooltip ("drafts" not just "menu").
+            // 2026-07-07 (Gui): dropped the session-count badge — the
+            // little number read as clutter. The hamburger still opens
+            // the drafts/sessions drawer; the count lives in the tooltip.
             Builder(
               builder: (_) {
                 final n = store.creatorSessions.length;
-                final btn = IconButton(
+                return IconButton(
                   tooltip: n > 1
                       ? 'Saved drafts & past sessions ($n)'
                       : 'Saved drafts & sessions',
                   icon: const Icon(Icons.menu),
                   onPressed: () => _scaffoldKey.currentState?.openDrawer(),
                 );
-                return n > 1 ? Badge.count(count: n, child: btn) : btn;
               },
             ),
           ],

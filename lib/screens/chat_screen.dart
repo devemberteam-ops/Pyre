@@ -2545,29 +2545,7 @@ class _ChatScreenState extends State<ChatScreen> {
               child: ExpansionTile(
                 leading: Icon(Icons.auto_awesome_motion,
                     color: EmberColors.textMid),
-                // Wave CY.18.200: experimental badge on the Memories group.
-                title: Row(
-                  children: [
-                    const Text('Memories'),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: EmberColors.primary.withValues(alpha: 0.13),
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      child: Text(
-                        'experimental',
-                        style: TextStyle(
-                          color: EmberColors.primary,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                title: const Text('Memories'),
                 iconColor: EmberColors.textHigh,
                 collapsedIconColor: EmberColors.textMid,
                 textColor: EmberColors.textHigh,

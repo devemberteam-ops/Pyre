@@ -504,27 +504,9 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
         // Wave CY.18.197: + an editable AI-tracked "Current location" field.
         if (effectiveSource == ChatBackgroundSource.dynamic) ...[
           const SizedBox(height: 8),
-          Row(
-            children: [
-              const Text(
-                'Current location',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-              ),
-              const SizedBox(width: 6),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                decoration: BoxDecoration(
-                  color: EmberColors.stroke.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  'experimental',
-                  style:
-                      TextStyle(fontSize: 9, color: EmberColors.textMid),
-                ),
-              ),
-            ],
+          const Text(
+            'Current location',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
           ),
           const SizedBox(height: 6),
           TextField(
