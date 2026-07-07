@@ -54,6 +54,13 @@ dependencies:
   # the pairing secret both peers already share.
   cryptography: ^2.7.0
   file_picker: ^10.3.4
+  # 2026-07-07 (Gui): the NATIVE phone gallery / photo picker for pure-image
+  # picks (avatars, backgrounds, gallery, Creator reference, Discover
+  # uploads). file_picker's FileType.image opens the SAF document browser,
+  # which reads as a clunky "Files" UI; image_picker opens the polished
+  # system Photos grid on Android/iOS. Desktop/web keep file_picker
+  # (image_picker has no gallery UI there) — see services/image_pick.dart.
+  image_picker: ^1.1.2
   uuid: ^4.5.1
   webview_flutter: ^4.10.0
   webview_flutter_android: ^4.0.0

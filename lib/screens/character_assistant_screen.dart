@@ -38,6 +38,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 import '../models/models.dart';
 import '../services/attachment_store.dart';
+import '../services/image_pick.dart';
 import '../services/chat_api.dart';
 import '../services/chat_prompt_builder.dart';
 import '../services/creator_cascade.dart';
@@ -2866,29 +2867,18 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     }
     try {
       // 2026-07-07 (Gui): a reference image is a photo, so open the phone's
-      // GALLERY (FileType.image) instead of the Files/Documents browser
-      // (FileType.custom forced the SAF document picker). Desktop still gets
-      // the normal file dialog filtered to images.
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.image,
-        withData: true,
-      );
-      if (result == null || result.files.isEmpty) return;
-      final f = result.files.single;
-      final bytes = f.bytes;
-      if (bytes == null) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Could not read file bytes.')),
-        );
-        return;
-      }
+      // native GALLERY (image_pick → image_picker) instead of the
+      // Files/Documents browser. Desktop/web fall back to the file dialog.
+      final picked = await pickOneImage();
+      if (picked == null) return;
+      final bytes = picked.bytes;
       // Stage with the RAW (un-downscaled) bytes immediately so the
       // chip appears instantly. Downscale in the background; the
       // vision call (deferred until send) will use whichever bytes
       // are current at that point.
       final pending = _PendingAttachment(
         kind: 'image',
-        filename: f.name,
+        filename: picked.name,
         imageBytes: bytes,
       );
       final downscaleFut = () async {
@@ -7531,14 +7521,9 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
   Future<void> _pickAvatar() async {
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.image,
-        withData: true,
-      );
-      if (result == null || result.files.isEmpty) return;
-      final bytes = result.files.single.bytes;
-      if (bytes == null) return;
-      if (!mounted) return;
+      final picked = await pickOneImage();
+      if (picked == null || !mounted) return;
+      final bytes = picked.bytes;
       // Wave CQ: no longer FORCE a crop on initial pick. botbooru and
       // most card hosts show full bot art uncropped; the user can
       // still recrop manually if the face isn't centered well via the

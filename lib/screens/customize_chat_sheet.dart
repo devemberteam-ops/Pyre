@@ -1,11 +1,11 @@
 import 'dart:async';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../services/attachment_store.dart';
+import '../services/image_pick.dart';
 import '../services/scene_background.dart' as scenebg;
 import '../state/app_store.dart';
 import '../theme.dart';
@@ -175,13 +175,9 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
   }
 
   Future<void> _pickCustom(AppStore store, Chat chat) async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      withData: true,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final bytes = result.files.single.bytes;
-    if (bytes == null) return;
+    final picked = await pickOneImage();
+    if (picked == null) return;
+    final bytes = picked.bytes;
     chat.backgroundSource = ChatBackgroundSource.custom;
     // B-2 / H-6: externalise into the AttachmentStore (pyre:// ref) instead of
     // inline base64 (web falls back to a data URL).

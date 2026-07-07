@@ -13,12 +13,12 @@
 // Wave CY.18.203 will add a background-fit picker here — there is room
 // inside the "Chat background" card for it.
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../services/attachment_store.dart';
+import '../services/image_pick.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/how_it_works_card.dart';
@@ -78,14 +78,9 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
   /// Wave CK: pick an image from device storage and stash as base64
   /// data URL on the draft. Same pattern as character avatar uploads.
   Future<void> _pickCustomBackground() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      withData: true,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final bytes = result.files.single.bytes;
-    if (bytes == null) return;
-    if (!mounted) return;
+    final picked = await pickOneImage();
+    if (picked == null || !mounted) return;
+    final bytes = picked.bytes;
     // B-2 / H-6: externalise into the AttachmentStore (pyre:// ref) instead of
     // inline base64 (web falls back to a data URL).
     final ref = await externalizeImageBytes(bytes);

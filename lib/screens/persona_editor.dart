@@ -1,12 +1,12 @@
 // Persona editor — mirrors the HTML prototype's "Edit persona" modal:
 // avatar (Change + Recrop) + name + tagline + description + "Set as default".
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../services/attachment_store.dart';
+import '../services/image_pick.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
@@ -70,14 +70,9 @@ class _PersonaEditorSheetState extends State<PersonaEditorSheet> {
   }
 
   Future<void> _changeAvatar() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      withData: true,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final bytes = result.files.single.bytes;
-    if (bytes == null) return;
-    if (!mounted) return;
+    final picked = await pickOneImage();
+    if (picked == null || !mounted) return;
+    final bytes = picked.bytes;
     // Wave CQ: store full image; recrop is a separate explicit step.
     // B-2 / H-6: externalise into the AttachmentStore (pyre:// ref) instead of
     // inline base64 (web falls back to a data URL).

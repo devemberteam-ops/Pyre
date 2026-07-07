@@ -13,11 +13,11 @@
 // render via the avatar resolution path's web handling (broken-image fallback
 // until the bytes arrive).
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../services/attachment_store.dart';
+import '../services/image_pick.dart';
 import '../theme.dart';
 
 /// A labelled "Gallery" section with a thumbnail grid + add/remove/
@@ -54,17 +54,13 @@ class _GalleryEditorSectionState extends State<GalleryEditorSection> {
     if (kIsWeb || _adding) return;
     setState(() => _adding = true);
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.image,
-        withData: true,
-      );
-      if (result == null || result.files.isEmpty) return;
-      final file = result.files.single;
-      final bytes = file.bytes;
-      if (bytes == null || bytes.isEmpty) return;
+      final picked = await pickOneImage();
+      if (picked == null) return;
+      final bytes = picked.bytes;
+      if (bytes.isEmpty) return;
       // Best-effort mime from the picked extension; AttachmentStore keeps a
       // sidecar so the bytes can be served with the right content-type later.
-      final ext = (file.extension ?? '').toLowerCase();
+      final ext = picked.ext;
       final mime = ext.isEmpty ? 'image/png' : 'image/$ext';
       final ref = await AttachmentStore.store(bytes, mime: mime);
       // Web (or a store failure) → ref is null. NEVER inline bytes as base64

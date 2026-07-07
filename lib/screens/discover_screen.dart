@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -18,6 +17,7 @@ import '../services/card_import.dart';
 import '../services/gallery_import.dart';
 import '../services/gallery_scrape.dart';
 import '../services/http_errors.dart';
+import '../services/image_pick.dart';
 import '../services/lorebook_import.dart';
 import '../services/attachment_store.dart';
 import '../services/png_encoder.dart';
@@ -568,17 +568,13 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     // Wave CY.1: image-only. JSON used to be in the allowlist for
     // chara_card_v2-as-JSON uploads but it doubles as a backup format,
     // so a hostile page could social-engineer the user into uploading
-    // a Pyre backup containing API keys. FileType.image keeps that
-    // exclusion (images only) AND opens the phone gallery instead of the
-    // Files browser (2026-07-07 Gui).
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: allowMultiple,
-      type: FileType.image,
-    );
-    if (result == null) return const [];
-    return result.files
-        .where((f) => f.path != null)
-        .map((f) => Uri.file(f.path!).toString())
+    // a Pyre backup containing API keys. image_pick stays images-only AND
+    // opens the native phone gallery instead of the Files browser
+    // (2026-07-07 Gui).
+    final picks = await pickImages(multiple: allowMultiple);
+    return picks
+        .where((p) => p.path != null)
+        .map((p) => Uri.file(p.path!).toString())
         .toList();
   }
 
@@ -651,27 +647,13 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     );
     if (picked == null) return const []; // cancelled — leave the form as-is
     if (picked.fallthrough) {
-      // "Browse other files…" → OS image picker. Read each picked file's
-      // bytes and base64 them. Image-only for the same SSRF/exfil reason as
-      // [_systemFilePicker]; FileType.image opens the phone gallery.
-      final result = await FilePicker.platform.pickFiles(
-        allowMultiple: multiple,
-        type: FileType.image,
-      );
-      if (result == null) return const [];
-      final List<PyreUploadFile> out = [];
-      for (final f in result.files) {
-        if (f.path == null) continue;
-        try {
-          final bytes = await File(f.path!).readAsBytes();
-          out.add(PyreUploadFile(f.name, base64Encode(bytes)));
-        } catch (e) {
-          messenger.showSnackBar(
-            SnackBar(content: Text('Could not read ${f.name}: $e')),
-          );
-        }
-      }
-      return out;
+      // "Browse from gallery…" → native photo picker (image_pick). Image-only
+      // for the same SSRF/exfil reason as [_systemFilePicker]; bytes come back
+      // in-memory so there's nothing to read off disk.
+      final picks = await pickImages(multiple: multiple);
+      return [
+        for (final p in picks) PyreUploadFile(p.name, base64Encode(p.bytes)),
+      ];
     }
     // Encode each picked Character to a chara_card_v2 PNG in memory. We DO
     // NOT silently drop avatarless cards — the user gets a SnackBar and the

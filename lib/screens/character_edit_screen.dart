@@ -1,11 +1,11 @@
 import 'dart:async';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../services/attachment_store.dart';
+import '../services/image_pick.dart';
 import '../services/token_estimate.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
@@ -245,14 +245,9 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   }
 
   Future<void> _pickAndCropAvatar() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      withData: true,
-    );
-    if (result == null || result.files.isEmpty) return;
-    final bytes = result.files.single.bytes;
-    if (bytes == null) return;
-    if (!mounted) return;
+    final picked = await pickOneImage();
+    if (picked == null || !mounted) return;
+    final bytes = picked.bytes;
     // Wave CQ: store the full image as-is. The previous flow forced
     // a crop modal on every pick, which destroyed the original — bad
     // when the user picked a botbooru bot that's meant to be shown
