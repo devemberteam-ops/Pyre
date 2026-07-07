@@ -2865,9 +2865,12 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       return;
     }
     try {
+      // 2026-07-07 (Gui): a reference image is a photo, so open the phone's
+      // GALLERY (FileType.image) instead of the Files/Documents browser
+      // (FileType.custom forced the SAF document picker). Desktop still gets
+      // the normal file dialog filtered to images.
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'],
+        type: FileType.image,
         withData: true,
       );
       if (result == null || result.files.isEmpty) return;

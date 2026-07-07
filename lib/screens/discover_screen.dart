@@ -568,11 +568,12 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     // Wave CY.1: image-only. JSON used to be in the allowlist for
     // chara_card_v2-as-JSON uploads but it doubles as a backup format,
     // so a hostile page could social-engineer the user into uploading
-    // a Pyre backup containing API keys.
+    // a Pyre backup containing API keys. FileType.image keeps that
+    // exclusion (images only) AND opens the phone gallery instead of the
+    // Files browser (2026-07-07 Gui).
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: allowMultiple,
-      type: FileType.custom,
-      allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp'],
+      type: FileType.image,
     );
     if (result == null) return const [];
     return result.files
@@ -651,12 +652,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     if (picked == null) return const []; // cancelled — leave the form as-is
     if (picked.fallthrough) {
       // "Browse other files…" → OS image picker. Read each picked file's
-      // bytes and base64 them. Image-only (png/jpg/jpeg/webp) for the same
-      // SSRF/exfil reason as [_systemFilePicker].
+      // bytes and base64 them. Image-only for the same SSRF/exfil reason as
+      // [_systemFilePicker]; FileType.image opens the phone gallery.
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: multiple,
-        type: FileType.custom,
-        allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp'],
+        type: FileType.image,
       );
       if (result == null) return const [];
       final List<PyreUploadFile> out = [];
