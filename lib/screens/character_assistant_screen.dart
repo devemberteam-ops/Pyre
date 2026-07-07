@@ -126,6 +126,38 @@ String buildCardReferenceExtract(String label, Map<String, dynamic> raw) {
       'style", use it as inspiration.';
 }
 
+/// Curated JSON for a [Persona] reference — only the fields that carry the
+/// persona's identity + voice. Drops ids, timestamps, sync metadata, and the
+/// heavy avatar data URL (which would bloat the prompt for no signal).
+Map<String, dynamic> personaReferenceJson(Persona p) => <String, dynamic>{
+      'name': p.name,
+      if ((p.tagline ?? '').trim().isNotEmpty) 'tagline': p.tagline!.trim(),
+      if (p.description.trim().isNotEmpty) 'description': p.description,
+      if (p.dialogueExamples.trim().isNotEmpty)
+        'dialogue_examples': p.dialogueExamples,
+    };
+
+/// Reference text for a persona attached from the library. Framed so the
+/// architect knows it's a {{user}}-side identity, not a character card.
+String buildPersonaReferenceExtract(String label, Map<String, dynamic> raw) {
+  final pretty = const JsonEncoder.withIndent('  ').convert(raw);
+  return 'Reference persona I attached (a {{user}}-side identity from '
+      '`$label`):\n\n```json\n$pretty\n```\n\n'
+      'Treat this as authoritative context. If I ask for a persona "like '
+      'this" or a character inspired by it, use it as reference; if I ask '
+      'for edits, apply them to this persona.';
+}
+
+/// Reference text for a lorebook / world-info attached from the library.
+String buildLorebookReferenceExtract(String label, Map<String, dynamic> raw) {
+  final pretty = const JsonEncoder.withIndent('  ').convert(raw);
+  return 'Reference lorebook I attached (world-info entries from '
+      '`$label`):\n\n```json\n$pretty\n```\n\n'
+      'Treat this as authoritative world context. Use it to ground a new '
+      'card / scenario in this world, or as the basis for a lorebook if I '
+      'ask for edits or additions.';
+}
+
 class CharacterAssistantScreen extends StatefulWidget {
   /// Wave CS: when set, the screen opens a fresh Creator session
   /// pre-loaded with this character's data (canvas filled, contextual
@@ -2535,13 +2567,16 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
   /// Pick a chara_card_v2 PNG/JSON, parse the embedded metadata, and
   /// STAGE it as a pending attachment. The actual LLM turn doesn't
   /// fire until the user hits send — so they can type context first.
-  /// "Attach character card" now offers two sources: a card ALREADY in the
-  /// library (2026-07-07 Gui) or a file on the device. Both funnel into
-  /// [_stageCardAttachment] so the staged reference text is byte-identical.
+  /// "Attach card, persona or lorebook" now offers picking from the library
+  /// (a character, a persona, or a lorebook — 2026-07-07 Gui) or a file on
+  /// the device. Every path funnels into [_stageCardAttachment] so the staged
+  /// reference reads consistently to the architect.
   Future<void> _attachCard() async {
     if (_generating) return;
     final store = context.read<AppStore>();
-    final hasLibrary = store.characters.any((c) => !c.deleted);
+    final hasChars = store.characters.any((c) => !c.deleted);
+    final hasPersonas = store.personas.any((p) => !p.deleted);
+    final hasLorebooks = store.lorebooks.any((b) => !b.deleted);
     final source = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: EmberColors.bgPanel,
@@ -2549,17 +2584,38 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (hasLibrary)
+            if (hasChars)
               ListTile(
-                leading:
-                    Icon(Icons.folder_shared_outlined,
-                        color: EmberColors.primary),
-                title: const Text('From your library'),
+                leading: Icon(Icons.badge_outlined,
+                    color: EmberColors.primary),
+                title: const Text('Character from library'),
                 subtitle: Text(
-                  'Pick a character you already have in the app.',
+                  'Use one of your characters as a reference.',
                   style: TextStyle(color: EmberColors.textMid, fontSize: 12),
                 ),
-                onTap: () => Navigator.pop(sheet, 'library'),
+                onTap: () => Navigator.pop(sheet, 'char'),
+              ),
+            if (hasPersonas)
+              ListTile(
+                leading: Icon(Icons.person_outline,
+                    color: EmberColors.primary),
+                title: const Text('Persona from library'),
+                subtitle: Text(
+                  'Hand the Creator one of your personas.',
+                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+                ),
+                onTap: () => Navigator.pop(sheet, 'persona'),
+              ),
+            if (hasLorebooks)
+              ListTile(
+                leading: Icon(Icons.menu_book_outlined,
+                    color: EmberColors.primary),
+                title: const Text('Lorebook from library'),
+                subtitle: Text(
+                  'Ground the build in one of your worlds.',
+                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+                ),
+                onTap: () => Navigator.pop(sheet, 'lorebook'),
               ),
             ListTile(
               leading:
@@ -2576,11 +2632,114 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       ),
     );
     if (source == null || !mounted) return;
-    if (source == 'library') {
-      await _attachCardFromLibrary();
-    } else {
-      await _attachCardFromDevice();
+    switch (source) {
+      case 'char':
+        await _attachCardFromLibrary();
+        break;
+      case 'persona':
+        await _attachPersonaFromLibrary();
+        break;
+      case 'lorebook':
+        await _attachLorebookFromLibrary();
+        break;
+      default:
+        await _attachCardFromDevice();
     }
+  }
+
+  /// Pick a persona from the library and stage its curated identity JSON.
+  Future<void> _attachPersonaFromLibrary() async {
+    final store = context.read<AppStore>();
+    final navigator = Navigator.of(context);
+    final pickedId = await navigator.push<String>(
+      MaterialPageRoute(
+        builder: (_) => const PersonaPickerScreen(
+          title: 'Attach a persona',
+          subtitle: 'Pick a persona to hand the Creator as a reference.',
+          showCurrentSelection: false,
+        ),
+      ),
+    );
+    // PersonaPickerScreen can pop the "No persona" sentinel — ignore it here.
+    if (pickedId == null ||
+        pickedId == pickerNoPersonaSentinel ||
+        !mounted) {
+      return;
+    }
+    final p = store.personas.firstWhere(
+      (x) => x.id == pickedId,
+      orElse: () => Persona(id: '', name: ''),
+    );
+    if (p.id.isEmpty) return;
+    final extracted = buildPersonaReferenceExtract(
+        '${p.name} (from your library)', personaReferenceJson(p));
+    await _stageCardAttachment(
+        filename: '${p.name} (library persona)', extracted: extracted);
+  }
+
+  /// Pick a lorebook from the library and stage its world-info JSON.
+  Future<void> _attachLorebookFromLibrary() async {
+    final store = context.read<AppStore>();
+    // Visible + hidden (bound) books are both attachable, but not deleted.
+    final books = store.lorebooks.where((b) => !b.deleted).toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    if (books.isEmpty) return;
+    final pickedId = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: EmberColors.bgPanel,
+      isScrollControlled: true,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Attach a lorebook',
+                  style: TextStyle(
+                    color: EmberColors.textHigh,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: books.length,
+                itemBuilder: (_, i) {
+                  final b = books[i];
+                  final n = b.entries.length;
+                  return ListTile(
+                    leading: Icon(Icons.menu_book_outlined,
+                        color: EmberColors.primary),
+                    title: Text(b.name),
+                    subtitle: Text(
+                      '$n ${n == 1 ? 'entry' : 'entries'}'
+                      '${b.hidden ? ' · bound' : ''}',
+                      style:
+                          TextStyle(color: EmberColors.textMid, fontSize: 12),
+                    ),
+                    onTap: () => Navigator.pop(sheet, b.id),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (pickedId == null || !mounted) return;
+    final book = books.firstWhere((b) => b.id == pickedId,
+        orElse: () => Lorebook(id: '', name: ''));
+    if (book.id.isEmpty) return;
+    final extracted = buildLorebookReferenceExtract(
+        '${book.name} (from your library)', charaCardBookJson(book));
+    await _stageCardAttachment(
+        filename: '${book.name} (library lorebook)', extracted: extracted);
   }
 
   /// Pick a character from the library and stage its chara_card_v2 metadata
@@ -6381,7 +6540,7 @@ class _InputBar extends StatelessWidget {
                         children: [
                           Icon(Icons.badge_outlined, size: 18),
                           SizedBox(width: 10),
-                          Text('Attach character card'),
+                          Text('Attach card / persona / lorebook'),
                         ],
                       ),
                     ),
