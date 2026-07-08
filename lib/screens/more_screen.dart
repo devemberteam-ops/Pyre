@@ -11,6 +11,7 @@ import '../theme.dart';
 import '../services/lan_client.dart';
 import '../services/update_check.dart';
 import 'api_connections_screen.dart';
+import 'hub_provider_screen.dart';
 import 'lan_connect_screen.dart';
 import 'network_settings_screen.dart';
 import 'backup_restore_screen.dart';
@@ -159,6 +160,19 @@ class MoreScreen extends StatelessWidget {
                       builder: (_) => const LanConnectScreen()),
                 ),
               ),
+              // 2026-07-07 (Gui): when connected to a self-host server, set
+              // ITS provider (API key) from here — no compose/env file. Only
+              // shown while paired; the screen degrades if the hub is a
+              // desktop app (which manages its own providers).
+              if (LanClient.instance.isPaired)
+                _MoreRow(
+                  label: 'Server provider',
+                  trailing: 'Self-host',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                        builder: (_) => const HubProviderScreen()),
+                  ),
+                ),
             ]),
           ],
           // Wave CY.18.46: desktop-only section. Phone / tablet / web
