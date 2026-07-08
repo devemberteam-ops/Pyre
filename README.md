@@ -65,9 +65,9 @@ Core principles:
 - **Mobile-first, desktop-capable.** Android is the primary mobile surface; desktop and web/PWA use wider layouts where useful.
 - **Interoperable.** Pyre reads and writes Tavern-style cards and imports from the SillyTavern ecosystem.
 
-## Current status
+## Current release
 
-**Pyre 1.2 is the first non-beta release line.** The app is still moving quickly, but the public positioning has changed: Pyre is no longer "a public beta to try." It is a usable, local-first roleplay client with active hardening, documentation, and release work.
+**Pyre 1.2 is the first non-beta release line.** The app is still moving quickly, but it has grown from an early public beta into a usable, local-first roleplay client with a broader feature set and active release work.
 
 Pyre is open source under AGPL-3.0. It hosts no model, stores no cloud library, and does not moderate or proxy your content through an Ember Team server.
 
@@ -143,7 +143,7 @@ Pyre is open source under AGPL-3.0. It hosts no model, stores no cloud library, 
 
 ## Platforms
 
-| Feature area | Android | Windows | Linux / macOS | Web/PWA |
+| Feature area | Android | Windows | Linux | Web/PWA |
 |---|:---:|:---:|:---:|:---:|
 | Chat, characters, personas, presets, lorebooks, memory, Creator | Yes | Yes | Yes | Via hub |
 | Group chat, Party Mode, persona party, Guide, regex rules | Yes | Yes | Yes | Yes |
@@ -173,9 +173,9 @@ Download builds from the [latest release](https://github.com/devemberteam-ops/Py
 3. Run `pyre.exe`.
 4. If SmartScreen warns, choose **More info -> Run anyway** if you trust the build.
 
-### Linux / macOS
+### Linux
 
-Use the desktop build when available, or build from source. Discover may open in the external browser on non-Windows desktops.
+Use the desktop build when available, or build from source. Discover may open in the external browser on Linux.
 
 ### Web / PWA
 
