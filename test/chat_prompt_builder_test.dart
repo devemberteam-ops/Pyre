@@ -478,6 +478,11 @@ void main() {
         () {
       expect(scopedEditVocabularyAppendix().toUpperCase(), contains('PERSONA'));
     });
+    test('scope vocabulary documents the `description` free-text scope (C)', () {
+      final v = scopedEditVocabularyAppendix();
+      expect(v, contains('[[BUILD_SHEET: description]]'));
+      expect(v.toLowerCase(), contains('free-text description'));
+    });
     test('character, cardBuilt=false → NO scope vocab / no refine guidance', () {
       final p = creatorArchitectPrompt(mode: 'character', cardBuilt: false);
       expect(p, isNot(contains('VALID SCOPE NAMES')));
@@ -490,11 +495,12 @@ void main() {
       expect(p, contains('THE CARD IS BUILT'));
       expect(p, contains('[[BUILD_SHEET:'));
       // The IRON RULE: confirming an apply WITHOUT a trigger is forbidden, and
-      // an unmatched field name must NOT freeze the model (map / bare marker) —
-      // this is what let "Adicionando o World Notes agora" end with no build.
+      // an unmatched field name must NOT freeze the model — this is what let
+      // "Adicionando o World Notes agora" end with no build.
       expect(p, contains('IRON RULE'));
-      expect(p.toLowerCase(), contains('does not match a listed field'));
-      expect(p, contains('creator_notes'));
+      expect(p.toLowerCase(), contains("doesn't fit"));
+      // Feature C: custom Description sections route to the free-text scope.
+      expect(p, contains('[[BUILD_SHEET: description]]'));
     });
     test('persona + scenario, cardBuilt=true → also get it', () {
       expect(creatorArchitectPrompt(mode: 'persona', cardBuilt: true),

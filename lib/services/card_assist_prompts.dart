@@ -51,7 +51,15 @@ String scopedEditVocabularyAppendix() {
       'EXACTLY these)\n\n'
       'For a CHARACTER card:\n${forMode(cs.CreatorMode.character)}\n\n'
       'For a PERSONA:\n${forMode(cs.CreatorMode.persona)}\n\n'
-      'For a SCENARIO card:\n${forMode(cs.CreatorMode.scenario)}';
+      'For a SCENARIO card:\n${forMode(cs.CreatorMode.scenario)}\n\n'
+      'SPECIAL — free-text Description edit: `description`. Use '
+      '`[[BUILD_SHEET: description]]` to change or ADD any text INSIDE the '
+      "Description — including a section the card already has that ISN'T in the "
+      'lists above (e.g. its own "World Notes", "Tone", "Inner Circle", "Rules" '
+      'section). Pyre rewrites ONLY your change into the Description and keeps '
+      'every other word, label, and section byte-for-byte. Prefer this over a '
+      'bare `[[BUILD_SHEET]]` whenever the change is about the Description text '
+      'rather than a listed top-level field.';
 }
 
 /// Appended (together with [scopedEditVocabularyAppendix]) to a CHARACTER /
@@ -79,11 +87,16 @@ finished card, not developing a new one:
   names under "VALID SCOPE NAMES" below): e.g. `[[BUILD_SHEET: first_mes]]` or
   `[[BUILD_SHEET: personality, tags]]`. Only those regenerate — every other
   field and every untouched Description section stays BYTE-FOR-BYTE.
-- If what the user names does NOT match a listed field, do NOT freeze: map it
-  to the CLOSEST field (extra world/lore/background notes usually belong in
-  `creator_notes` or the relevant Description section), or — if nothing fits —
-  emit a bare `[[BUILD_SHEET]]`. Either way you STILL emit a trigger. Never
-  stop at a prose confirmation just because you couldn't find a scope name.
+- If the change is about text INSIDE the Description — editing or ADDING a
+  section, even one the card already has that isn't a listed field name (its
+  own "World Notes", "Tone", "Inner Circle", "Rules"…) — scope to `description`:
+  `[[BUILD_SHEET: description]]`. Pyre applies only your change to the
+  Description and keeps every other word byte-for-byte. This is the RIGHT tool
+  for the custom sections a card invented.
+- If what the user names still doesn't fit anything, do NOT freeze: map it to
+  the CLOSEST field or emit a bare `[[BUILD_SHEET]]`. Either way you STILL emit
+  a trigger. Never stop at a prose confirmation because you couldn't find a
+  scope name.
 - A bare `[[BUILD_SHEET]]` (no field list) runs a broad carry-forward rebuild —
   use it for whole-card changes or when no single field fits.
 - If the user ONLY asks you to REVIEW or LIST what's wrong, answer inline from
@@ -774,12 +787,19 @@ END of this prompt — use EXACTLY those names):
 Scope rules:
 - Use the scoped form whenever the request names things you can map
   confidently onto one or a few fields/sections.
-- If the change RESTRUCTURES the card, spans many sections, or you are
-  unsure which section a detail lives in, emit the plain
-  `[[BUILD_SHEET]]` instead. The full build handles everything; a wrong
-  scope silently skips the rest of the request.
-- Never invent scope names outside the generated list; an unknown name
-  makes Pyre fall back to the FULL build.
+- For a change to text INSIDE the Description that does NOT map to one of
+  the listed Description sections — editing or ADDING a section the card
+  invented (its own "World Notes", "Tone", "Inner Circle", "Rules"…) —
+  scope to `description`: `[[BUILD_SHEET: description]]`. Pyre applies ONLY
+  your change to the Description text and keeps every other word verbatim,
+  whatever format the card uses. Prefer this over a full rebuild for any
+  Description-text edit that isn't a clean listed section.
+- If the change RESTRUCTURES the whole card or spans both the Description
+  AND several top-level fields at once, emit the plain `[[BUILD_SHEET]]`.
+  The full build handles everything; a wrong scope silently skips the rest.
+- Never invent scope names outside the generated list (except the special
+  `description` scope above); an unknown name makes Pyre fall back to the
+  FULL build.
 
 When the build runs it sees the card's CURRENT field values and your
 conversation, so it knows exactly which field(s) to touch and what to

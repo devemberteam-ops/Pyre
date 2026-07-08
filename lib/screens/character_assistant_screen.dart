@@ -1129,6 +1129,15 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     // others are carried verbatim from the decomposed parse (below).
     final sectionScoped = scoped &&
         targetKeys.any(cs.descriptionSectionKeys(mode).contains);
+    // Feature C (Gui, 2026-07-08): the `[[BUILD_SHEET: description]]` free-text
+    // scope. `description` is NOT a schema field (so `scoped` above is false for
+    // it) — it routes to a SURGICAL Description text-edit that rewrites only the
+    // requested change into the current Description and keeps every other word
+    // byte-for-byte. This is how ANY section — including custom ones the schema
+    // doesn't model (the card's own "World Notes", "Tone", …) — is edited in
+    // place, no full rebuild. Handled by the dedicated branch after the
+    // transcript is built.
+    final freeTextDescEdit = refining && isFreeTextDescriptionScope(targetKeys);
 
     // Audit 2026-06-04 (Creator M2): a session switch/delete during this
     // (long, multi-pass) build must abort it cleanly — otherwise its
@@ -1275,6 +1284,85 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
             _composeTurnContent(m),
           ),
     ];
+
+    // Feature C: `[[BUILD_SHEET: description]]` — surgical free-text edit of the
+    // CURRENT Description (any section, incl. custom ones). No batch build runs:
+    // the model gets the Description verbatim + the conversation and returns the
+    // full text with ONLY the requested change applied; everything else stays
+    // byte-for-byte. Guarded — a rejected/failed result keeps the original.
+    if (freeTextDescEdit) {
+      final current = (_sessionCanvas(store)['description'] ?? '').toString();
+      if (current.trim().isEmpty) {
+        // No Description to edit in place — fall back to a normal build.
+        await _runStructuredBuildFlow();
+        return;
+      }
+      setState(() => _structuredBuilding = true);
+      _appendBuildStatus(
+        store,
+        '⏳  Editing the Description in place — every other field and every '
+        'untouched line stays byte-for-byte.',
+      );
+      final cancelToken = BuildCancelToken();
+      _buildCancelToken = cancelToken;
+      await _keepAliveStart();
+      try {
+        final out = await completeChatStreamed(
+          provider: provider,
+          settings: settings,
+          messages: buildSurgicalDescriptionEditTurns(
+            description: current,
+            transcript: transcript,
+          ),
+          debugTag: 'creator-surgical-desc',
+        );
+        if (!mounted || myGen != _streamGen) return;
+        final accepted =
+            acceptSurgicalDescriptionEdit(original: current, edited: out);
+        if (accepted == null) {
+          _updateBuildStatus(
+            store,
+            '⚠ The revised Description came back looking wrong (empty or far '
+            'too short), so the original was kept. Try rephrasing the change, '
+            'or edit the Description by hand in the Sheet tab.',
+          );
+          return;
+        }
+        final canvas = Map<String, dynamic>.from(_sessionCanvas(store));
+        canvas['description'] = accepted;
+        canvas.remove(kCanvasBuildFailedKey);
+        store.updateCreatorSessionCanvas(id, canvas);
+        store.flushPersist();
+        _updateBuildStatus(
+          store,
+          '✓  Description updated in place — every other field untouched. Open '
+          'the Sheet tab to review or Save.',
+        );
+        if (mounted) setState(() => _showCanvas = true);
+      } catch (e) {
+        final owned = store.creatorSessions.where((s) => s.id == id).toList();
+        if (owned.isNotEmpty) {
+          store.updateCreatorSessionCanvas(
+            id,
+            withCreatorLastBuildFailed(
+                Map<String, dynamic>.from(owned.first.canvas), true),
+          );
+          store.flushPersist();
+        }
+        if (myGen == _streamGen) {
+          _updateBuildStatus(
+            store,
+            '⚠ The Description edit failed ($e). Check your provider in '
+            'More → API Connections, then try again or type /build.',
+          );
+        }
+      } finally {
+        _keepAliveStop();
+        _buildCancelToken = null;
+        if (mounted) setState(() => _structuredBuilding = false);
+      }
+      return;
+    }
 
     // Granular edit: a scoped build collapses the multi-pass rebuild into
     // the one (usually) small batch containing the targeted fields.

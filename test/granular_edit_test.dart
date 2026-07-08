@@ -50,6 +50,34 @@ void main() {
     });
   });
 
+  // Feature C (Gui): edit ANY Description section — including custom ones the
+  // schema doesn't model (a card's own "World Notes"/"Tone") — surgically.
+  // `[[BUILD_SHEET: description]]` routes to the surgical text-edit.
+  group('free-text description scope', () {
+    test('the single `description` key is the free-text scope', () {
+      expect(isFreeTextDescriptionScope(['description']), isTrue);
+      expect(isFreeTextDescriptionScope(['Description']), isTrue); // case/space
+      expect(isFreeTextDescriptionScope([' description ']), isTrue);
+    });
+    test('a real scoped marker parses `description` as its key', () {
+      final r = detectAndStripBuildMarker(
+          'Adding a World Notes section.\n[[BUILD_SHEET: description]]');
+      expect(r.scopedKeys, ['description']);
+      expect(isFreeTextDescriptionScope(r.scopedKeys), isTrue);
+    });
+    test('anything else is NOT the free-text scope', () {
+      expect(isFreeTextDescriptionScope(null), isFalse);
+      expect(isFreeTextDescriptionScope(['first_mes']), isFalse);
+      // description PLUS another key is not the pure free-text edit.
+      expect(isFreeTextDescriptionScope(['description', 'tags']), isFalse);
+    });
+    test('`description` is NOT a schema field (so it never scopes as a batch)',
+        () {
+      expect(cs.keysAreScopedEditable(['description'], cs.CreatorMode.character),
+          isFalse);
+    });
+  });
+
   group('keysAreScopedEditable', () {
     test('top-level character fields pass', () {
       expect(

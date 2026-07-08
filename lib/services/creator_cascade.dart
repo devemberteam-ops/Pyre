@@ -343,6 +343,20 @@ BuildMarkerResult detectAndStripBuildMarker(String raw) {
   );
 }
 
+/// The special free-text Description scope. `[[BUILD_SHEET: description]]` is
+/// NOT a schema field — it routes to the SURGICAL Description text-edit, which
+/// rewrites the whole Description applying only the requested change and keeps
+/// every other word byte-for-byte. This is how ANY section — including custom
+/// ones the schema doesn't model (a card's own "World Notes", "Tone", "Inner
+/// Circle" sections) — gets edited in place without a full rebuild.
+const String kFreeTextDescriptionScope = 'description';
+
+/// True when a scoped marker names ONLY [kFreeTextDescriptionScope].
+bool isFreeTextDescriptionScope(List<String>? keys) =>
+    keys != null &&
+    keys.length == 1 &&
+    keys.first.trim().toLowerCase() == kFreeTextDescriptionScope;
+
 /// True when a detected build marker should actually auto-fire the structured
 /// build.
 ///
