@@ -205,7 +205,7 @@ class _HubProviderScreenState extends State<HubProviderScreen> {
         decoration: InputDecoration(
           labelText: 'API key',
           hintText: (s?.hasKey ?? false)
-              ? 'Leave blank to keep the current key'
+              ? 'Blank keeps it (same provider) — a new URL needs its own key'
               : 'sk-…',
           suffixIcon: IconButton(
             icon: Icon(_obscureKey ? Icons.visibility : Icons.visibility_off),
