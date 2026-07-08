@@ -67,7 +67,7 @@ Core principles:
 
 ## Current release
 
-**Pyre 1.2 is the first non-beta release line.** The app is still moving quickly, but it has grown from an early public beta into a usable, local-first roleplay client with a broader feature set and active release work.
+**Pyre 1.2 is the first non-beta release line.** The app is still moving quickly, but it has grown into a usable, local-first roleplay client with a broader feature set and active release work.
 
 Pyre is open source under AGPL-3.0. It hosts no model, stores no cloud library, and does not moderate or proxy your content through an Ember Team server.
 

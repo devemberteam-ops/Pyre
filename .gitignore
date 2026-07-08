@@ -44,7 +44,7 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# Release signing — NEVER commit. The repo's contributors and CI fall
+# Release signing - never commit. The repo's contributors and CI fall
 # back to debug signing. Production builds inject these via secrets.
 /android/key.properties
 /android/app/upload-keystore.jks
@@ -53,38 +53,26 @@ app.*.map.json
 *.jks
 *.keystore
 
-# Prompt Lab (Wave CY.18.211) — generated reports + the gitignored local
-# live-mode config (the user creates local.json from local.example.json in a
-# later wave; it holds an API key and must NEVER be committed).
+# Prompt Lab generated reports and local live-mode config.
 tool/prompt_lab/out/
 tool/prompt_lab/local.json
 
-# Per-platform Gradle/build outputs (the root /build/ above only covers the
-# top-level Flutter build dir, not Android's Gradle output).
+# Per-platform Gradle/build outputs. The root /build/ above only covers the
+# top-level Flutter build dir, not Android's Gradle output.
 /android/build/
 /android/.gradle/
 
-# Release/ is the web-bundle mirror that build_all.ps1 produces — it's a copy
+# Release/ is the web-bundle mirror that build_all.ps1 produces. It is a copy
 # of build/web, not source. Never commit it.
 /Release/
 
-# Private outreach / pitch kit — business-development drafts (unsent partner
-# emails, pitch deck, identity-reveal strategy). Local-only; must NEVER ship in
-# the public AGPL repo.
+# Local-only outreach drafts.
 outreach/
 
-# Internal/private working docs — local-only, must NEVER ship in the public AGPL
-# repo: deploy + store-listing strategy, the internal launch/security checklist,
-# and the superpowers working docs (specs / plans / brainstorms incl. the
-# monetization/partnership strategy + the mega-audit reports). They stay on disk
-# for reference; they just don't go into git / any future push.
+# Local-only working docs.
 DEPLOY.md
 docs/LAUNCH_CHECKLIST.md
 docs/superpowers/
-# More internal planning / strategy / ideas docs — same rule (local-only, never
-# ship publicly). Marketing/listing copy, the internal launch-announcement draft
-# (incl. its "for us" posting notes), the internal feature inventory, design
-# briefs, and the dated audit / live-test working reports.
 docs/STORE_LISTING.md
 docs/COMMUNITY.md
 docs/FEATURE_INVENTORY.md
@@ -93,12 +81,8 @@ docs/SMOKE_TEST.md
 docs/scene-background-library-brief.md
 docs/prompt-pipeline-audit-2026-05-31.md
 docs/live-test-findings-2026-05-31.md
-# Per-release announcement DRAFT — local until the release is finalized
-# (placeholder links + "DRAFT — not for publication" header).
+
+# Per-release announcement drafts stay local until finalized.
 docs/RELEASE_NOTES_1.1.0-DRAFT.md
-# Internal Ember Team working docs (audits, plans, bug matrices, evidence,
-# environment baselines). Same rule as docs/superpowers — local-only, must NEVER
-# ship in the public AGPL repo. These reveal the internal AI-team dev process +
-# unfixed-bug lists.
 docs/company/
 tool/environment_base/
