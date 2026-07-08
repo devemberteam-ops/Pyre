@@ -663,6 +663,25 @@ class _ChatScreenState extends State<ChatScreen> {
     _inputFocus.requestFocus();
   }
 
+  /// 2026-07-08 (Gui: "o OOC vazio incomoda"): a branched OOC/Scene note whose
+  /// SELECTED variant is still EMPTY — the user hit `+` but then continued with
+  /// a message, a char reply, or another note instead of writing that
+  /// alternative — must not linger as a blank note. On any continuation action
+  /// we drop that empty branch: `removeMessageVariant` reverts to the prior
+  /// variant and restores its downstream. (A typed USER message fills its own
+  /// empty variant in place, so user branches are never stale.)
+  void _pruneStaleEmptyBranch(Chat chat) {
+    if (chat.messages.isEmpty) return;
+    final last = chat.messages.last;
+    final isBranchableNote =
+        last.kind == MessageKind.ooc || last.kind == MessageKind.scene;
+    if (isBranchableNote &&
+        last.variants.length > 1 &&
+        last.text.trim().isEmpty) {
+      context.read<AppStore>().removeMessageVariant(chat.id, last.id);
+    }
+  }
+
   Chat? _chat(AppStore store) {
     for (final c in store.chats) {
       if (c.id == widget.chatId) return c;
@@ -1041,6 +1060,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (chat == null) return;
     final text = _inputCtl.text.trim();
     if (_generating) return;
+    // Continuing after a `+` on an OOC/Scene note that was left blank: drop the
+    // stale empty branch so it doesn't linger above the new turn (Gui).
+    _pruneStaleEmptyBranch(chat);
     // Sub-task B: haptic on send (mobile only).
     if (_isMobileForHaptics) HapticFeedback.lightImpact();
     // Audit C1: a new send supersedes any pending fallback card from a
@@ -3772,6 +3794,8 @@ class _ChatScreenState extends State<ChatScreen> {
             onPressed: () {
               final t = ctl.text.trim();
               if (t.isEmpty) return;
+              // Adding a fresh note supersedes a blank `+` branch left above.
+              _pruneStaleEmptyBranch(chat);
               store.addMessage(
                 chat.id,
                 Message(id: newId('msg'), kind: kind, variants: [t]),
@@ -5429,6 +5453,14 @@ class _MessageBubbleState extends State<_MessageBubble> {
     final isScene = m.kind == MessageKind.scene;
 
     if (isAux) {
+      // 2026-07-08 (Gui): variant navigation for an aux note now floats on the
+      // note's SIDES — a `<` chip on the left edge and `>`/`+` on the right —
+      // exactly like a regular message, instead of a row BELOW it. Only the
+      // compact n/N counter stays below.
+      final auxHasArrows = auxNoteShowsVariantArrows(m);
+      final auxCanPrev = auxHasArrows && m.selectedVariant > 0;
+      final auxCanNext = auxHasArrows && m.selectedVariant < m.variants.length - 1;
+      final auxCanBranch = auxNoteShowsBranchChip(m) && widget.onBranchUser != null;
       return GestureDetector(
         onLongPress: widget.onLongPress,
         // Wave CY.18.49: right-click on desktop / two-finger tap on
@@ -5497,74 +5529,69 @@ class _MessageBubbleState extends State<_MessageBubble> {
                             ),
                     ),
                   ),
+                  // Left edge — previous variant.
                   if (_showControls &&
                       !widget.isEditing &&
-                      auxNoteShowsBranchChip(m) &&
-                      widget.onBranchUser != null)
+                      auxCanPrev &&
+                      widget.onSelectVariant != null)
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: Center(
+                        child: _LateralChip(
+                          icon: Icons.chevron_left,
+                          onPressed: () {
+                            if (_isMobileForHaptics) {
+                              HapticFeedback.selectionClick();
+                            }
+                            widget.onSelectVariant!(m.selectedVariant - 1);
+                          },
+                        ),
+                      ),
+                    ),
+                  // Right edge — `>` to the next variant, or `+` to branch a
+                  // new one on the last (same as a regular message's edge).
+                  if (_showControls &&
+                      !widget.isEditing &&
+                      (auxCanNext || auxCanBranch))
                     Positioned(
                       right: 0,
                       top: 0,
                       bottom: 0,
                       child: Center(
-                        child: _LateralChip(
-                          icon: Icons.add,
-                          accent: true,
-                          onPressed: widget.onBranchUser,
-                        ),
+                        child: auxCanNext && widget.onSelectVariant != null
+                            ? _LateralChip(
+                                icon: Icons.chevron_right,
+                                onPressed: () {
+                                  if (_isMobileForHaptics) {
+                                    HapticFeedback.selectionClick();
+                                  }
+                                  widget.onSelectVariant!(
+                                      m.selectedVariant + 1);
+                                },
+                              )
+                            : _LateralChip(
+                                icon: Icons.add,
+                                accent: true,
+                                onPressed: widget.onBranchUser,
+                              ),
                       ),
                     ),
                 ],
               ),
-              // 2026-07 (owner): branched aux notes (OOC) get the same
-              // variant NAVIGATION regular messages have — a compact
-              // centred `< n/N >` row, always visible when there is more
-              // than one variant (no tap-to-flash dance on the small note).
-              // The `+` that CREATES variants floats on the note's right
-              // edge above. Fill-In scenario notes BOUND to a greeting
-              // variant get NO controls (auxNoteShows* return false):
-              // those swap by swiping the greeting itself. Hidden while
-              // the inline editor is open.
-              if (!widget.isEditing &&
-                  auxNoteShowsVariantArrows(m) &&
-                  widget.onSelectVariant != null)
+              // Compact variant counter below the note — the arrows are on the
+              // sides now (Gui). Fill-In scenario notes bound to a greeting get
+              // no controls (auxNoteShows* return false). Hidden while editing.
+              if (_showControls &&
+                  !widget.isEditing &&
+                  auxHasArrows)
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _LateralChip(
-                        icon: Icons.chevron_left,
-                        onPressed: m.selectedVariant > 0
-                            ? () {
-                                if (_isMobileForHaptics) {
-                                  HapticFeedback.selectionClick();
-                                }
-                                widget
-                                    .onSelectVariant!(m.selectedVariant - 1);
-                              }
-                            : null,
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6),
-                        child: Text(
-                          '${m.selectedVariant + 1}/${m.variants.length}',
-                          style: TextStyle(
-                              color: EmberColors.textMid, fontSize: 10),
-                        ),
-                      ),
-                      _LateralChip(
-                        icon: Icons.chevron_right,
-                        onPressed: m.selectedVariant < m.variants.length - 1
-                            ? () {
-                                if (_isMobileForHaptics) {
-                                  HapticFeedback.selectionClick();
-                                }
-                                widget
-                                    .onSelectVariant!(m.selectedVariant + 1);
-                              }
-                            : null,
-                      ),
-                    ],
+                  child: Text(
+                    '${m.selectedVariant + 1}/${m.variants.length}',
+                    style: TextStyle(
+                        color: EmberColors.textMid, fontSize: 10),
                   ),
                 ),
             ],
