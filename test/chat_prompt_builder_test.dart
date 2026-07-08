@@ -475,29 +475,37 @@ void main() {
     test('empty canvas → empty string', () {
       expect(buildCreatorCanvasStateMessage(const {}, mode: 'character'), '');
     });
-    test('filled canvas → status board with filled + empty lists', () {
+    // 2026-07-08 (Gui): the develop-phase canvas is filled in ONE SHOT by the
+    // build (the old always-refreshing incremental canvas is gone), so a
+    // FILLED non-edit canvas is ALWAYS post-build — the user is refining. It
+    // must dump the FULL field text, not 80-char snippets, or the model can't
+    // review/compare its own card and stalls ("let me pull the sheet, give me
+    // a minute"). Snippet form was vestigial from the retired cascade.
+    test('filled non-edit canvas (post-build) dumps FULL field text', () {
+      final longDesc = 'A ranger with a very long backstory. ${'x' * 200}';
       final s = buildCreatorCanvasStateMessage(
-        {'name': 'Lyra', 'description': 'A ranger.'},
+        {'name': 'Lyra', 'description': longDesc},
         mode: 'character',
       );
       expect(s, contains('[PYRE RUNTIME — CANVAS STATE]'));
-      expect(s, contains('· name:'));
-      // creator-03: de-jargoned — empty fields are surfaced with neutral
-      // wording (no removed "card-done"/"block" protocol jargon).
+      // Full field text, in envelopes — NOT truncated to 80 chars.
+      expect(s, contains('===== FIELD: description ====='));
+      expect(s, contains(longDesc));
+      // The anti-stall nudge that kills "let me pull the sheet".
+      expect(s.toLowerCase(), contains('nothing to open, pull up, or fetch'));
+      // Empty required fields still surfaced neutrally.
       expect(s, contains('Not yet filled:'));
       expect(s, isNot(contains('card-done')));
       expect(s, isNot(contains('PRE-EMISSION')));
-      // not edit mode → snippet form, not FIELD envelopes.
-      expect(s, isNot(contains('===== FIELD')));
     });
     test('edit mode dumps full FIELD envelopes', () {
       final s = buildCreatorCanvasStateMessage(
         {'name': 'Lyra', 'description': 'A ranger with a long history...'},
         mode: 'edit',
       );
-      expect(s, contains('Edit mode.'));
       expect(s, contains('===== FIELD: name ====='));
       expect(s, contains('===== END FIELD: name ====='));
+      expect(s, contains('VERBATIM raw text'));
     });
   });
 
