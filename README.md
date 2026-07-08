@@ -214,15 +214,6 @@ flutter build linux --release
 
 Release signing and packaging notes: [docs/RELEASE.md](docs/RELEASE.md).
 
-## What still needs polish
-
-The README now covers the app's current 1.2 surface, but a few repo-side presentation tasks are still worth doing:
-
-- Publish/tag the 1.2 GitHub release so the Releases sidebar no longer shows 1.1.x as latest.
-- Add a short demo GIF or video for Party Mode / Creator if you want the repo to sell the app faster.
-- Keep screenshots refreshed after UI changes; the assets in `docs/readme-assets/` should be treated as release-facing.
-- Add CI badges only after the workflows are stable enough to be meaningful.
-
 ## License
 
 Pyre is licensed under AGPL-3.0. See [LICENSE](LICENSE).
