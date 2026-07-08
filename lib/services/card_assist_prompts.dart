@@ -50,8 +50,37 @@ String scopedEditVocabularyAppendix() {
   return '## VALID SCOPE NAMES (generated from the live schema — use '
       'EXACTLY these)\n\n'
       'For a CHARACTER card:\n${forMode(cs.CreatorMode.character)}\n\n'
+      'For a PERSONA:\n${forMode(cs.CreatorMode.persona)}\n\n'
       'For a SCENARIO card:\n${forMode(cs.CreatorMode.scenario)}';
 }
+
+/// Appended (together with [scopedEditVocabularyAppendix]) to a CHARACTER /
+/// PERSONA / SCENARIO architect prompt ONCE ITS CARD IS BUILT (the canvas holds
+/// a finished card). It flips the architect from "develop a new card" to
+/// "refine a finished one" — no re-proposing the build, and SURGICAL scoped
+/// edits so a targeted change never re-rolls the whole card. This gives a
+/// create session the edit architect's in-place contract without saving +
+/// reopening (Gui: "a partir de certo ponto a ficha deveria funcionar como o
+/// modo edit").
+const String kPostBuildRefineGuidance = '''
+## THE CARD IS BUILT — REFINE IT SURGICALLY
+
+The full card is shown in the CANVAS STATE. From here you are REFINING a
+finished card, not developing a new one:
+- Do NOT re-run the "should I build it?" proposal gate — the card already
+  exists. Just make the change the user asks for.
+- When the user asks to change specific field(s), confirm in ONE short line,
+  then emit a SCOPED trigger naming EXACTLY those fields (use the names under
+  "VALID SCOPE NAMES" below): e.g. `[[BUILD_SHEET: first_mes]]` or
+  `[[BUILD_SHEET: personality, tags]]`. Only those regenerate — every other
+  field, and every untouched Description section, is kept BYTE-FOR-BYTE.
+- Use a bare `[[BUILD_SHEET]]` ONLY when the user really wants a broad,
+  whole-card rewrite.
+- If the user just asks you to REVIEW or LIST what's wrong, do that inline from
+  the CANVAS STATE — don't build anything until they ask you to apply a change.
+- Never say a change is done unless you emitted a trigger and the build ran;
+  writing a "fixed" version in chat does NOT touch the saved card.
+''';
 
 /// The conversational guide for the CHARACTER architect: drives the
 /// Phase-1 back-and-forth that develops a character idea with the user.

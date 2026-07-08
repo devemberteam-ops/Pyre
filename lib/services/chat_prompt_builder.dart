@@ -1395,6 +1395,7 @@ String creatorArchitectPrompt({
   String? scenarioPrompt,
   String? editPrompt,
   String addendum = '',
+  bool cardBuilt = false,
 }) {
   final String base;
   switch (mode) {
@@ -1443,8 +1444,16 @@ String creatorArchitectPrompt({
   // scope-name vocabulary for the scoped `[[BUILD_SHEET: …]]` marker —
   // appended at assembly (also on top of a user-forked edit prompt) so it can
   // never drift from the schema.
+  // 2026-07-08 (Gui, Phase 2): a CREATE architect (character/persona/scenario)
+  // gets the SAME scope vocabulary PLUS the surgical-refine guidance ONCE ITS
+  // CARD IS BUILT (`cardBuilt`) — so a post-build refine edits in place,
+  // field-by-field, instead of re-rolling the whole card. Develop-phase
+  // (cardBuilt=false) stays untouched.
   if (mode == 'edit') {
     prompt = '$prompt\n\n${scopedEditVocabularyAppendix()}';
+  } else if (cardBuilt) {
+    prompt = '$prompt\n\n$kPostBuildRefineGuidance\n\n'
+        '${scopedEditVocabularyAppendix()}';
   }
   // Wave CY.18.101: flow is always freeform now, so the freeform appendix
   // applies to every block-mode session (character or scenario).
@@ -1635,6 +1644,7 @@ List<ChatTurn> buildCreatorArchitectTurns({
   String addendum = '',
   String? systemPromptOverride,
   String trailingUserTurn = '',
+  bool? cardBuilt,
 }) {
   final architectPrompt = systemPromptOverride ??
       creatorArchitectPrompt(
@@ -1643,6 +1653,9 @@ List<ChatTurn> buildCreatorArchitectTurns({
         scenarioPrompt: scenarioPrompt,
         editPrompt: editPrompt,
         addendum: addendum,
+        // Default to reading the canvas so callers that don't pass it still get
+        // the post-build refine behaviour; an explicit value wins (tests).
+        cardBuilt: cardBuilt ?? creatorCanvasIsBuilt(canvas),
       );
   final canvasState = buildCreatorCanvasStateMessage(canvas, mode: mode);
   final systemMsg =

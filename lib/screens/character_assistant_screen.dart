@@ -1114,11 +1114,13 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     // current card forward (edit framing) and only changes what was asked.
     final refining =
         _isEditSession(session) || creatorCanvasIsBuilt(_sessionCanvas(store));
-    // Scoped (surgical, byte-verbatim) edits stay gated to real edit sessions
-    // for now — they need the scope-name vocabulary in the prompt, which only
-    // the edit architect carries. Post-build create refines still carry forward
-    // via `existing` below; a full (non-scoped) rebuild that PRESERVES fields.
-    final scoped = _isEditSession(session) &&
+    // Phase 2 (Gui, 2026-07-08): a post-build create refine can now edit
+    // SURGICALLY too — the architect carries the scope-name vocabulary once its
+    // card is built (`cardBuilt` in creatorArchitectPrompt), so a scoped
+    // `[[BUILD_SHEET: field]]` regenerates only that field and keeps the rest
+    // byte-verbatim, exactly like an edit session. Gate on `refining` (edit
+    // session OR built canvas); a bare marker still does a carry-forward rebuild.
+    final scoped = refining &&
         targetKeys != null &&
         cs.keysAreScopedEditable(targetKeys, mode);
     // Scope reaches INTO the Description (Gui: "esperava que Description

@@ -471,6 +471,49 @@ void main() {
     });
   });
 
+  // Phase 2 (Gui): once a create session's card is BUILT, the architect refines
+  // it SURGICALLY (scoped [[BUILD_SHEET: field]]) — same as edit mode, in-place.
+  group('creatorArchitectPrompt — post-build surgical refine (cardBuilt)', () {
+    test('scope vocabulary now covers persona (not just character/scenario)',
+        () {
+      expect(scopedEditVocabularyAppendix().toUpperCase(), contains('PERSONA'));
+    });
+    test('character, cardBuilt=false → NO scope vocab / no refine guidance', () {
+      final p = creatorArchitectPrompt(mode: 'character', cardBuilt: false);
+      expect(p, isNot(contains('VALID SCOPE NAMES')));
+      expect(p, isNot(contains('THE CARD IS BUILT')));
+    });
+    test('character, cardBuilt=true → scope vocab + surgical refine guidance',
+        () {
+      final p = creatorArchitectPrompt(mode: 'character', cardBuilt: true);
+      expect(p, contains('VALID SCOPE NAMES'));
+      expect(p, contains('THE CARD IS BUILT'));
+      expect(p, contains('[[BUILD_SHEET:'));
+    });
+    test('persona + scenario, cardBuilt=true → also get it', () {
+      expect(creatorArchitectPrompt(mode: 'persona', cardBuilt: true),
+          contains('THE CARD IS BUILT'));
+      expect(creatorArchitectPrompt(mode: 'scenario', cardBuilt: true),
+          contains('VALID SCOPE NAMES'));
+    });
+    test('edit mode keeps scope vocab regardless of cardBuilt', () {
+      expect(creatorArchitectPrompt(mode: 'edit'), contains('VALID SCOPE NAMES'));
+      // Edit mode does NOT double up on the post-build guidance block.
+      expect(creatorArchitectPrompt(mode: 'edit'),
+          isNot(contains('THE CARD IS BUILT')));
+    });
+    test('buildCreatorArchitectTurns forwards cardBuilt into the system turn',
+        () {
+      final turns = buildCreatorArchitectTurns(
+        canvas: {'description': 'A built card body.'},
+        conversation: const [],
+        mode: 'character',
+        cardBuilt: true,
+      );
+      expect(turns.first.content, contains('THE CARD IS BUILT'));
+    });
+  });
+
   group('creatorCanvasIsBuilt', () {
     test('empty / develop-phase canvas is NOT built', () {
       expect(creatorCanvasIsBuilt(const {}), isFalse);
