@@ -74,6 +74,13 @@ sampler controls, and a broad polish and data-integrity pass.
 - **Self-host on Windows without Docker.** The headless hub also ships as a
   plain Windows program — a folder you unzip and start by double-clicking a
   `.bat` (no Docker, no install). Same server, same in-app provider setup.
+- **BotBooru embed now works on the self-host web build.** Browsing BotBooru
+  inside Discover (with "Import this card") — previously only when paired to a
+  desktop hub — now also works when you open the web app served by the Docker /
+  Windows headless hub. The hub runs BotBooru on a separate origin (port
+  `6768` by default, `PYRE_BBX_PORT`) so its scripts stay walled off from the
+  app. Docker publishes it automatically; if you wrote your own `docker run`,
+  add `-p 6768:6768` (import-by-URL keeps working without it).
 
 ### Changed (self-host)
 
