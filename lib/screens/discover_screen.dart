@@ -276,6 +276,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   WebViewController? _controller;
   bool _busy = false;
   String? _status;
+
+  /// Cached AppStore so dispose() can clear the full-width flag without a
+  /// (defunct-context) `context.read`. Set only on the web build. See the
+  /// kIsWeb branch in initState.
+  AppStore? _fullWidthStore;
   /// Whether the embedded webview is currently shown. Starts false so the
   /// user sees the "how to import" landing screen first instead of being
   /// dropped straight into a third-party site they may not know is the
@@ -305,7 +310,35 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     super.initState();
     if (_supportsWebview) {
       _initController();
+    } else if (kIsWeb) {
+      // The web BotBooru embed is shown unconditionally (no landing/toggle),
+      // so it never went through _setShowWebview and therefore never asked the
+      // shell to drop its ~1100px content-width cap — the embed rendered
+      // centered with empty bands and did not grow with the window. Request
+      // full width once here, mirroring what the native/Windows webview embeds
+      // get. Post-frame so we don't mutate the store during the first build;
+      // the shell scopes the flag to `activeTab == 'discover'`, and dispose()
+      // clears it via the cached store.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        try {
+          final store = context.read<AppStore>();
+          _fullWidthStore = store;
+          store.setWantsFullWidthContent(true);
+        } catch (_) {
+          // Provider lookup can fail during teardown — best-effort.
+        }
+      });
     }
+  }
+
+  @override
+  void dispose() {
+    // Release the full-width request so no other tab inherits it (web only;
+    // _fullWidthStore is null on every other build). Uses the cached store —
+    // never context.read in dispose (the element is already defunct).
+    _fullWidthStore?.setWantsFullWidthContent(false);
+    super.dispose();
   }
 
   void _initController() {
