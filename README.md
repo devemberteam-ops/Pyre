@@ -23,15 +23,39 @@
 
 ---
 
-## Status
-
-**Pyre 1.2 is the first non-beta release line.** The app is still moving quickly, but the public positioning has changed: Pyre is no longer "a public beta to try." It is a usable, local-first roleplay client with active hardening, documentation, and release work.
-
-Pyre is open source under AGPL-3.0. It hosts no model, stores no cloud library, and does not moderate or proxy your content through an Ember Team server.
-
 ## What Pyre is
 
-Pyre is a cross-platform frontend for AI roleplay. You connect a model provider, import or build characters, choose personas and presets, and run scenes through a client designed for roleplay mechanics rather than generic chatbot transcripts.
+Pyre is a chat client for AI roleplay. You point it at whatever model provider you want -- OpenRouter, Venice, NanoGPT, Anthropic, a local server, anything OpenAI-compatible -- and Pyre handles the rest: characters, personas, group chats, branching, long-term memory, lorebooks, prompt presets, an AI-powered Creator, and a built-in window into the [BotBooru](https://botbooru.com) card community.
+
+No account. No Pyre cloud chat database. No middle-man model proxy. Your data lives on your machine unless you choose to export, sync, or send prompts to a provider you configured.
+
+It runs on **Android, Windows, Linux, and the web/PWA**, with a library that can move between phone and desktop through local backup, import/export, or your own paired hub.
+
+## Why Pyre exists
+
+We're roleplayers. For years the serious tooling meant one of two things: a powerful-but-punishing desktop app that was never designed for the phone -- where a lot of us actually read and write -- or a polished hosted site that owns your chats, owns your cards, and can change the rules whenever it wants.
+
+Pyre is the middle path we wanted: a calm roleplay frontend that feels good on a phone, grows into a deeper desktop tool when you need it, and keeps your characters, worlds, and conversations under your control.
+
+What that means in practice:
+
+- **Mobile-first, not mobile-afterthought.** The interface is built for a thumb first, then widened for desktop.
+- **Your model, your rules.** Pyre connects to providers and local servers; it does not host or moderate model output itself.
+- **Your library stays yours.** Characters, chats, personas, lorebooks, presets, regex rules, settings, and Creator drafts live locally.
+- **The card community is closer.** BotBooru / Discover can be browsed from inside Pyre where the platform supports safe embedding.
+- **Clean for newcomers, deep for power users.** You can start with a character and a key, then dig into presets, lore, regex, checkpoints, and sync when you want the knobs.
+
+## What Pyre does
+
+Pyre is designed around roleplay mechanics instead of generic chatbot transcripts. You can:
+
+- Import Tavern-style character cards or build new characters with the Creator.
+- Chat one-on-one, in groups, or in Party Mode with a whole cast.
+- Play as one persona or a roster of personas.
+- Branch, retry, continue, edit, delete, and compare message variants.
+- Use lorebooks, checkpoints, Live Sheet, Script direction, and prompt presets to keep long stories coherent.
+- Browse and import cards/lorebooks from BotBooru and other supported sources.
+- Export, back up, restore, and sync your library without handing it to a hosted Pyre account.
 
 Core principles:
 
@@ -41,7 +65,13 @@ Core principles:
 - **Mobile-first, desktop-capable.** Android is the primary mobile surface; desktop and web/PWA use wider layouts where useful.
 - **Interoperable.** Pyre reads and writes Tavern-style cards and imports from the SillyTavern ecosystem.
 
-## Highlights in 1.2
+## Current status
+
+**Pyre 1.2 is the first non-beta release line.** The app is still moving quickly, but the public positioning has changed: Pyre is no longer "a public beta to try." It is a usable, local-first roleplay client with active hardening, documentation, and release work.
+
+Pyre is open source under AGPL-3.0. It hosts no model, stores no cloud library, and does not moderate or proxy your content through an Ember Team server.
+
+## New in 1.2
 
 - **Group chats and Party Mode.** Chat with a cast one speaker at a time, or let the whole group answer as one narrated scene.
 - **Persona party.** Your side can be a roster too: play as a duo or crew of personas in one chat.
