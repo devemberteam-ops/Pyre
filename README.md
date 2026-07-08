@@ -1,166 +1,201 @@
 <div align="center">
 
-# 🔥 Pyre
+# Pyre
 
-### The roleplay frontend that respects you — your device, your models, your characters.
+### Private, local-first AI roleplay for characters, worlds, and long-running stories.
 
-**Bring your own AI. Pyre is the interface that gets out of the way.**
+**Bring your own model. Keep your cards and chats on your devices. Pyre handles the roleplay layer around them.**
 
-*Mobile-first · cross-platform · local-first · open source · BYOK*
-
-[Features](#what-pyre-does) · [Download](#get-started-beta) · [Privacy](#privacy-by-design) · [Build from source](#build-from-source) · [Why we built this](#why-pyre-exists)
+[Website](https://pyrechat.app) | [Download](https://github.com/devemberteam-ops/Pyre/releases/latest) | [Changelog](CHANGELOG.md) | [Privacy](docs/privacy-policy.md) | [Terms](docs/terms-of-service.md)
 
 </div>
 
----
+<p align="center">
+  <img src="docs/readme-assets/desktop-chat.webp" alt="Pyre chat running in a wide desktop layout" width="900">
+</p>
 
-> **Pyre is in public beta.** It's stable enough that we run it every day, but you'll find rough edges — that's what the beta is for. Tell us what breaks.
-
-Pyre is a chat client for AI roleplay. You point it at whatever model provider you want — OpenRouter, Venice, NanoGPT, a local server, anything OpenAI-compatible — and Pyre handles the rest: characters, group chats, branching, long-term memory, an AI-powered card creator, lorebooks, prompt presets, and a built-in window into the [BotBooru](https://botbooru.com) card community. No account. No middle-man server. Your data lives on your machine.
-
-It runs on **Android, Windows, Linux, and the web**, and the same library can **sync between your phone and your desktop** over your own network.
-
----
-
-## Why Pyre exists
-
-We're roleplayers. For years the serious tooling meant one of two things: a powerful-but-punishing desktop app that was never designed for the phone — where most of us actually read and write — or a polished hosted site that owns your chats, owns your cards, and can change the rules whenever it wants.
-
-Then the rules changed. Recent policy shifts at some of the big platforms started sanding the edges off the thing we were there for. And the "just use a frontend" answer came with its own tax: your cards trapped in one app, no shared library, and the immersion-killing ritual of *find a card → download it → figure out how to import it → repeat.*
-
-So we built the frontend we wanted:
-
-- **Mobile-first, not mobile-afterthought.** The whole UI is designed for a thumb, then scaled up to the desktop — not the reverse.
-- **Nothing is hosted but by you.** Your characters and your chats are your business. They sit on your device, full stop. You bring the model; we never see a single message.
-- **The marketplace comes to you.** Pyre integrates directly with **BotBooru**, the community card hub. On supported embedded platforms you can browse and one-tap-import without ever leaving the app.
-- **No sanitizing.** Pyre doesn't host, generate, or moderate content. What you write and what your model says is between the two of you.
-- **Clean for newcomers, deep for power users.** A calm default experience, with every knob underneath for people who live in this stuff.
-
-We're **Ember Team** — a small, independent group. We've put months into Pyre, and we're keeping our names off it for now: judge the software, not us.
+<p align="center">
+  <img src="docs/readme-assets/desktop-library.webp" alt="Pyre character library on desktop" width="270">
+  <img src="docs/readme-assets/desktop-creator.webp" alt="Pyre Creator on desktop" width="270">
+  <img src="docs/readme-assets/android-chat.webp" alt="Pyre chat on Android" width="135">
+  <img src="docs/readme-assets/botbooru-discover.webp" alt="BotBooru inside Pyre Discover" width="135">
+</p>
 
 ---
 
-## What Pyre does
+## Status
 
-### 💬 Chat & roleplay
-- **Live token streaming** with reasoning-model support (hides `<think>` scratchpads automatically).
-- **Branching that doesn't destroy history.** Reroll any reply; rewrite any of your own messages — and swiping back to an old variant brings its *entire* downstream timeline back with it. A full **chat tree** view lets you navigate the branches visually.
-- **Group chats** — multiple characters in one scene, with a responder chip-row to choose who speaks next.
-- **In-character tools** — Impersonate-me drafts your next turn in your persona's voice; OOC asides, scene direction, and slash commands (`/ooc`, `/scene`, `/sys`, …).
+**Pyre 1.2 is the first non-beta release line.** The app is still moving quickly, but the public positioning has changed: Pyre is no longer "a public beta to try." It is a usable, local-first roleplay client with active hardening, documentation, and release work.
 
-### 🤖 AI Character & Scenario Creator
-- Describe a vibe; Pyre's **architect** builds a complete, richly-detailed `chara_card_v2` card with you — appearance, psychology, lore, scenario, opening message, dialogue examples, tags.
-- **Self-healing generation**: a convergent engine keeps working until the card is genuinely complete, recovers from truncation on its own, and runs a **final QA review pass** over the finished card.
-- **Scenario mode** builds whole *settings* — an omniscient narrator, world rules, and a real recurring cast of NPCs (each a person, not a name).
-- **Vision**: attach a reference image and a vision model profiles it as authoritative context.
-- **Fork the brain**: the architect's prompts ship as an editable preset — keep the tuned default, or copy it and make the creator yours.
+Pyre is open source under AGPL-3.0. It hosts no model, stores no cloud library, and does not moderate or proxy your content through an Ember Team server.
 
-### 🃏 Characters, personas & cards
-- Full **chara_card_v2** support — import/export PNG & JSON, round-tripping fields other apps drop.
-- **Personas** for *you*, with a per-chat switcher.
-- **Per-chat character snapshots**: editing a card never silently rewrites your old conversations.
-- Organize with folders, tags, favorites, and search.
+## What Pyre is
 
-### 📖 Lorebooks, presets & memory
-- **Lorebooks / World Info** with keyword triggering, bound to characters, personas, or individual chats (with per-chat overrides).
-- **Prompt presets** with optional per-field sampling overrides (SillyTavern-style) and template tokens — plus a tuned, NSFW-friendly default.
-- **Long-term memory**: a branch-aware auto-summarizer keeps a continuous narrative recap in context, so the model never forgets chapter one by chapter ten.
+Pyre is a cross-platform frontend for AI roleplay. You connect a model provider, import or build characters, choose personas and presets, and run scenes through a client designed for roleplay mechanics rather than generic chatbot transcripts.
 
-### 🔌 Providers & reliability
-- **BYOK** — any OpenAI-compatible provider; auto-detect models and context-window size.
-- **Smart fallback**: if a provider fails *or* refuses, Pyre offers (never silently) to retry on your next configured provider — and learns which models refuse what.
-- Leaked API keys in provider error messages are scrubbed before they ever hit your screen.
+Core principles:
 
-### 🌐 BotBooru / Discover
-- An allowlisted window into **BotBooru** (and other trusted card hubs) with **one-tap PNG import** on embedded platforms — the host is verified before anything downloads.
+- **Bring your own key/provider.** Use OpenAI-compatible endpoints, Anthropic-native API on native apps, hosted providers, community proxies, or local servers.
+- **Local-first library.** Characters, chats, personas, lorebooks, presets, regex rules, settings, and Creator drafts live on your device unless you export or sync them.
+- **No Pyre cloud account.** There is no hosted Pyre chat database or central character library.
+- **Mobile-first, desktop-capable.** Android is the primary mobile surface; desktop and web/PWA use wider layouts where useful.
+- **Interoperable.** Pyre reads and writes Tavern-style cards and imports from the SillyTavern ecosystem.
 
-### 🔄 Sync & desktop
-- **Cross-device sync** — run the desktop app as a hub, pair your phone with a QR code, and your library follows you. The web build can even run *through* your desktop so your API key never leaves it.
-- **Desktop niceties** — system tray & close-to-tray, single-instance, window-state memory, remappable keyboard shortcuts + a command palette, and native "card's ready" toasts.
+## Highlights in 1.2
 
-### 💾 Backup & import
-- Full **Backup & Restore** (keys stripped by default), **SillyTavern preset import**, and lorebook import/export.
+- **Group chats and Party Mode.** Chat with a cast one speaker at a time, or let the whole group answer as one narrated scene.
+- **Persona party.** Your side can be a roster too: play as a duo or crew of personas in one chat.
+- **Creator refresh.** Build or edit characters, scenarios, personas, and lorebooks through a structured Creator with review-before-save.
+- **Surgical Edit with AI.** Edit specific fields or sections without rewriting the whole card.
+- **Library references.** Attach existing characters, personas, or lorebooks as Creator references.
+- **Checkpoints as chapters.** Long chats get branch-aware summary checkpoints that read like story chapters.
+- **Live Sheet and Script.** Track current scene state and future story direction.
+- **Lorebooks in the library.** World Info is treated like first-class library content.
+- **Preset prefill and sampler passthrough.** More control over reply starts and provider sampling options.
+- **Self-host and web hub improvements.** Browser clients can use a paired hub without storing API keys.
+- **BotBooru Discover embed.** Browse trusted card/lorebook hubs inside Pyre where the platform supports safe embedding.
 
----
+## Features
+
+### Chat and roleplay
+
+- Live token streaming, stop, retry, regenerate, continue, edit, delete, and copy.
+- Message variants and non-destructive branching.
+- Group chats, Party Mode, persona party, and per-message attribution snapshots.
+- Alternate greetings and Fill-In opener for replaying scenes from a new starting beat.
+- Slash commands for OOC, scene notes, system inserts, clear, help, and Script direction.
+- Impersonate and Guide my message for drafting your next turn.
+- Reasoning-model output handling with hidden-by-default `<think>` content.
+
+### Characters and personas
+
+- Full `chara_card_v2` import/export support.
+- PNG card import/export, JSON card import, embedded lorebook handling, and opaque extension round-trip.
+- Personas with avatars, descriptions, dialogue examples, and bound lorebooks.
+- Convert any character into a persona with "Add as persona."
+- Folders, tags, favorites, search, duplicate, mini-gallery, avatar recrop, and fullscreen avatar view.
+
+### Creator
+
+- Character architect, scenario architect, persona creator, and lorebook builder.
+- Structured build passes with visible review before saving.
+- Edit existing characters/personas/cards with AI and save in place or as copy.
+- Attach library assets, card files, documents, and image references.
+- Vision-provider routing for image references.
+- Creator presets with locked defaults and editable forks.
+
+### Lore, memory, and control
+
+- Lorebooks / World Info with keywords, secondary keys, constant entries, probability, order, and scan diagnostics.
+- Character-bound, persona-bound, chat-attached, and embedded lorebooks.
+- Checkpoints, Live Sheet, and Script for long-scene continuity.
+- Flat and modular prompt presets.
+- Macros/template tokens, including `{{summary}}`.
+- Regex find/replace rules with SillyTavern import support.
+
+### Providers and reliability
+
+- OpenAI-compatible endpoints and Anthropic-native direct calls on native apps.
+- Localhost/LAN provider mode with warmer, more patient timeouts.
+- Model browsing, connection testing, duplicate providers, and extra params.
+- Smart fallback when a provider fails, returns empty text, or appears to refuse.
+- Learned context limits and retry after context overflow.
+- Local LLM debug log viewer for troubleshooting.
+
+### Import, export, backup, and sync
+
+- Import cards from file, URL, BotBooru, Chub/CharacterHub, RisuRealm, and direct `.png` / `.json` links.
+- Import SillyTavern presets, lorebooks, regex rules, personas, and supported chats through a full ST backup `.zip`.
+- Export characters/personas as Tavern-compatible PNGs.
+- Export chats as SillyTavern JSONL or Pyre JSON archive.
+- Full backup/restore with images embedded and keys excluded by default.
+- LAN sync through a desktop or self-host hub.
 
 ## Platforms
 
-| | Android | Windows | Linux | Web |
+| Feature area | Android | Windows | Linux / macOS | Web/PWA |
 |---|:---:|:---:|:---:|:---:|
-| Chat, characters, creator, lorebooks, memory | ✅ | ✅ | ✅ | ✅ |
-| BotBooru / Discover browser | embedded | WebView2 | external | via desktop hub |
-| Acts as a sync **hub** | — | ✅ | ✅ | — |
-| Syncs **to** a hub | ✅ | ✅ | — | ✅ (via desktop) |
-| Tray / shortcuts / window state | — | ✅ | ✅ | — |
+| Chat, characters, personas, presets, lorebooks, memory, Creator | Yes | Yes | Yes | Via hub |
+| Group chat, Party Mode, persona party, Guide, regex rules | Yes | Yes | Yes | Yes |
+| Direct BYOK provider setup | Yes | Yes | Yes | No, uses hub |
+| Anthropic-native direct API | Yes | Yes | Yes | No |
+| BotBooru / Discover | Embedded | WebView2 | External browser | Embedded via hub proxy |
+| Generation keep-alive | Yes | No | No | No |
+| Tray, shortcuts, window state, desktop toasts | No | Yes | Yes | No |
+| LAN/web hub | No | Yes | Yes | No |
+| Self-host server | No | Docker / Windows headless | Docker | Connects to it |
+| Browser stores API keys | No | No | No | Never |
 
----
+## Install
 
-## Get started (beta)
+Download builds from the [latest release](https://github.com/devemberteam-ops/Pyre/releases/latest).
 
-> Pyre is **bring-your-own-key**: it does nothing until you add a provider. You'll need an API key from an OpenAI-compatible provider (OpenRouter, Venice, NanoGPT, a local server, etc.).
+### Android
 
-**Android**
-1. Download `pyre-android.apk` from the [latest release](../../releases).
-2. Allow installs from your browser/files app, tap the APK.
-3. Open Pyre → **More → API Connections** → add your provider + key.
+1. Download the Android APK.
+2. Allow install from that source if Android asks.
+3. Open Pyre and add a provider under **More -> API Connections**.
 
-**Windows**
-1. Download the `pyre-windows-x64.zip` from the [latest release](../../releases) and unzip it (keep the whole folder together — the `.exe` needs its sibling DLLs and `data/`).
-2. Run `pyre.exe`. Windows SmartScreen may warn on an unsigned app — **More info → Run anyway** (we don't yet pay for code-signing; the source is right here).
-3. **More → API Connections** → add your provider + key.
+### Windows
 
-**Linux / Web** — build from source for now (see below); prebuilt Linux binaries land via CI shortly.
+1. Download the Windows zip and extract it.
+2. Keep the folder together; the executable needs its sibling files.
+3. Run `pyre.exe`.
+4. If SmartScreen warns, choose **More info -> Run anyway** if you trust the build.
 
-**First-run tip:** for the AI Creator, a DeepSeek-family or other uncensored model gives the best results — the model matters more than the prompt. Recommendations live in-app under **More → Character Creator**.
+### Linux / macOS
 
----
+Use the desktop build when available, or build from source. Discover may open in the external browser on non-Windows desktops.
 
-## Privacy by design
+### Web / PWA
 
-Pyre is **local-first and BYOK**. Your messages travel exactly one place: from your device to the provider *you* chose, over HTTPS.
+The web app is served by a desktop or self-host hub. Pair the browser with your hub; the browser does not store provider keys.
 
-| Data | Where it lives |
-|------|----------------|
-| Characters, chats, lorebooks, presets, personas, settings | App-private storage on your device |
-| API keys | Your OS secure store (Android Keystore / Windows credential store) |
-| Sync traffic (if you enable it) | Directly between your own devices on your own network |
+### Self-host hub
 
-- **No analytics, no telemetry, no crash reporting.** Pyre collects nothing and phones home for nothing — no usage stats, no event counts, no device ID. Nothing about how you use Pyre ever leaves your device. (If something breaks, a local error log stays on your disk for *you* to export — it's never sent anywhere.)
-- **Backups strip your API keys** unless you explicitly opt in (behind a confirmation).
-- **No cloud account. No content hosting. No moderation layer.**
+Pyre also has a headless hub/server path for users who want a trusted LAN/VPS hub. Keep public deployments behind your own TLS reverse proxy or private tunnel.
 
-Full text: [Privacy Policy](docs/privacy-policy.md) · [Terms of Service](docs/terms-of-service.md)
+## Privacy
 
----
+Pyre collects nothing by default.
+
+- No account.
+- No Pyre cloud chat database.
+- No analytics, telemetry, ad IDs, or crash uploads.
+- API keys live in OS-secure storage on native apps.
+- Browser/PWA clients never store provider keys.
+- Backups exclude keys unless you explicitly include the Connections category and confirm the warning.
+
+What can leave the device: provider API calls you configure, sync traffic to devices/hubs you pair, browser traffic to your own hub, update checks, Discover browsing, and files you explicitly export/share.
 
 ## Build from source
 
-Prereqs: Flutter ≥ 3.12, and the toolchain for your target (Android SDK + Java 17 for APK; Visual Studio C++ for Windows; standard build-essential for Linux).
+Prerequisites: Flutter, the platform toolchain for your target, and Java/Android SDK for Android builds.
 
 ```bash
 flutter pub get
-flutter run                     # debug, on any connected device
-flutter test                    # unit tests
-flutter build apk --release     # Android
-flutter build windows --release # Windows
-flutter build linux --release   # Linux
+flutter test
+flutter run
+
+flutter build apk --release
+flutter build windows --release
+flutter build linux --release
 ```
 
-Release signing & packaging: [docs/RELEASE.md](docs/RELEASE.md).
+Release signing and packaging notes: [docs/RELEASE.md](docs/RELEASE.md).
 
----
+## What still needs polish
 
-## Status & roadmap
+The README now covers the app's current 1.2 surface, but a few repo-side presentation tasks are still worth doing:
 
-Public **beta**. Core experience is solid; we're hardening edges and listening. On the near horizon: prebuilt Linux/web artifacts via CI, hardening the LAN sync security model before we promote it, and continued Creator tuning.
-
-Found a bug or have an idea? **Open an issue** — that's the fastest way to shape the beta.
-
----
+- Publish/tag the 1.2 GitHub release so the Releases sidebar no longer shows 1.1.x as latest.
+- Add a short demo GIF or video for Party Mode / Creator if you want the repo to sell the app faster.
+- Keep screenshots refreshed after UI changes; the assets in `docs/readme-assets/` should be treated as release-facing.
+- Add CI badges only after the workflows are stable enough to be meaningful.
 
 ## License
 
-Pyre is **open source**, licensed under **AGPL-3.0** — copyleft, so any hosted fork stays open. See the [`LICENSE`](LICENSE) file for the full text.
+Pyre is licensed under AGPL-3.0. See [LICENSE](LICENSE).
 
 Copyright (C) 2026 Ember Team.
 
@@ -168,6 +203,6 @@ Copyright (C) 2026 Ember Team.
 
 <div align="center">
 
-**Built by Ember Team.** · Integrates with [BotBooru](https://botbooru.com). · Not affiliated with any model provider — Pyre hosts no models and no content.
+Built by Ember Team. Integrates with [BotBooru](https://botbooru.com) as a community source. Not affiliated with model providers; Pyre hosts no models and no content.
 
 </div>
