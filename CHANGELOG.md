@@ -71,6 +71,16 @@ sampler controls, and a broad polish and data-integrity pass.
   once and every connected device chats through it. The key is stored on the
   server, pairing-gated, and never shown back. (Env config still works and
   stays the default.)
+- **Self-host on Windows without Docker.** The headless hub also ships as a
+  plain Windows program — a folder you unzip and start by double-clicking a
+  `.bat` (no Docker, no install). Same server, same in-app provider setup.
+
+### Changed (self-host)
+
+- The self-host hub's default port is now **6767** (was 8080) — the same port
+  the desktop app's built-in hub uses, and it avoids clashing with other
+  services that grab 8080. If you were reaching your hub on `:8080`, use
+  `:6767` (or set `PYRE_PORT` back to 8080).
 - **In-app debug log viewer.** Read the raw LLM request/response log inside the
   app (More → Storage → Developer).
 
