@@ -26,6 +26,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../services/hub_provider.dart';
 import '../services/lan_client.dart';
 import '../services/sync_engine.dart';
 import '../services/sync_manifest.dart';
@@ -55,11 +56,28 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
   /// the button shows a spinner + is disabled (no double-fire).
   bool _checking = false;
 
+  /// 2026-07-07 (Gui): true when the paired hub is a HEADLESS self-host
+  /// (Docker) — detected by the presence of /admin/provider. A headless hub
+  /// isn't a "PC" with an app-side provider store, so the "pull providers &
+  /// keys from your PC" toggle and the "turn on the LAN server on the PC" help
+  /// text don't apply there (its provider is set in API Connections, which
+  /// pushes to the hub). Null until the probe resolves.
+  bool? _headlessHub;
+
   @override
   void initState() {
     super.initState();
     LanClient.instance.load();
     LanClient.instance.addListener(_onChange);
+    _probeHub();
+  }
+
+  Future<void> _probeHub() async {
+    if (!LanClient.instance.isPaired) return;
+    final res = await fetchHubProvider();
+    if (!mounted) return;
+    // supported == true → the /admin/provider endpoint exists → headless hub.
+    setState(() => _headlessHub = res.supported);
   }
 
   @override
@@ -187,20 +205,31 @@ class _LanConnectScreenState extends State<LanConnectScreen> {
             _syncStatusCard(),
             const SizedBox(height: 12),
             ..._pairedSection(c),
-            const SizedBox(height: 12),
-            _providerSyncCard(store),
+            // The "pull providers + keys from your PC" toggle is desktop-hub
+            // only — a headless self-host has no app-side provider store, and
+            // its provider is set in API Connections (which pushes to the hub).
+            if (_headlessHub != true) ...[
+              const SizedBox(height: 12),
+              _providerSyncCard(store),
+            ],
             const SizedBox(height: 12),
             _conflictModeCard(store),
           ] else
             ..._unpairedSection(),
           const SizedBox(height: 20),
           Text(
-            'How this works:\n'
-            'Pyre LAN sync lets your phone + browser tabs read and write the '
-            'same characters, chats, personas, and lorebooks as your PC. '
-            'Everything stays on your Wi-Fi — no cloud, no relay. The PC '
-            'must have the server turned on (More → Network → Run Pyre LAN '
-            'server) before you pair.',
+            _headlessHub == true
+                ? 'How this works:\n'
+                    'This browser reads and writes the same characters, chats, '
+                    'personas, and lorebooks as the server you\'re connected to. '
+                    'The server (a self-host / Docker hub) is always on — set its '
+                    'AI provider in More → API Connections.'
+                : 'How this works:\n'
+                    'Pyre LAN sync lets your phone + browser tabs read and write '
+                    'the same characters, chats, personas, and lorebooks as your '
+                    'PC. Everything stays on your Wi-Fi — no cloud, no relay. The '
+                    'PC must have the server turned on (More → Network → Run Pyre '
+                    'LAN server) before you pair.',
             style: TextStyle(
               color: EmberColors.textMid,
               fontSize: 12,
