@@ -489,6 +489,12 @@ void main() {
       expect(p, contains('VALID SCOPE NAMES'));
       expect(p, contains('THE CARD IS BUILT'));
       expect(p, contains('[[BUILD_SHEET:'));
+      // The IRON RULE: confirming an apply WITHOUT a trigger is forbidden, and
+      // an unmatched field name must NOT freeze the model (map / bare marker) —
+      // this is what let "Adicionando o World Notes agora" end with no build.
+      expect(p, contains('IRON RULE'));
+      expect(p.toLowerCase(), contains('does not match a listed field'));
+      expect(p, contains('creator_notes'));
     });
     test('persona + scenario, cardBuilt=true → also get it', () {
       expect(creatorArchitectPrompt(mode: 'persona', cardBuilt: true),
