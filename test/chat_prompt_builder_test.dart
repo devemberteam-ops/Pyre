@@ -471,6 +471,19 @@ void main() {
     });
   });
 
+  group('creatorCanvasIsBuilt', () {
+    test('empty / develop-phase canvas is NOT built', () {
+      expect(creatorCanvasIsBuilt(const {}), isFalse);
+      expect(creatorCanvasIsBuilt({'name': 'Lilac'}), isFalse);
+      expect(creatorCanvasIsBuilt({'description': '   '}), isFalse);
+    });
+    test('a canvas with a filled description IS built (post-build refine)', () {
+      expect(
+          creatorCanvasIsBuilt({'description': 'A silver-haired ranger…'}),
+          isTrue);
+    });
+  });
+
   group('buildCreatorCanvasStateMessage', () {
     test('empty canvas → empty string', () {
       expect(buildCreatorCanvasStateMessage(const {}, mode: 'character'), '');

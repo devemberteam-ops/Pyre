@@ -1105,6 +1105,19 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     final cs.CreatorMode? mode = _underlyingBuildMode(session);
     if (mode == null) return;
     if (_structuredBuilding || _generating) return;
+    // 2026-07-08 (Gui: "a partir de certo ponto a ficha deveria funcionar como
+    // o modo edit"). A "Build a character/persona/scenario" session is never an
+    // `_isEditSession` (that's library-opened cards only), so once its card was
+    // BUILT, a refine used to re-derive the whole card from scratch (existing
+    // stayed empty) — the user's targeted change got diluted and "nada
+    // acontecia". Treat a post-build canvas as a refine so the build carries the
+    // current card forward (edit framing) and only changes what was asked.
+    final refining =
+        _isEditSession(session) || creatorCanvasIsBuilt(_sessionCanvas(store));
+    // Scoped (surgical, byte-verbatim) edits stay gated to real edit sessions
+    // for now — they need the scope-name vocabulary in the prompt, which only
+    // the edit architect carries. Post-build create refines still carry forward
+    // via `existing` below; a full (non-scoped) rebuild that PRESERVES fields.
     final scoped = _isEditSession(session) &&
         targetKeys != null &&
         cs.keysAreScopedEditable(targetKeys, mode);
@@ -1140,7 +1153,7 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     // rebuilt Description never overwrites it (the build may still edit the
     // other top-level fields — first_mes, scenario, tags — in place).
     String foreignDescription = '';
-    if (_isEditSession(session)) {
+    if (refining) {
       final existingDesc = (_sessionCanvas(store)['description'] ?? '')
           .toString();
       existing = existingDesc.trim().isEmpty
@@ -1447,7 +1460,7 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       // never returns world#2. Carry those duplicate-suffix keys forward so the
       // edit re-render reproduces the duplicate instead of dropping it.
       final buildFields =
-          (_isEditSession(session) &&
+          (refining &&
               mode == cs.CreatorMode.scenario &&
               existing.isNotEmpty)
           ? carryForwardDuplicateTags(scopedMerged, existing)
@@ -1472,7 +1485,10 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
         rendered['description'] = curDesc;
       }
       final canvas = Map<String, dynamic>.from(_sessionCanvas(store));
-      final editing = _isEditSession(session);
+      // A post-build refine gets the SAME anti-blank protection as an edit
+      // session: a rebuilt field that comes back empty must never wipe content
+      // the card already had (`refining` covers both).
+      final editing = refining;
       rendered.forEach((k, v) {
         if (v == null) return;
         // Wave CY.18.269: in EDIT mode, never let a rebuilt field BLANK a field

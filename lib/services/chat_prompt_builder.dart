@@ -1462,6 +1462,16 @@ String creatorArchitectPrompt({
   return prompt;
 }
 
+/// True once the Creator canvas holds a BUILT card — i.e. the deterministic
+/// build has already run and populated the sheet. The build fills the canvas
+/// in one shot (the incremental develop-phase canvas was removed 2026-07-03),
+/// and every mode's build produces a Description, so a non-empty `description`
+/// is the signal. Used to make a post-build CREATE session refine like an EDIT
+/// session (carry the current card forward instead of re-deriving from
+/// scratch) — the "a partir de certo ponto, funciona como o modo edit" fix.
+bool creatorCanvasIsBuilt(Map<String, dynamic> canvas) =>
+    (canvas['description'] ?? '').toString().trim().isNotEmpty;
+
 /// Wave CY.18.210 (extracted from `_buildCanvasStateMessage`): the runtime
 /// canvas-state dump appended to the architect system prompt. PURE — the
 /// session `mode` is passed in (the screen reads it from the store; pre-
