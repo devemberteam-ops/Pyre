@@ -493,6 +493,14 @@ void main() {
       expect(s, contains(longDesc));
       // The anti-stall nudge that kills "let me pull the sheet".
       expect(s.toLowerCase(), contains('nothing to open, pull up, or fetch'));
+      // Anti-false-apply: non-edit modes must NOT be told to "rewrite in
+      // place" (that contradicts their "converse + emit the trigger, never
+      // write the sheet in chat" contract and made the model claim edits it
+      // never applied). They must be told edits take effect only via the build
+      // trigger, and that writing a fixed version in chat does not save it.
+      expect(s, isNot(contains('rewrite IN PLACE')));
+      expect(s.toLowerCase(), contains('build trigger'));
+      expect(s.toLowerCase(), contains('does not touch the saved card'));
       // Empty required fields still surfaced neutrally.
       expect(s, contains('Not yet filled:'));
       expect(s, isNot(contains('card-done')));
