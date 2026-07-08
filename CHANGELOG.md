@@ -65,6 +65,12 @@ sampler controls, and a broad polish and data-integrity pass.
 - **Web send through a paired hub.** A browser/PWA paired to a desktop or
   headless hub can now send chats through it even without its own provider
   configured.
+- **Self-host: set the server's provider from the app.** Running the Docker /
+  headless hub? Its API provider (URL, model, key) can now be configured in the
+  app (More → Server provider) instead of editing an env/compose file — set it
+  once and every connected device chats through it. The key is stored on the
+  server, pairing-gated, and never shown back. (Env config still works and
+  stays the default.)
 - **In-app debug log viewer.** Read the raw LLM request/response log inside the
   app (More → Storage → Developer).
 
