@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:http/http.dart' as http;
@@ -8,6 +9,7 @@ import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../services/chat_api.dart';
+import '../services/hub_provider.dart';
 import '../services/model_metadata.dart';
 import '../services/prompt_post_processing.dart';
 import '../services/resolvers.dart' show isProviderHostAllowed;
@@ -1259,6 +1261,19 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                   warmUp &&
                   modelCtl.text.trim().isNotEmpty) {
                 unawaited(warmUpProvider(savedProvider));
+              }
+              // 2026-07-07 (Gui): on the WEB build, chat proxies through the
+              // paired self-host hub, which needs THIS provider server-side.
+              // Configuring it here in API Connections pushes it to the hub so
+              // it "just works" — no separate screen. Silent no-op on native
+              // (kIsWeb false) or against a desktop hub (unsupported → 404).
+              // The typed key rides once to the hub, which stores it.
+              if (kIsWeb) {
+                unawaited(setHubProvider(
+                  baseUrl: savedProvider.baseUrl,
+                  model: savedProvider.model,
+                  apiKey: keyCtl.text.trim(),
+                ));
               }
               Navigator.pop(ctx);
             },

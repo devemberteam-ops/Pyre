@@ -66,11 +66,11 @@ sampler controls, and a broad polish and data-integrity pass.
   headless hub can now send chats through it even without its own provider
   configured.
 - **Self-host: set the server's provider from the app.** Running the Docker /
-  headless hub? Its API provider (URL, model, key) can now be configured in the
-  app (More → Server provider) instead of editing an env/compose file — set it
-  once and every connected device chats through it. The key is stored on the
-  server, pairing-gated, and never shown back. (Env config still works and
-  stays the default.)
+  headless hub? On the web client, adding your provider in **API Connections**
+  (the same screen you already use) configures the hub's provider — no
+  env/compose file to edit. Set it once and every connected device chats
+  through it. The key is stored on the server, pairing-gated, and never shown
+  back. (Env config still works and stays the default.)
 - **Self-host on Windows without Docker.** The headless hub also ships as a
   plain Windows program — a folder you unzip and start by double-clicking a
   `.bat` (no Docker, no install). Same server, same in-app provider setup.
