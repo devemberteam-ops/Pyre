@@ -10,7 +10,6 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../services/chat_api.dart';
 import '../services/hub_provider.dart';
-import '../services/lan_client.dart';
 import '../services/model_metadata.dart';
 import '../services/prompt_post_processing.dart';
 import '../services/resolvers.dart' show isProviderHostAllowed;
@@ -38,14 +37,7 @@ class ApiConnectionsScreen extends StatelessWidget {
           ),
         ],
       ),
-      // 2026-07-07 (Gui): on the WEB build paired to a self-host hub, this
-      // screen must show the SERVER's provider (its key lives on the hub, not
-      // in this browser) — otherwise a fresh/incognito tab looks unconfigured
-      // even though chat works and the whole switch-provider flow needs it
-      // visible. So when paired on web, always render the list body (with the
-      // hub card at top), never the bare "connect a provider" empty state.
-      body: (store.providers.isEmpty &&
-              !(kIsWeb && LanClient.instance.isPaired))
+      body: store.providers.isEmpty
           // 2026-07-03: this is the make-or-break first screen (the app can't
           // write a reply without a provider). The old weak "Tap + to add an
           // OpenAI-compatible endpoint" jargon-line had no button and no hint
@@ -62,11 +54,6 @@ class ApiConnectionsScreen extends StatelessWidget {
             )
           : Column(
               children: [
-                if (kIsWeb && LanClient.instance.isPaired)
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
-                    child: _HubProviderCard(),
-                  ),
                 // 2026-07-03: the app's make-or-break screen was the only
                 // major one without the house "How it works" explainer (regex,
                 // fallback, memory, script all have one). Collapsed by default.
@@ -1302,88 +1289,6 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
     nameCtl, urlCtl, keyCtl, modelCtl, ctxCtl, extraParamsCtl,
   ]) {
     c.dispose();
-  }
-}
-
-/// 2026-07-07 (Gui): on the WEB build paired to a self-host hub, the provider
-/// (and its key) lives on the SERVER, not in this browser. This card surfaces
-/// the server's current provider so a paired tab isn't confusingly empty —
-/// chat works off it, and the switch-provider flow needs it visible. Reads the
-/// masked /admin/provider; renders nothing against a desktop hub (404) or when
-/// not paired.
-class _HubProviderCard extends StatefulWidget {
-  const _HubProviderCard();
-
-  @override
-  State<_HubProviderCard> createState() => _HubProviderCardState();
-}
-
-class _HubProviderCardState extends State<_HubProviderCard> {
-  HubProviderResult? _res;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final r = await fetchHubProvider();
-    if (mounted) setState(() => _res = r);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final res = _res;
-    // Nothing to show until the probe resolves, or if this hub isn't a
-    // headless self-host (a desktop hub manages its own providers).
-    if (res == null || !res.supported) return const SizedBox.shrink();
-    final s = res.status;
-    final configured = s?.configured == true;
-
-    return Card(
-      color: EmberColors.bgElevated,
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(
-              configured ? Icons.dns_outlined : Icons.cloud_off_outlined,
-              size: 20,
-              color: configured ? EmberColors.primary : EmberColors.textMid,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    configured
-                        ? 'This server\'s AI provider'
-                        : 'This server has no AI provider yet',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 14),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    configured
-                        ? '${s!.model} · ${s.baseUrl}\n'
-                            'Key set on the server ✓ — every paired device uses '
-                            'it. Add or edit a connection below to change it.'
-                        : 'Add a connection with + (top-right) and its API key '
-                            'is saved on the server for every device that '
-                            'connects.',
-                    style: TextStyle(
-                        color: EmberColors.textMid, fontSize: 12, height: 1.4),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
 
