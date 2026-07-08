@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../services/chat_api.dart';
 import '../services/hub_provider.dart';
+import '../services/lan_client.dart';
 import '../services/model_metadata.dart';
 import '../services/prompt_post_processing.dart';
 import '../services/resolvers.dart' show isProviderHostAllowed;
@@ -20,12 +21,50 @@ import '../widgets/how_it_works_card.dart';
 import 'model_picker_sheet.dart';
 import 'smart_fallback_screen.dart';
 
-class ApiConnectionsScreen extends StatelessWidget {
+class ApiConnectionsScreen extends StatefulWidget {
   const ApiConnectionsScreen({super.key});
+
+  @override
+  State<ApiConnectionsScreen> createState() => _ApiConnectionsScreenState();
+}
+
+class _ApiConnectionsScreenState extends State<ApiConnectionsScreen> {
+  // 2026-07-07 (Gui): on the WEB build paired to a headless self-host hub, the
+  // AI provider lives on the SERVER and is shared by every browser/device that
+  // connects — not per-browser. So this screen shows the SERVER's provider
+  // (fetched, masked) instead of the empty local list, so a fresh/incognito
+  // tab isn't blank. null until the probe resolves; supported==false → desktop
+  // hub or native → normal local list.
+  HubProviderResult? _hub;
+
+  @override
+  void initState() {
+    super.initState();
+    if (kIsWeb && LanClient.instance.isPaired) {
+      fetchHubProvider().then((r) {
+        if (mounted) setState(() => _hub = r);
+      });
+    }
+  }
+
+  /// Friendly provider name from a base URL host, e.g.
+  /// `https://api.venice.ai/api/v1` → "Venice". The hub stores no name.
+  String _friendlyName(String baseUrl) {
+    try {
+      final host = Uri.parse(baseUrl).host;
+      final parts = host.split('.').where((p) => p.isNotEmpty).toList();
+      final core = parts.length >= 2 ? parts[parts.length - 2] : host;
+      return core.isEmpty ? 'AI provider' : core[0].toUpperCase() + core.substring(1);
+    } catch (_) {
+      return 'AI provider';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AppStore>();
+    final webHeadless =
+        kIsWeb && LanClient.instance.isPaired && _hub?.supported == true;
     return Scaffold(
       appBar: AppBar(
         title: const Text('API Connections'),
@@ -37,7 +76,9 @@ class ApiConnectionsScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: store.providers.isEmpty
+      body: webHeadless
+          ? _serverBackedBody(context, _hub!.status)
+          : store.providers.isEmpty
           // 2026-07-03: this is the make-or-break first screen (the app can't
           // write a reply without a provider). The old weak "Tap + to add an
           // OpenAI-compatible endpoint" jargon-line had no button and no hint
@@ -286,6 +327,101 @@ class ApiConnectionsScreen extends StatelessWidget {
                 _AdvancedFallbackTile(store: store),
               ],
             ),
+    );
+  }
+
+  /// Web + self-host hub: the provider the SERVER uses, shown here so every
+  /// connected browser sees the same config. Editing/adding pushes to the hub
+  /// (see the save handler). Reads the masked /admin/provider — never the key.
+  Widget _serverBackedBody(BuildContext context, HubProviderStatus? s) {
+    final configured = s?.configured == true;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      children: [
+        const HowItWorksCard(
+          title: 'How connections work',
+          subtitle: 'Set once on the server — every device that connects uses it.',
+          sections: [
+            HowItWorksSection('Shared by the server', [
+              HowItWorksBlock.paragraph(
+                  'You\'re connected to a self-host server. Its AI provider is '
+                  'set here and shared by **every** device that connects — no '
+                  'need to configure each browser.'),
+              HowItWorksBlock.bullet(
+                  'The API key is stored on the server, never shown back.'),
+            ]),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (configured)
+          Card(
+            child: ListTile(
+              leading: CircleAvatar(
+                radius: 20,
+                backgroundColor: EmberColors.primary,
+                child: Text(
+                  _friendlyName(s!.baseUrl).characters.first.toUpperCase(),
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w700),
+                ),
+              ),
+              title: Row(
+                children: [
+                  Flexible(
+                    child: Text(_friendlyName(s.baseUrl),
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: EmberColors.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text('CHAT',
+                        style: TextStyle(
+                            color: EmberColors.primary,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              ),
+              subtitle: Text(
+                '${s.baseUrl}\nmodel: ${s.model}',
+                style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+              ),
+              isThreeLine: true,
+              trailing: Icon(Icons.chevron_right,
+                  color: EmberColors.textDim, size: 22),
+              onTap: () => _editProvider(context, null),
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: EmptyState(
+              icon: Icons.cloud_outlined,
+              title: 'Connect an AI provider',
+              subtitle:
+                  'This server has no AI yet. Add one (OpenRouter has free '
+                  'models to start) and paste its API key — it\'s saved on the '
+                  'server for every device that connects.',
+              ctaLabel: 'Add a provider',
+              onCta: () => _editProvider(context, null),
+            ),
+          ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Text(
+            configured
+                ? 'Tap the connection (or +) to change the server\'s provider.'
+                : '',
+            style: TextStyle(color: EmberColors.textDim, fontSize: 12),
+          ),
+        ),
+      ],
     );
   }
 }
