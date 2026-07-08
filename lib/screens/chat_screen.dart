@@ -664,6 +664,77 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// The `+` on an OOC note (2026-07-08, Gui): pressing it must NOT force
+  /// "write another OOC" — the user often just wants to continue as themselves
+  /// or hand the turn to the character. Mid-chat (not the tip) only an
+  /// alternative version of the note is meaningful, so we branch directly.
+  /// On the tip we offer all three continuations.
+  Future<void> _showOocPlusMenu(Chat chat, Message m, bool isLast) async {
+    if (_generating) return;
+    if (!isLast) {
+      _branchUserMessage(chat, m);
+      return;
+    }
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: EmberColors.bgPanel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'After this OOC note…',
+                  style: TextStyle(color: EmberColors.textMid, fontSize: 13),
+                ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Write my message'),
+              subtitle: const Text('Continue as yourself'),
+              onTap: () => Navigator.pop(ctx, 'me'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.auto_awesome_outlined),
+              title: const Text('Let the character reply'),
+              subtitle: const Text('Hand the turn over'),
+              onTap: () => Navigator.pop(ctx, 'char'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.add_comment_outlined),
+              title: const Text('Add an alternative OOC'),
+              subtitle: const Text('Swipe between versions of this note'),
+              onTap: () => Navigator.pop(ctx, 'ooc'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case 'me':
+        // Just focus the input — the user types and sends a normal message.
+        _inputFocus.requestFocus();
+        break;
+      case 'char':
+        // Empty send = "scene continues without me" → the character replies.
+        _inputCtl.clear();
+        unawaited(_send());
+        break;
+      case 'ooc':
+        _branchUserMessage(chat, m);
+        break;
+    }
+  }
+
   Chat? _chat(AppStore store) {
     for (final c in store.chats) {
       if (c.id == widget.chatId) return c;
@@ -4916,13 +4987,18 @@ class _ChatScreenState extends State<ChatScreen> {
                         // User, OOC, and Scene messages can all be branched —
                         // same rewind semantics: stash the downstream, add an
                         // empty variant to write a different version of the
-                        // message or note. The empty branch for OOC/Scene is
+                        // message or note. The empty branch for Scene is
                         // filled in via inline edit (long-press → Edit text).
-                        onBranchUser: (m.kind == MessageKind.user ||
-                                m.kind == MessageKind.ooc ||
-                                m.kind == MessageKind.scene)
-                            ? () => _branchUserMessage(chat, m)
-                            : null,
+                        // OOC (2026-07-08, Gui): the `+` opens a small menu
+                        // instead of forcing another OOC — the user can
+                        // continue as themselves, hand the turn to the
+                        // character, or add an alternative note.
+                        onBranchUser: m.kind == MessageKind.ooc
+                            ? () => _showOocPlusMenu(chat, m, isLast)
+                            : (m.kind == MessageKind.user ||
+                                    m.kind == MessageKind.scene)
+                                ? () => _branchUserMessage(chat, m)
+                                : null,
                         // Continue only on the tip: it extends the current
                         // variant in place, which is meaningless mid-chat.
                         onContinue: (m.kind == MessageKind.char && isLast)
