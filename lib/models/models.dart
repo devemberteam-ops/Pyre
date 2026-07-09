@@ -88,6 +88,21 @@ List<String> _jStringList(dynamic v) {
   return v.whereType<String>().toList();
 }
 
+/// Audit B3 (MAJOR): tolerant String-to-String map decoder, same eager
+/// philosophy as [_jStringList]. `(v as Map?)?.cast<String, String>() ?? {}`
+/// returns a lazy CastMap — a non-String VALUE doesn't throw at decode time,
+/// it throws the first time something iterates the map (e.g. chat_api.dart's
+/// `_sanitiseHeaders`, called on every send). Eager-build, keeping only
+/// entries whose key AND value are both Strings.
+Map<String, String> _jStringMap(dynamic v) {
+  if (v is! Map) return <String, String>{};
+  final out = <String, String>{};
+  v.forEach((k, val) {
+    if (k is String && val is String) out[k] = val;
+  });
+  return out;
+}
+
 String newId([String prefix = '']) =>
     prefix.isEmpty ? _uuid.v4() : '$prefix-${_uuid.v4()}';
 
@@ -214,7 +229,7 @@ class ApiProvider {
       baseUrl: (j['baseUrl'] as String?) ?? '',
       apiKey: (j['apiKey'] as String?) ?? '',
       model: (j['model'] as String?) ?? '',
-      headers: (j['headers'] as Map?)?.cast<String, String>() ?? {},
+      headers: _jStringMap(j['headers']),
       extraParams: (j['extraParams'] as Map?)?.cast<String, dynamic>() ?? {},
       // Wave CY.18.267: missing / unknown value → none (today's behaviour).
       promptPostProcessing:
