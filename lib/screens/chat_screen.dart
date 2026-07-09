@@ -234,6 +234,13 @@ String buildFillInOpenerPrompt({
     if (responder.mesExample.trim().isNotEmpty) {
       sys.writeln('\nExample dialogue:\n${responder.mesExample.trim()}');
     }
+    // Audit fix E (2026-07-09): `systemPrompt` has no marker anywhere in the
+    // ongoing-chat builder either (chat_prompt_builder.dart's audit fix C) —
+    // a locked-default-preset opener silently omitted it. Same position as
+    // the fallback's own inline copy (after the other card fields).
+    if (responder.systemPrompt.trim().isNotEmpty) {
+      sys.writeln('\n${responder.systemPrompt.trim()}');
+    }
   }
   if (partyUserName != null) {
     // Persona party: the SAME joint block (every persona's card + the

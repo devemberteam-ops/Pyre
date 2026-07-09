@@ -83,6 +83,27 @@ void main() {
       expect(sys, contains('Output ONLY the opening message'));
     });
 
+    // Audit fix E (2026-07-09): `systemPrompt` has no macro anywhere in the
+    // ongoing-chat builder either (chat_prompt_builder.dart's audit fix C),
+    // so a locked-default-preset opener silently omitted it — the SAME "no
+    // marker → drop" hole the ongoing chat had before the fix.
+    test('includes the responder systemPrompt (audit fix E)', () {
+      final responderWithSystemPrompt = Character(
+        id: 'c-sys',
+        name: 'Vesna',
+        description: 'A wolfkin delver.',
+        systemPrompt: 'SYSTEM-PROMPT-SENTINEL: never break character.',
+      );
+      final sys = buildFillInOpenerPrompt(
+        responder: responderWithSystemPrompt,
+        persona: persona,
+        filledScenario: 'Late evening at the Gate.',
+        loreHits: const [],
+        presetMainPrompt: '',
+      );
+      expect(sys, contains('SYSTEM-PROMPT-SENTINEL'));
+    });
+
     test('null responder still produces a usable prompt with lore', () {
       final sys = buildFillInOpenerPrompt(
         responder: null,

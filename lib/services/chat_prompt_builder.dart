@@ -438,6 +438,30 @@ String buildJointPersonaBlock(List<Persona> personas) {
   return buf.toString();
 }
 
+/// Audit fix A (2026-07-09): the SINGLE-persona description + dialogue-
+/// examples content, shared by BOTH consumers that need it — the `{{persona}}`
+/// marker fill (`personaBlockText` in [buildChatPrompt]) AND the marker-less
+/// card fallback (`injectCardFallback`'s "The user appears as ..." block, via
+/// `injectPersonaSegment`). Before this extraction the marker fill emitted
+/// ONLY `p.description`, silently dropping the persona's dialogue-examples
+/// nudge that the fallback path always carried — a sibling of the confirmed
+/// lore bug (data scanned, then dropped because the marker path and the
+/// fallback path drifted). Returns just `p.description` when there are no
+/// dialogue examples, so a persona without examples is byte-identical either
+/// way.
+String buildSinglePersonaBlock(Persona p) {
+  final buf = StringBuffer();
+  buf.write(p.description);
+  if (p.dialogueExamples.trim().isNotEmpty) {
+    buf.writeln();
+    buf.writeln();
+    buf.writeln("${p.name}'s dialogue style (examples — match this cadence "
+        "when writing or quoting ${p.name}):");
+    buf.write(p.dialogueExamples.trim());
+  }
+  return buf.toString();
+}
+
 ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   final chat = inputs.chat;
   final character = inputs.character;
@@ -511,6 +535,23 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
           asm.afterTurns.any((t) => wiBeforeRegex.hasMatch(t.content)) ||
           asm.depthTurns.any((t) => wiBeforeRegex.hasMatch(t.content)));
 
+  // Audit fix (persona no-marker rescue, 2026-07-09): mirrors the wiBefore
+  // pre-scan above, but for `{{persona}}`. Persona is USER-side identity
+  // data, not preset-authored card content — SillyTavern-imported and
+  // hand-composed presets alike routinely omit {{persona}} while still
+  // referencing {{description}} et al. (which blocks the FULL card fallback
+  // from running, see `fallbackRan` below). Without this scan the persona
+  // block was silently dropped whenever a preset referenced ANY OTHER card
+  // marker but not this one — the exact "scanned, then dropped" bug shape
+  // lore had.
+  final personaMarkerRegex =
+      RegExp(r'\{\{\s*persona\s*\}\}', caseSensitive: false);
+  final referencesPersonaMarker = asm != null &&
+      (personaMarkerRegex.hasMatch(asm.systemPrompt) ||
+          asm.beforeTurns.any((t) => personaMarkerRegex.hasMatch(t.content)) ||
+          asm.afterTurns.any((t) => personaMarkerRegex.hasMatch(t.content)) ||
+          asm.depthTurns.any((t) => personaMarkerRegex.hasMatch(t.content)));
+
   // Party mode v1 (2026-07): true only when the feature is ON for a chat
   // that actually has more than one member — a single-member "group" (or a
   // stray flag on a solo chat) is meaningless, so this condition keeps the
@@ -526,7 +567,7 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   final isPersonaParty = inputs.personaParty.length > 1;
   final personaBlockText = isPersonaParty
       ? buildJointPersonaBlock(inputs.personaParty)
-      : (persona?.description ?? '');
+      : (persona == null ? '' : buildSinglePersonaBlock(persona));
   final personaUserName = isPersonaParty
       ? inputs.personaParty
           .map((p) => p.name)
@@ -696,6 +737,40 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     ));
   }
 
+  // Audit fix (persona rescue, 2026-07-09): the single-persona "user appears
+  // as ..." block (via `buildSinglePersonaBlock`) OR the persona-party joint
+  // block — extracted out of `injectCardFallback` (which still calls it at
+  // the end, unchanged content/order — see `test/prompt_field_conservation_
+  // test.dart`'s byte-compat guard) so the markerless {{persona}} rescue
+  // below can reach it WITHOUT running the rest of the card fallback
+  // (character content a marker-carrying preset already owns). No-ops when
+  // there is no persona (mirrors the original nesting exactly, including the
+  // persona-party-but-null-primary-persona edge case).
+  void injectPersonaSegment() {
+    if (persona == null) return;
+    final personaBuf = StringBuffer();
+    if (isPersonaParty) {
+      // Persona party: the whole roster + collective instruction replaces
+      // the single "The user appears as X" line (same marker-less slot).
+      personaBuf.writeln(
+          '\n${buildJointPersonaBlock(inputs.personaParty).trimRight()}');
+    } else {
+      personaBuf.writeln(
+        '\nThe user appears as "${persona.name}". '
+        '${buildSinglePersonaBlock(persona)}',
+      );
+    }
+    segments.add(PromptSegment(
+        PromptSegmentKind.persona, personaBuf.toString().trimRight()));
+    planSegments.add(PlanSegment(
+      role: 'system',
+      slot: PlanSlot.leadingSystem,
+      kind: PromptSegmentKind.persona,
+      content: personaBuf.toString(),
+      id: nextId('persona'),
+    ));
+  }
+
   // BLOCKER fix: inject the character / persona / lorebook-before content —
   // the SOLE injector of the card content when the preset's system text
   // doesn't carry it via markers. Extracted to a closure so BOTH the
@@ -724,6 +799,14 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
       if (character.scenario.isNotEmpty) {
         charBuf.writeln('\nScenario:\n${character.scenario}');
       }
+      // Audit fix B (2026-07-09): mesExample was carried by party mode
+      // (`buildJointPartyBlock`) and the Fill-In opener, but forgotten here —
+      // the solo no-preset/no-marker fallback silently dropped every
+      // character's example dialogue. Mirrors the neighbours' labeled-section
+      // style; placed before systemPrompt like the other two carriers.
+      if (character.mesExample.isNotEmpty) {
+        charBuf.writeln('\nExample dialogue:\n${character.mesExample}');
+      }
       if (character.systemPrompt.isNotEmpty) {
         charBuf.writeln('\n${character.systemPrompt}');
       }
@@ -743,36 +826,7 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
       content: charBuf.toString(),
       id: nextId('character'),
     ));
-    if (persona != null) {
-      final personaBuf = StringBuffer();
-      if (isPersonaParty) {
-        // Persona party: the whole roster + collective instruction replaces
-        // the single "The user appears as X" line (same marker-less slot).
-        personaBuf.writeln(
-            '\n${buildJointPersonaBlock(inputs.personaParty).trimRight()}');
-      } else {
-        personaBuf.writeln(
-          '\nThe user appears as "${persona.name}". ${persona.description}',
-        );
-        // Wave CX.1: surface persona's dialogue examples (user's voice).
-        if (persona.dialogueExamples.trim().isNotEmpty) {
-          personaBuf.writeln(
-            '\n${persona.name}\'s dialogue style (examples — match this cadence when '
-            'writing or quoting ${persona.name}):',
-          );
-          personaBuf.writeln(persona.dialogueExamples.trim());
-        }
-      }
-      segments.add(PromptSegment(
-          PromptSegmentKind.persona, personaBuf.toString().trimRight()));
-      planSegments.add(PlanSegment(
-        role: 'system',
-        slot: PlanSlot.leadingSystem,
-        kind: PromptSegmentKind.persona,
-        content: personaBuf.toString(),
-        id: nextId('persona'),
-      ));
-    }
+    injectPersonaSegment();
     injectLoreSegment();
   }
 
@@ -812,6 +866,43 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     // Prompt Manager Core turn still suppresses this (no duplicate).
     if (!fallbackRan && !referencesWiBefore) {
       injectLoreSegment();
+    }
+    // Audit fix (persona no-marker rescue, 2026-07-09): same shape as the
+    // lore rescue above — {{persona}} is USER-side identity data, not
+    // preset-owned card content (unlike description/personality/scenario/
+    // mesExample, where marker presence governs — see `_cardMarkerRegex`'s
+    // doc). When the assembled preset text never references {{persona}}
+    // ANYWHERE (main prompt or any role-split/depth block) and the full
+    // fallback didn't already carry it, inject it standalone so it reaches
+    // the model regardless of what OTHER card markers the preset happens to
+    // reference (the exact "scanned, then dropped" bug shape lore had).
+    if (!fallbackRan && !referencesPersonaMarker) {
+      injectPersonaSegment();
+    }
+    // Audit fix C (2026-07-09): `character.systemPrompt` has NO supported
+    // `{{...}}` macro anywhere in `fill()` — unlike description/personality/
+    // scenario/persona/mesExample/wiBefore, a preset author has no way to
+    // reference it at all, so "the preset owns it via a marker" can never be
+    // true. Mirroring the no-marker policy (always inject when non-empty), it
+    // must ALWAYS reach the model unless the full fallback (which already
+    // inlines it, see `injectCardFallback`) ran. Excluded in party mode:
+    // `buildJointPartyBlock` already folds every member's own systemPrompt
+    // into the joint card block, so adding it again here would double it.
+    if (!fallbackRan &&
+        !isPartyScene &&
+        character != null &&
+        character.systemPrompt.isNotEmpty) {
+      segments.add(PromptSegment(
+          PromptSegmentKind.character, character.systemPrompt,
+          note: 'character.systemPrompt (no marker in preset)'));
+      planSegments.add(PlanSegment(
+        role: 'system',
+        slot: PlanSlot.leadingSystem,
+        kind: PromptSegmentKind.character,
+        content: '\n${character.systemPrompt}',
+        appendNewline: true,
+        id: nextId('characterSystemPrompt'),
+      ));
     }
   } else {
     injectCardFallback();
@@ -1022,19 +1113,48 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // for a flat preset (no blocks). Skipped when [includePostHistory] is false
   // (Impersonate/Guide) so the char-voice reminder doesn't contradict the OOC
   // "write as {{user}}" instruction the caller appends after these turns.
-  if (inputs.includePostHistory &&
-      asm != null &&
-      asm.postHistory.trim().isNotEmpty) {
-    final filled = fill(asm.postHistory).trim();
-    planSegments.add(PlanSegment(
-      role: 'system',
-      slot: PlanSlot.postHistoryTurn,
-      kind: PromptSegmentKind.postHistory,
-      content: filled,
-      id: nextId('postHistory'),
-    ));
-    segments.add(PromptSegment(PromptSegmentKind.postHistory, filled,
-        note: 'preset.postHistoryInstructions'));
+  //
+  // Audit fix D (2026-07-09): `character.postHistoryInstructions` had NO
+  // `{{...}}` macro anywhere in the pipeline and was consumed NOWHERE — it
+  // round-trips import/export, shows in the UI, is counted by
+  // `token_estimate.dart`, and never reached the model. Mirroring the
+  // no-marker policy (always inject when non-empty), it is appended in the
+  // SAME post-history slot as the preset's own instructions, separated by a
+  // blank line, for EVERY path (with or without a preset — unlike the
+  // systemPrompt rescue above, there is no "fallback already inlined it"
+  // case for post-history, since `injectCardFallback` never touched it).
+  // Solo (non-party) responder only — party's joint post-history contract is
+  // a separate concern (`buildJointPartyBlock` owns party framing; wiring
+  // each member's PHI there is out of scope for this fix).
+  if (inputs.includePostHistory) {
+    final presetPostHistory =
+        (asm != null && asm.postHistory.trim().isNotEmpty)
+            ? fill(asm.postHistory).trim()
+            : '';
+    final charPostHistory = (!isPartyScene &&
+            character != null &&
+            character.postHistoryInstructions.isNotEmpty)
+        ? character.postHistoryInstructions
+        : '';
+    final combinedPostHistory = [presetPostHistory, charPostHistory]
+        .where((s) => s.isNotEmpty)
+        .join('\n\n');
+    if (combinedPostHistory.isNotEmpty) {
+      planSegments.add(PlanSegment(
+        role: 'system',
+        slot: PlanSlot.postHistoryTurn,
+        kind: PromptSegmentKind.postHistory,
+        content: combinedPostHistory,
+        id: nextId('postHistory'),
+      ));
+      segments.add(PromptSegment(PromptSegmentKind.postHistory, combinedPostHistory,
+          note: presetPostHistory.isEmpty
+              ? 'character.postHistoryInstructions'
+              : (charPostHistory.isEmpty
+                  ? 'preset.postHistoryInstructions'
+                  : 'preset.postHistoryInstructions + '
+                      'character.postHistoryInstructions')));
+    }
   }
 
   // Prompt Manager Core: role-`user`/`assistant` blocks placed AFTER history

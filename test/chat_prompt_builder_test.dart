@@ -385,10 +385,16 @@ void main() {
       final result = buildChatPrompt(inputs);
       final kinds = result.segments.map((s) => s.kind).toList();
       expect(kinds.first, PromptSegmentKind.systemPrompt);
-      // FLAT preset → no auto card/persona injection: the user composed the
-      // complete prompt and OWNS its card content (unchanged behaviour).
+      // FLAT preset → no auto CARD-content injection: the user composed the
+      // complete prompt and OWNS its card content (unchanged behaviour) —
+      // description/personality/scenario/mesExample stay marker-governed.
       expect(kinds.contains(PromptSegmentKind.character), isFalse);
-      expect(kinds.contains(PromptSegmentKind.persona), isFalse);
+      // Audit fix (2026-07-09, policy change — was `isFalse`): persona is
+      // USER-side identity data, not preset-owned card content, and this
+      // preset never references {{persona}} anywhere. Same rescue policy as
+      // the lore fix directly below, now extended to persona (previously
+      // scoped to lore only) — a flat preset no longer silently drops it.
+      expect(kinds.contains(PromptSegmentKind.persona), isTrue);
       // Community bug fix (1.2.1): LORE is user-bound chat data, not preset
       // content — a flat preset without {{wiBefore}} used to silently DROP
       // every fired entry (scanned, traced, thrown away). Now the standalone
