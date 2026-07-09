@@ -64,144 +64,156 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Padding(
-                padding: EdgeInsets.only(bottom: 12),
-                child: SizedBox(
-                  width: 40,
-                  height: 4,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: EmberColors.stroke,
-                      borderRadius: BorderRadius.all(Radius.circular(2)),
+        // Wave 1.2.1: the lore-activation trace is variable-length (one
+        // line per firing entry) and can now push total content past the
+        // sheet's height, so this needs to actually scroll rather than
+        // just size-to-content.
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: SizedBox(
+                    width: 40,
+                    height: 4,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: EmberColors.stroke,
+                        borderRadius: BorderRadius.all(Radius.circular(2)),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-            const Text(
-              'Chat info',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Approximate token weight of every component sent to the '
-              'model on the next turn. Counts use the chars/4 heuristic '
-              '(close enough for the "is this big or small" question).',
-              style: TextStyle(
-                  color: EmberColors.textMid,
-                  fontSize: 12,
-                  height: 1.4),
-            ),
-            const SizedBox(height: 16),
-            // Total at the top — biggest number, most visible.
-            Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: EmberColors.primary.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: EmberColors.primary.withValues(alpha: 0.40),
-                ),
+              const Text(
+                'Chat info',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
               ),
-              child: Row(
-                children: [
-                  Icon(Icons.toll,
-                      color: EmberColors.primary, size: 22),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Total context',
+              const SizedBox(height: 4),
+              Text(
+                'Approximate token weight of every component sent to the '
+                'model on the next turn. Counts use the chars/4 heuristic '
+                '(close enough for the "is this big or small" question).',
+                style: TextStyle(
+                    color: EmberColors.textMid,
+                    fontSize: 12,
+                    height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              // Total at the top — biggest number, most visible.
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: EmberColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: EmberColors.primary.withValues(alpha: 0.40),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.toll,
+                        color: EmberColors.primary, size: 22),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Total context',
+                        style: TextStyle(
+                            color: EmberColors.textHigh,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    Text(
+                      formatTokenCount(breakdown.total) ?? '~0 tokens',
                       style: TextStyle(
-                          color: EmberColors.textHigh,
-                          fontWeight: FontWeight.w600),
+                        color: EmberColors.primary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
                     ),
-                  ),
-                  Text(
-                    formatTokenCount(breakdown.total) ?? '~0 tokens',
-                    style: TextStyle(
-                      color: EmberColors.primary,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 16,
-                      fontFeatures: [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            // Wave CY.18.100: context-window usage. Auto-detected from
-            // the active provider's /models (manual override wins), with
-            // a fill bar that warms toward red as you approach the cap.
-            const SizedBox(height: 10),
-            FutureBuilder<int?>(
-              future: _contextWindowFuture(store.activeProvider),
-              builder: (ctx, snap) => _ContextWindowRow(
-                loading: snap.connectionState == ConnectionState.waiting,
-                window: snap.data,
-                used: breakdown.total,
+              // Wave CY.18.100: context-window usage. Auto-detected from
+              // the active provider's /models (manual override wins), with
+              // a fill bar that warms toward red as you approach the cap.
+              const SizedBox(height: 10),
+              FutureBuilder<int?>(
+                future: _contextWindowFuture(store.activeProvider),
+                builder: (ctx, snap) => _ContextWindowRow(
+                  loading: snap.connectionState == ConnectionState.waiting,
+                  window: snap.data,
+                  used: breakdown.total,
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            ..._row(
-                'Preset',
-                'mainPrompt + post-history',
-                breakdown.preset,
-                breakdown.total,
-                Icons.tune),
-            // Wave CY.13: per-character drilldown — tap to expand and
-            // see each char's individual token weight. Useful in
-            // group chats where one heavy bot can dominate the cost.
-            ..._charactersRow(breakdown),
-            ..._row(
-                'Persona',
-                breakdown.personaName ?? '(no persona)',
-                breakdown.persona,
-                breakdown.total,
-                Icons.face),
-            ..._row(
-                breakdown.lorebookNames.length > 1
-                    ? 'Lorebooks (${breakdown.lorebookNames.length})'
-                    : 'Lorebooks',
-                breakdown.lorebookNames.isEmpty
-                    ? '(none active)'
-                    : breakdown.lorebookNames.join(', '),
-                breakdown.lorebooks,
-                breakdown.total,
-                Icons.menu_book_outlined),
-            // Wave CY.18.190: Live Sheet — only when enabled + non-empty.
-            if (breakdown.liveSheet > 0)
+              const SizedBox(height: 12),
               ..._row(
-                  'Live Sheet',
-                  'active state snapshot',
-                  breakdown.liveSheet,
+                  'Preset',
+                  'mainPrompt + post-history',
+                  breakdown.preset,
                   breakdown.total,
-                  Icons.track_changes_outlined),
-            // Wave CY.18.190: Script — only when there are active beats.
-            if (breakdown.script > 0)
+                  Icons.tune),
+              // Wave CY.13: per-character drilldown — tap to expand and
+              // see each char's individual token weight. Useful in
+              // group chats where one heavy bot can dominate the cost.
+              ..._charactersRow(breakdown),
               ..._row(
-                  'Script',
-                  'story beats roadmap',
-                  breakdown.script,
+                  'Persona',
+                  breakdown.personaName ?? '(no persona)',
+                  breakdown.persona,
                   breakdown.total,
-                  Icons.auto_stories_outlined),
-            ..._row(
-                'Memory summary',
-                breakdown.memoryNote,
-                breakdown.memory,
-                breakdown.total,
-                Icons.psychology),
-            ..._row(
-                'Messages',
-                '${breakdown.messageCount} kept in window',
-                breakdown.messages,
-                breakdown.total,
-                Icons.chat_bubble_outline),
-          ],
+                  Icons.face),
+              ..._row(
+                  breakdown.lorebookNames.length > 1
+                      ? 'Lorebooks (${breakdown.lorebookNames.length})'
+                      : 'Lorebooks',
+                  breakdown.lorebookNames.isEmpty
+                      ? '(none active)'
+                      : breakdown.lorebookNames.join(', '),
+                  breakdown.lorebooks,
+                  breakdown.total,
+                  Icons.menu_book_outlined),
+              // Wave 1.2.1: "which entries are actually firing" diagnostic.
+              // Reuses the SAME scanLorebookHits pass the runtime injects
+              // with (display-only — never touches the real turn), so the
+              // owner's recurring "lorebooks don't seem to activate" worry
+              // becomes something they can just SEE.
+              ..._loreActivationSection(breakdown),
+              // Wave CY.18.190: Live Sheet — only when enabled + non-empty.
+              if (breakdown.liveSheet > 0)
+                ..._row(
+                    'Live Sheet',
+                    'active state snapshot',
+                    breakdown.liveSheet,
+                    breakdown.total,
+                    Icons.track_changes_outlined),
+              // Wave CY.18.190: Script — only when there are active beats.
+              if (breakdown.script > 0)
+                ..._row(
+                    'Script',
+                    'story beats roadmap',
+                    breakdown.script,
+                    breakdown.total,
+                    Icons.auto_stories_outlined),
+              ..._row(
+                  'Memory summary',
+                  breakdown.memoryNote,
+                  breakdown.memory,
+                  breakdown.total,
+                  Icons.psychology),
+              ..._row(
+                  'Messages',
+                  '${breakdown.messageCount} kept in window',
+                  breakdown.messages,
+                  breakdown.total,
+                  Icons.chat_bubble_outline),
+            ],
+          ),
         ),
       ),
     );
@@ -283,6 +295,67 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
         ),
       ),
     ];
+  }
+
+  /// Wave 1.2.1: "Lore active: N of M entries" — a compact, read-only
+  /// diagnostic showing which lorebook entries are firing on the CURRENT
+  /// window and why, straight from [scanLorebookHits]'s trace (the same
+  /// engine the turn builder uses). Renders nothing when no lorebooks are
+  /// attached; when attached but nothing fired, says so explicitly so the
+  /// user learns matching is keyword/recency-driven, not a silent bug.
+  List<Widget> _loreActivationSection(_ChatBreakdown breakdown) {
+    if (breakdown.lorebookNames.isEmpty) return const [];
+    final fired = breakdown.loreFired;
+    final total = breakdown.loreTotal;
+    final widgets = <Widget>[
+      Padding(
+        padding: const EdgeInsets.fromLTRB(26, 0, 0, 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.bolt, size: 13, color: EmberColors.textMid),
+            const SizedBox(width: 5),
+            Expanded(
+              child: Text(
+                'Lore active: $fired of $total ${total == 1 ? 'entry' : 'entries'}',
+                style: TextStyle(
+                  color: EmberColors.textMid,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ];
+    if (fired == 0) {
+      widgets.add(Padding(
+        padding: const EdgeInsets.fromLTRB(31, 0, 0, 8),
+        child: Text(
+          total == 0
+              ? 'no enabled entries in the attached lorebooks'
+              : 'no entries matched the recent conversation yet',
+          style: TextStyle(
+            color: EmberColors.textMid,
+            fontSize: 11,
+            fontStyle: FontStyle.italic,
+          ),
+        ),
+      ));
+    } else {
+      for (final line in breakdown.loreTrace) {
+        widgets.add(Padding(
+          padding: const EdgeInsets.fromLTRB(31, 0, 0, 2),
+          child: Text(
+            line,
+            style: TextStyle(color: EmberColors.textMid, fontSize: 11),
+          ),
+        ));
+      }
+      widgets.add(const SizedBox(height: 6));
+    }
+    return widgets;
   }
 
   /// Wave CY.13: expandable Characters row. The header looks like the
@@ -472,6 +545,13 @@ class _ChatBreakdown {
   final List<MapEntry<String, int>> characterBreakdown;
   final String? personaName;
   final List<String> lorebookNames;
+  /// Wave 1.2.1: how many attached-lorebook entries fired on the current
+  /// scan window, out of how many enabled entries were considered.
+  final int loreFired;
+  final int loreTotal;
+  /// Wave 1.2.1: human-readable "book • why" line per fired entry, straight
+  /// from [LorebookScanResult.trace].
+  final List<String> loreTrace;
   final String memoryNote;
   final int messageCount;
 
@@ -491,6 +571,9 @@ class _ChatBreakdown {
     required this.characterBreakdown,
     required this.personaName,
     required this.lorebookNames,
+    required this.loreFired,
+    required this.loreTotal,
+    required this.loreTrace,
     required this.memoryNote,
     required this.messageCount,
   });
@@ -549,6 +632,18 @@ _ChatBreakdown _buildBreakdown(AppStore store, Chat chat) {
     loreTokens += approxTokensForLorebook(b);
   }
 
+  // Wave 1.2.1: which entries are actually FIRING, and why. Display-only —
+  // this is a separate scan from the one the turn builder runs at send
+  // time, so it never affects the real prompt. Entries gated by
+  // useProbability can (rarely) show a different fired/not-fired result
+  // here than the actual turn; every other entry (the overwhelming
+  // majority) is stable. `loreScan.totalScanned - loreScan.skippedDisabled`
+  // is every ENABLED entry across the attached books — the "M" in the
+  // "N of M" summary.
+  final loreScan = scanLorebookHits(attachedBooks, chat.messages);
+  final loreFired = loreScan.hits.length;
+  final loreTotal = loreScan.totalScanned - loreScan.skippedDisabled;
+
   // Memory checkpoints — the LTM chain the auto-summariser appends to.
   // Wave CY.18: we now count tokens across every VALID checkpoint for
   // the current branch (orphaned ones from other branches don't go to
@@ -602,6 +697,9 @@ _ChatBreakdown _buildBreakdown(AppStore store, Chat chat) {
     characterBreakdown: charBreakdown,
     personaName: persona?.name,
     lorebookNames: attachedBooks.map((b) => b.name).toList(),
+    loreFired: loreFired,
+    loreTotal: loreTotal,
+    loreTrace: loreScan.trace,
     memoryNote: memNote,
     messageCount: recent.length,
   );
