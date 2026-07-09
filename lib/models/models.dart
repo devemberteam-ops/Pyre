@@ -3025,9 +3025,11 @@ class UiPrefs {
         accentArgb: j['accentArgb'] is int ? j['accentArgb'] as int : null,
         // 1.2.1: defensive parse — anything but a List (missing key on
         // legacy blobs, or a corrupted non-list value) falls back to no
-        // pins rather than throwing.
-        chatSwapProviderIds:
-            (j['chatSwapProviderIds'] as List?)?.cast<String>() ?? const [],
+        // pins rather than throwing. Audit fix: _jStringList, NOT a lazy
+        // .cast<String>() — the lazy view defers the type check to READ
+        // time, so a corrupted element (hand-edited backup) would crash
+        // in build() instead of being dropped here (Wave CY.18.44 class).
+        chatSwapProviderIds: _jStringList(j['chatSwapProviderIds']),
       );
 
   // Wave CY.18.48: defensively decode the bounds list. JSON could

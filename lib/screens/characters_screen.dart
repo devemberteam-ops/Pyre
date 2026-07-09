@@ -565,7 +565,16 @@ Future<void> _showResumeOrStartFreshSheet(BuildContext context) async {
       final drafts = store.characterDrafts;
       return SafeArea(
         top: false,
-        child: Column(
+        // 1.2.1 audit fix: isScrollControlled removes the framework's 9/16
+        // height cap, and drafts are never pruned — with enough abandoned
+        // drafts this sheet could grow to cover the status bar. Re-cap at
+        // 85% (the same ceiling showMenuSheet uses); the inner ListView
+        // scrolls within it.
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(sheet).size.height * 0.85,
+          ),
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
@@ -691,6 +700,7 @@ Future<void> _showResumeOrStartFreshSheet(BuildContext context) async {
             ),
             const SizedBox(height: 4),
           ],
+          ),
         ),
       );
     },

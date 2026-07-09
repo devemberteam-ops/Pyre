@@ -4,6 +4,8 @@
 // eating their budget (preset prompts vs character descriptions vs
 // lorebooks vs message history). Pure read-only, no actions.
 
+import 'dart:math' show Random;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -640,7 +642,15 @@ _ChatBreakdown _buildBreakdown(AppStore store, Chat chat) {
   // majority) is stable. `loreScan.totalScanned - loreScan.skippedDisabled`
   // is every ENABLED entry across the attached books — the "M" in the
   // "N of M" summary.
-  final loreScan = scanLorebookHits(attachedBooks, chat.messages);
+  //
+  // Audit fix: SEED the probability roll. _buildBreakdown reruns on every
+  // rebuild (store notify, expand/collapse taps), and an unseeded Random
+  // re-rolled useProbability entries each time — the "N of M" count
+  // flickered while the sheet sat open, making the diagnostic itself look
+  // broken. Seeding by message count keeps the display stable while
+  // viewing and naturally re-rolls when a new turn lands.
+  final loreScan = scanLorebookHits(attachedBooks, chat.messages,
+      rng: Random(chat.messages.length));
   final loreFired = loreScan.hits.length;
   final loreTotal = loreScan.totalScanned - loreScan.skippedDisabled;
 

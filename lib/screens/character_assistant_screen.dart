@@ -5505,7 +5505,17 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
                     // stay visible.
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
-                        maxHeight: MediaQuery.of(context).size.height * 0.4,
+                        // 1.2.1 audit follow-up: 40% of the SCREEN height
+                        // shares the panel with its header + action buttons
+                        // + SafeArea inset — in landscape (short screens)
+                        // that sum overflowed the non-scrollable panel
+                        // Column and pushed the Save buttons off-screen.
+                        // Use a tighter fraction when height is scarce.
+                        maxHeight: MediaQuery.of(context).size.height *
+                            (MediaQuery.of(context).orientation ==
+                                    Orientation.landscape
+                                ? 0.22
+                                : 0.4),
                       ),
                       child: SingleChildScrollView(
                         child: Column(

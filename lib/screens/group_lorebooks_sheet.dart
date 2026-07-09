@@ -163,9 +163,15 @@ List<Widget> _buildLorebookSections(
     }
   }
   // Map of character id → list of inherited books from that character.
+  // 1.2.1 audit fix: read bindings LIVE-first (library card, falling back to
+  // the frozen snapshot only for a deleted member) — the SAME order the
+  // injection engine uses (collectBoundLorebooks). Reading snapshot-first
+  // here meant a book bound to a character AFTER the chat existed was firing
+  // in every prompt but invisible in this management sheet — the only UI
+  // that can disable it.
   final perCharacterBooks = <String, List<Lorebook>>{};
   for (final cid in chat.characterIds) {
-    final snap = chat.characterSnapshots[cid] ?? store.characterById(cid);
+    final snap = store.characterById(cid) ?? chat.characterSnapshots[cid];
     if (snap == null) continue;
     final list = <Lorebook>[];
     for (final id in snap.lorebookIds) {
@@ -197,8 +203,9 @@ List<Widget> _buildLorebookSections(
   final inheritedBooks = <String, Lorebook>{}; // book id -> book
   final inheritedSources = <String, List<String>>{}; // book id -> origins
   for (final entry in perCharacterBooks.entries) {
+    // Live-first for the display name too (matches the enumeration above).
     final char =
-        chat.characterSnapshots[entry.key] ?? store.characterById(entry.key);
+        store.characterById(entry.key) ?? chat.characterSnapshots[entry.key];
     final charName = char?.name ?? '(unknown character)';
     for (final b in entry.value) {
       inheritedBooks[b.id] = b;
