@@ -47,15 +47,30 @@ class AttachmentStore {
   /// Resolves to `<pyre-data-root>/attachments/`, creating it if missing.
   /// Cached on first call. Returns null on web (no fs). Honors
   /// `PYRE_DATA_DIR` on desktop via [pyreDataRoot] (1.2.1 item #6).
+  ///
+  /// Audit B1 (BLOCKER): `warmUp()` is awaited in main() BEFORE runApp(), so
+  /// this must NEVER throw — a stray FILE named `attachments` at this path,
+  /// a disk-full condition, or an AV lock used to raise an uncaught
+  /// FileSystemException and the app never showed a window again, on every
+  /// launch. On any failure we debugPrint and return null instead (every
+  /// caller already has null-dir semantics identical to the web no-op
+  /// path). The failure is deliberately NOT cached: a transient AV lock at
+  /// boot shouldn't disable attachments for the rest of the process, so
+  /// only a genuine success populates `_cachedDir` — the next call retries.
   static Future<Directory?> _attachDir() async {
     if (kIsWeb) return null;
     if (_cachedDir != null) return _cachedDir;
-    final dir = Directory('${(await pyreDataRoot()).path}/attachments');
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
+    try {
+      final dir = Directory('${(await pyreDataRoot()).path}/attachments');
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      _cachedDir = dir;
+      return dir;
+    } catch (e) {
+      debugPrint('[AttachmentStore] attachment dir unavailable: $e');
+      return null;
     }
-    _cachedDir = dir;
-    return dir;
   }
 
   /// Pre-warm the directory cache so synchronous code paths (image
