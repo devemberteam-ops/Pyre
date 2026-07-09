@@ -17,6 +17,7 @@ import '../services/web_download.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
+import 'chat_import_flow.dart';
 import 'st_bulk_import_flow.dart';
 
 // Wave CY.18.169: selective backup. Each category can be toggled out of the
@@ -216,6 +217,42 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
                     icon: const Icon(Icons.download_outlined, size: 16),
                     label: const Text('Choose files…'),
                     onPressed: () => runStBulkImport(context, store),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // 1.2.1 #3: import a single Pyre chat file (the inverse of the
+          // chat-screen "Export chat"). Auto-detects full-fidelity Pyre JSON
+          // vs Pyre/SillyTavern JSONL. Sits next to the ST import — both are
+          // "bring a conversation into Pyre".
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Import a chat',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 15),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Load a chat you exported from Pyre (the "Export chat" '
+                    'option in a conversation) — either the full-fidelity '
+                    'Pyre JSON or the SillyTavern-compatible JSONL. Pyre '
+                    'detects the format automatically and adds it as a new '
+                    'conversation.',
+                    style:
+                        TextStyle(color: EmberColors.textMid, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.chat_outlined, size: 16),
+                    label: const Text('Choose chat file…'),
+                    onPressed: () => runPyreChatImport(context, store),
                   ),
                 ],
               ),
