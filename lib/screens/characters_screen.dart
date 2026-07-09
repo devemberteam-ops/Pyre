@@ -849,6 +849,74 @@ Future<void> _exportCharacterAsPng(BuildContext context, Character c) async {
   }
 }
 
+/// 1.2.1: export the character as a standard chara_card_v2 JSON file
+/// (`<name>.card.json`) — the same payload `buildCharaCardV2Json` already
+/// builds for the PNG export, just pretty-printed straight to a file
+/// instead of base64-embedded in a PNG chunk.
+///
+/// KEY DIFFERENCE from `_exportCharacterAsPng`: this needs NO avatar. The
+/// PNG export must abort without one (there's no image to embed the chunk
+/// into); a bare JSON file has no image at all, so an avatarless character
+/// exports just fine here — a real bonus over the PNG path.
+Future<void> _exportCharacterAsJson(BuildContext context, Character c) async {
+  final messenger = ScaffoldMessenger.of(context);
+  // D3: capture store reference before the first await (see _exportCharacterAsPng).
+  final store = context.read<AppStore>();
+  try {
+    // Gather bound lorebooks and merge into a single character_book, same
+    // as the PNG export, so lore travels with the exported card.
+    final boundBooks = c.lorebookIds
+        .map(store.lorebookById)
+        .whereType<Lorebook>()
+        .where((b) => !b.deleted)
+        .toList(growable: false);
+    final mergedLorebook = mergeBoundLorebooksForExport(boundBooks);
+    final map = buildCharaCardV2Json(c, lorebook: mergedLorebook);
+    final bytes =
+        utf8.encode(const JsonEncoder.withIndent('  ').convert(map));
+
+    // Sanitise the filename exactly like the PNG export.
+    final safeName = c.name
+        .replaceAll(RegExp(r'[^A-Za-z0-9 _\-.]'), '')
+        .trim()
+        .replaceAll(' ', '_');
+    final filename =
+        '${safeName.isEmpty ? 'card' : safeName}.card.json';
+
+    if (kIsWeb) {
+      // Web has no filesystem — trigger a real browser download instead of
+      // copying an unsaveable data URL to the clipboard.
+      downloadBytesToBrowser(bytes, filename, 'application/json');
+      messenger.showSnackBar(
+        SnackBar(content: Text('Downloading $filename')),
+      );
+      return;
+    }
+
+    final dir = await getApplicationDocumentsDirectory();
+    final outDir = Directory('${dir.path}/PyreExports');
+    if (!await outDir.exists()) await outDir.create(recursive: true);
+    final file = File('${outDir.path}/$filename');
+    await file.writeAsBytes(bytes);
+
+    await deliverExport(
+      messenger,
+      [XFile(file.path, mimeType: 'application/json')],
+      savedBanner: 'Exported — ${file.uri.pathSegments.last}',
+      shareSubject: '${c.name} — Pyre card (JSON)',
+      shareText:
+          'Character card exported from Pyre as standard chara_card_v2 JSON.',
+      saveBytes: bytes,
+      saveFileName: file.uri.pathSegments.last,
+      saveExtensions: const ['json'],
+    );
+  } catch (e) {
+    messenger.showSnackBar(
+      SnackBar(content: Text('Export failed: $e')),
+    );
+  }
+}
+
 /// Wave CY.18.250: export a PERSONA as a chara_card_v2 PNG (+ its gallery),
 /// mirroring `_exportCharacterAsPng`. Personas have no chara_card encoder of
 /// their own, so we build a throwaway [Character] carrying the persona's
@@ -968,6 +1036,88 @@ Future<void> _exportPersonaAsPng(BuildContext context, Persona p) async {
       saveBytes: pngBytes,
       saveFileName: file.uri.pathSegments.last,
       saveExtensions: const ['png'],
+    );
+  } catch (e) {
+    messenger.showSnackBar(
+      SnackBar(content: Text('Export failed: $e')),
+    );
+  }
+}
+
+/// 1.2.1: export a PERSONA as a standard chara_card_v2 JSON file, mirroring
+/// `_exportPersonaAsPng` — builds the same throwaway [Character] carrying
+/// the persona's shareable fields, then reuses `buildCharaCardV2Json`
+/// instead of `encodeCharaCardPng`.
+///
+/// KEY DIFFERENCE from `_exportPersonaAsPng`: this needs NO avatar (see
+/// `_exportCharacterAsJson`). No gallery images are attached either — the
+/// gallery is a PNG-side-files concern, not part of the JSON payload.
+Future<void> _exportPersonaAsJson(BuildContext context, Persona p) async {
+  final messenger = ScaffoldMessenger.of(context);
+  // D3: capture store reference before the first await (see _exportCharacterAsPng).
+  final personaStore = context.read<AppStore>();
+  try {
+    final asCard = Character(
+      id: newId('export'),
+      name: p.name,
+      tagline: p.tagline,
+      description: p.description,
+      mesExample: p.dialogueExamples,
+      avatar: p.avatar,
+      gallery: List<String>.from(p.gallery),
+      lorebookIds: List<String>.from(p.lorebookIds),
+      // Wave CY.18.255 (FIX 2): tag this card as a Pyre-origin persona so a
+      // round-trip import knows the text is ALREADY persona-POV and skips
+      // the {{user}}↔{{char}} swap (see `_personaFromImportedCard`). Other
+      // tools ignore the unknown `pyre` namespace. `buildCharaCardV2Json`
+      // preserves this map and merges the tagline into it without clobbering
+      // `kind`.
+      extensions: <String, dynamic>{
+        'pyre': <String, dynamic>{'kind': 'persona'},
+      },
+    );
+    final personaBoundBooks = p.lorebookIds
+        .map(personaStore.lorebookById)
+        .whereType<Lorebook>()
+        .where((b) => !b.deleted)
+        .toList(growable: false);
+    final personaMergedLorebook =
+        mergeBoundLorebooksForExport(personaBoundBooks);
+    final map = buildCharaCardV2Json(asCard, lorebook: personaMergedLorebook);
+    final bytes =
+        utf8.encode(const JsonEncoder.withIndent('  ').convert(map));
+
+    final safeName = p.name
+        .replaceAll(RegExp(r'[^A-Za-z0-9 _\-.]'), '')
+        .trim()
+        .replaceAll(' ', '_');
+    final filename = '${safeName.isEmpty ? 'persona' : safeName}.card.json';
+
+    if (kIsWeb) {
+      // Web has no filesystem — trigger a real browser download.
+      downloadBytesToBrowser(bytes, filename, 'application/json');
+      messenger.showSnackBar(
+        SnackBar(content: Text('Downloading $filename')),
+      );
+      return;
+    }
+
+    final dir = await getApplicationDocumentsDirectory();
+    final outDir = Directory('${dir.path}/PyreExports');
+    if (!await outDir.exists()) await outDir.create(recursive: true);
+    final file = File('${outDir.path}/$filename');
+    await file.writeAsBytes(bytes);
+
+    await deliverExport(
+      messenger,
+      [XFile(file.path, mimeType: 'application/json')],
+      savedBanner: 'Exported — ${file.uri.pathSegments.last}',
+      shareSubject: '${p.name} — Pyre persona (JSON)',
+      shareText:
+          'Persona exported from Pyre as a standard chara_card_v2 JSON.',
+      saveBytes: bytes,
+      saveFileName: file.uri.pathSegments.last,
+      saveExtensions: const ['json'],
     );
   } catch (e) {
     messenger.showSnackBar(
@@ -2215,6 +2365,20 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
               await _exportCharacterAsPng(context, c);
             },
           ),
+          // 1.2.1: standard chara_card_v2 JSON alongside the PNG export —
+          // no avatar required, so an avatarless card can still be shared.
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('Export as JSON card'),
+            subtitle: Text(
+              'chara_card_v2 JSON, no avatar required.',
+              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+            ),
+            onTap: () async {
+              Navigator.pop(sheet);
+              await _exportCharacterAsJson(context, c);
+            },
+          ),
           // In-app Duplicate — mirrors the lorebook "Copy as new" / preset
           // "Copy (editable)" convention. Non-destructive, so no confirm
           // dialog; a fresh "<name> (copy)" appears right after the original.
@@ -2325,6 +2489,20 @@ void _showPersonaMenu(BuildContext context, AppStore store, Persona p) {
             onTap: () async {
               Navigator.pop(sheet);
               await _exportPersonaAsPng(context, p);
+            },
+          ),
+          // 1.2.1: standard chara_card_v2 JSON alongside the PNG export —
+          // no avatar required.
+          ListTile(
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('Export as JSON card'),
+            subtitle: Text(
+              'chara_card_v2 JSON, no avatar required.',
+              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+            ),
+            onTap: () async {
+              Navigator.pop(sheet);
+              await _exportPersonaAsJson(context, p);
             },
           ),
           // In-app Duplicate — same convention as the character menu.
