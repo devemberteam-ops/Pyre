@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
 import 'package:pyre/models/models.dart';
+import 'package:pyre/screens/character_edit_screen.dart';
 import 'package:pyre/screens/characters_screen.dart';
 import 'package:pyre/screens/chat_info_sheet.dart';
 import 'package:pyre/services/store_backend.dart';
@@ -211,19 +212,6 @@ void main() {
               reason: 'the resume/start-fresh sheet must stay capped below '
                   'the status-bar inset (85% height-cap fix)');
         },
-        // env-matrix finding #1 — see report: the 85% cap is measured off
-        // the FULL screen height, but the sheet's `SafeArea` ALSO reserves
-        // the bottom gesture-nav inset out of that same 85%-tall box (it
-        // doesn't grow the box to compensate). On a short landscape
-        // screen, the leftover 15% margin above the sheet is smaller than
-        // the reserved bottom inset, so the panel's top edge creeps to
-        // within 0-6px of the very top of the screen — inside the fake
-        // 24px status-bar zone, contradicting the fix's own stated intent
-        // ("could grow to cover the status bar", chat's
-        // characters_screen.dart comment above
-        // `_showResumeOrStartFreshSheet`). Portrait envs have enough
-        // headroom (screen tall enough) and don't trip this.
-        skip: env.name == 'landscape-phone' || env.name == 'short-landscape',
       );
     }
   });
@@ -270,14 +258,47 @@ void main() {
           expect(find.text('Chat info'), findsOneWidget);
           expect(tester.takeException(), isNull);
         },
-        // env-matrix finding #3 — see report: the "Character" row header
-        // (chat_info_sheet.dart:397, an unconstrained `Row` holding the
-        // bold title + optional expand chevron) overflows by 17px at
-        // portrait-bigfont (360 logical width, 1.3x text scale). Real bug,
-        // not fixed here per the harness guardrails — skip with the
-        // finding on record instead of masking it.
-        skip: env.name == 'portrait-bigfont',
       );
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // 5. CharacterEditScreen avatar row — env-matrix finding #2 (see report):
+  //    the "Change avatar" + "Recrop" `Row` (character_edit_screen.dart,
+  //    just under the avatar bubble) overflowed by 34px at a plain
+  //    360-logical-px portrait width in EVERY env in this matrix, including
+  //    plain portrait-phone. Not part of the harness's originally-assigned
+  //    surfaces, so it has no pinned skipped test yet — seed a draft (like
+  //    group 3 above) and pump the real edit screen across `kEnvMatrix`;
+  //    Flutter's RenderFlex-overflow assertion auto-fails the test if the
+  //    row still doesn't fit.
+  group('CharacterEditScreen avatar row — no overflow in every env', () {
+    for (final env in kEnvMatrix) {
+      testWidgets('avatar row [${env.name}]', (tester) async {
+        final store = _store();
+        final draft = Character(id: newId('draft'), name: 'Aria');
+        store.saveDraft(draft);
+
+        await pumpInEnv(
+          tester,
+          env,
+          ChangeNotifierProvider<AppStore>.value(
+            value: store,
+            child: MaterialApp(
+              home: CharacterEditScreen(draftId: draft.id),
+            ),
+          ),
+        );
+
+        expect(find.text('Change avatar'), findsOneWidget);
+        expect(find.text('Recrop'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+
+        // Flush AppStore's 600ms debounced persist timer (armed by
+        // saveDraft above) so it doesn't trip flutter_test's
+        // no-pending-timers invariant at teardown.
+        await tester.pump(const Duration(milliseconds: 700));
+      });
     }
   });
 }

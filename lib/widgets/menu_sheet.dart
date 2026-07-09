@@ -30,8 +30,19 @@ Future<T?> showMenuSheet<T>(
     isScrollControlled: true,
     builder: (sheet) => SafeArea(
       child: ConstrainedBox(
+        // 1.2.1 audit fix (env-matrix finding #1): the cap was measured off
+        // the FULL screen height, but this SafeArea reserves the top status
+        // bar AND bottom gesture-nav insets OUTSIDE that same 85%-tall box —
+        // it doesn't grow the box to compensate, so the total rendered sheet
+        // was `cap + insets` tall. On short/landscape screens that pushed
+        // the panel's top edge to (or above) the very top of the screen,
+        // invading the status bar. Subtracting the insets BEFORE applying
+        // the percentage keeps the total height within the intended 85%.
         constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(sheet).size.height * 0.85,
+          maxHeight:
+              (MediaQuery.of(sheet).size.height -
+                  MediaQuery.of(sheet).viewPadding.vertical) *
+              0.85,
         ),
         child: SingleChildScrollView(
           child: Column(

@@ -395,9 +395,17 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(children: [
-                    Text(headerTitle,
+                    // env-matrix audit fix: at 1.3x text scale this Row
+                    // overflowed by 17px — the bold title Text had no
+                    // width limit of its own. Expanded + ellipsis lets it
+                    // shrink instead of blowing past the Row's bounds.
+                    Expanded(
+                      child: Text(
+                        headerTitle,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                             fontWeight: FontWeight.w600)),
+                    ),
                     if (canExpand) ...[
                       const SizedBox(width: 4),
                       Icon(

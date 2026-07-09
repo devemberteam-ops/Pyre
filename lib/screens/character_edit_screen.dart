@@ -426,15 +426,23 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                   fullImageUrl: _avatarOriginal ?? _avatar,
                 ),
                 const SizedBox(height: 8),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
+                // env-matrix audit fix: a plain Row here overflowed by 34px
+                // at 360dp portrait — "Change avatar" + "Recrop" don't fit
+                // side by side on a narrow screen. Wrap (matching the app's
+                // convention for overflow-prone button/chip clusters, see
+                // the tag Wraps in characters_screen.dart) lets Recrop drop
+                // to its own line instead of blowing past the row's bounds.
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 4,
                   children: [
                     ElevatedButton.icon(
                       icon: const Icon(Icons.image_outlined, size: 14),
                       label: const Text('Change avatar'),
                       onPressed: _pickAndCropAvatar,
                     ),
-                    const SizedBox(width: 8),
                     TextButton(
                       // B-2 / H-6: enable Recrop for any avatar with bytes we
                       // can resolve — a `data:` URL (web / legacy) OR a

@@ -570,9 +570,22 @@ Future<void> _showResumeOrStartFreshSheet(BuildContext context) async {
         // drafts this sheet could grow to cover the status bar. Re-cap at
         // 85% (the same ceiling showMenuSheet uses); the inner ListView
         // scrolls within it.
+        //
+        // env-matrix finding #1 (1.2.1 audit): the cap was measured off the
+        // FULL screen height, but this SafeArea (top: false) ALSO reserves
+        // the bottom gesture-nav inset OUTSIDE that same 85%-tall box — it
+        // doesn't grow the box to compensate, so the total rendered sheet
+        // was `cap + bottom inset` tall. On a short landscape screen that
+        // pushed the panel's top edge to within a few px of (or above) the
+        // very top of the screen, invading the status bar. Subtracting the
+        // bottom inset BEFORE applying the percentage keeps the total
+        // height (cap + inset) within the intended 85% ceiling.
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(sheet).size.height * 0.85,
+            maxHeight:
+                (MediaQuery.of(sheet).size.height -
+                    MediaQuery.of(sheet).viewPadding.bottom) *
+                0.85,
           ),
           child: Column(
           mainAxisSize: MainAxisSize.min,
