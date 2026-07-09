@@ -32,6 +32,7 @@ import '../widgets/card_import_confirm.dart';
 import '../widgets/confirm_dialog.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/export_snack.dart';
+import '../widgets/menu_sheet.dart';
 import 'character_assistant_screen.dart';
 import 'character_details_sheet.dart';
 import 'character_edit_screen.dart';
@@ -2133,13 +2134,9 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
     return mine.isEmpty ? null : mine.first;
   }();
 
-  showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: EmberColors.bgPanel,
-    builder: (sheet) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+  showMenuSheet<void>(
+    context,
+    itemsBuilder: (sheet) => [
           ListTile(
             leading: Icon(Icons.add_comment_outlined,
                 color: EmberColors.primary),
@@ -2285,20 +2282,14 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
             },
           ),
         ],
-      ),
-    ),
   );
 }
 
 void _showPersonaMenu(BuildContext context, AppStore store, Persona p) {
   final isActive = p.id == store.activePersonaId;
-  showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: EmberColors.bgPanel,
-    builder: (sheet) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+  showMenuSheet<void>(
+    context,
+    itemsBuilder: (sheet) => [
           // Wave CY.18.138: mirror the character kebab — lead with
           // "View details" (the persona details sheet, where the Edit
           // button offers "Edit with AI" / "Edit manually") instead of
@@ -2382,8 +2373,6 @@ void _showPersonaMenu(BuildContext context, AppStore store, Persona p) {
             },
           ),
         ],
-      ),
-    ),
   );
 }
 
