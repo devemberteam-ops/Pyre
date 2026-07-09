@@ -5494,21 +5494,40 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
                 if (!isLorebookMode && embeddedDraftEntries.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 10),
-                    child: Column(
-                      children: [
-                        for (var i = 0; i < embeddedDraftEntries.length; i++)
-                          _LorebookEntryCanvasCard(
-                            entry: embeddedDraftEntries[i],
-                            index: i,
-                            highlighted: _recentlyChangedCanvasKeys.contains(
-                              _canvasLorebookEntriesKey,
-                            ),
-                            onEdit: () => _editCanvasField(
-                              '$_canvasLorebookEntriesKey:$i',
-                              embeddedDraftEntries[i].toJson(),
-                            ),
-                          ),
-                      ],
+                    // 2026-07-09 (1.2.1, Reddit list #2): the generated
+                    // embedded-lorebook entries used to render as a bare Column
+                    // inside this FIXED (non-Expanded) bottom panel — with more
+                    // than a couple of entries they overflowed the panel
+                    // (RenderFlex overflow) and could NOT be scrolled, so on
+                    // mobile the user couldn't review the generated lorebook
+                    // before saving. Cap the height and make it scrollable so
+                    // every entry is reachable while the action buttons below
+                    // stay visible.
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.of(context).size.height * 0.4,
+                      ),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            for (var i = 0;
+                                i < embeddedDraftEntries.length;
+                                i++)
+                              _LorebookEntryCanvasCard(
+                                entry: embeddedDraftEntries[i],
+                                index: i,
+                                highlighted:
+                                    _recentlyChangedCanvasKeys.contains(
+                                  _canvasLorebookEntriesKey,
+                                ),
+                                onEdit: () => _editCanvasField(
+                                  '$_canvasLorebookEntriesKey:$i',
+                                  embeddedDraftEntries[i].toJson(),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 Row(
