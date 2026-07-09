@@ -1,5 +1,5 @@
 {
-  "latest": "1.2.0",
+  "latest": "1.2.1",
   "url": "https://github.com/devemberteam-ops/pyre/releases/latest",
-  "notes": "Pyre 1.2 — group chats and Party mode (both characters and personas act as one scene), a far smarter Creator (edit any part of a card in place, attach a card/persona/lorebook from your library as reference, craft doctrine so it knows what makes a good card), self-contained Checkpoint 'chapters', Lorebooks moved into the library, per-preset prefill + sampler passthrough, and a large polish and data-integrity pass."
+  "notes": "Pyre 1.2.1 — the reliability release. Lorebooks now ALWAYS reach the model (fixed silent drops with SillyTavern-imported presets, bindings added after a chat existed, shared worlds never auto-linking, and per-chat overrides being ignored), plus a live 'Lore active: N of M entries' auditor in Chat info. Character system prompts, post-history instructions, and persona dialogue examples now actually reach the model too. Import your own exported chats back (full-fidelity JSON or JSONL), export cards as standard JSON, pin providers for quick in-chat swapping, relocate your data folder for Syncthing (PYRE_DATA_DIR), a self-contained Linux tarball, and a full-app audit's worth of layout, boot, and data-integrity fixes."
 }
