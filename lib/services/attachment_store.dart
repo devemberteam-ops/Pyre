@@ -27,9 +27,8 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
-import 'package:pyre/dev_flavor.dart';
 
+import 'data_dir.dart';
 import 'lan_client.dart';
 
 class AttachmentStore {
@@ -45,13 +44,13 @@ class AttachmentStore {
 
   static Directory? _cachedDir;
 
-  /// Resolves to `<app-docs>/EmberChat/attachments/`, creating it if
-  /// missing. Cached on first call. Returns null on web (no fs).
+  /// Resolves to `<pyre-data-root>/attachments/`, creating it if missing.
+  /// Cached on first call. Returns null on web (no fs). Honors
+  /// `PYRE_DATA_DIR` on desktop via [pyreDataRoot] (1.2.1 item #6).
   static Future<Directory?> _attachDir() async {
     if (kIsWeb) return null;
     if (_cachedDir != null) return _cachedDir;
-    final docs = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docs.path}/${pyreDataDirName()}/attachments');
+    final dir = Directory('${(await pyreDataRoot()).path}/attachments');
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }

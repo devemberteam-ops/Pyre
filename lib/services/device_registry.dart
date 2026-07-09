@@ -21,17 +21,16 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show File, Directory;
+import 'dart:io' show File;
 import 'dart:math' show Random;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
 import 'package:cryptography/cryptography.dart' show SecretKey;
 import 'package:flutter/foundation.dart' show debugPrint;
-import 'package:path_provider/path_provider.dart';
-import 'package:pyre/dev_flavor.dart';
 import 'package:uuid/uuid.dart';
 
+import 'data_dir.dart';
 import 'key_crypto.dart';
 
 /// SHA-256 hex digest of [token]. Used to persist a one-way hash of each
@@ -174,9 +173,7 @@ class DeviceRegistry {
   }
 
   Future<File> _file() async {
-    final docs = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docs.path}/${pyreDataDirName()}');
-    if (!await dir.exists()) await dir.create(recursive: true);
+    final dir = await pyreDataRoot();
     return File('${dir.path}/$_fileName');
   }
 
