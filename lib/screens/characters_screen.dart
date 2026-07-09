@@ -221,57 +221,51 @@ class _CharactersScreenState extends State<CharactersScreen> {
 /// way. (2026-07-03, Gui: lorebook AI creation lives HERE now, not as a
 /// third choice inside the main Creator's chooser.)
 Future<void> _showLorebookAddSheet(BuildContext context) async {
-  await showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: EmberColors.bgPanel,
-    builder: (sheet) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: Icon(Icons.auto_awesome, color: EmberColors.primary),
-            title: const Text('Build with AI assistant'),
-            subtitle: Text(
-              'Describe the world or topic and the AI drafts keyword-'
-              'triggered entries you can review before saving.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () {
-              Navigator.pop(sheet);
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) =>
-                    const CharacterAssistantScreen(lorebookMode: true),
-              ));
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.edit_note, color: EmberColors.primary),
-            title: const Text('Create manually'),
-            subtitle: Text(
-              'Name the book, then add keyword-triggered entries yourself.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () {
-              Navigator.pop(sheet);
-              editLorebook(context, null);
-            },
-          ),
-          Divider(color: EmberColors.stroke, height: 1),
-          ListTile(
-            leading: const Icon(Icons.file_upload_outlined),
-            title: const Text('Import from JSON'),
-            subtitle: Text(
-              'Pick a SillyTavern World Info / lorebook JSON from your device.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () async {
-              Navigator.pop(sheet);
-              await importLorebookFile(context);
-            },
-          ),
-        ],
+  await showMenuSheet<void>(
+    context,
+    itemsBuilder: (sheet) => [
+      ListTile(
+        leading: Icon(Icons.auto_awesome, color: EmberColors.primary),
+        title: const Text('Build with AI assistant'),
+        subtitle: Text(
+          'Describe the world or topic and the AI drafts keyword-'
+          'triggered entries you can review before saving.',
+          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+        ),
+        onTap: () {
+          Navigator.pop(sheet);
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) =>
+                const CharacterAssistantScreen(lorebookMode: true),
+          ));
+        },
       ),
-    ),
+      ListTile(
+        leading: Icon(Icons.edit_note, color: EmberColors.primary),
+        title: const Text('Create manually'),
+        subtitle: Text(
+          'Name the book, then add keyword-triggered entries yourself.',
+          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+        ),
+        onTap: () {
+          Navigator.pop(sheet);
+          editLorebook(context, null);
+        },
+      ),
+      Divider(color: EmberColors.stroke, height: 1),
+      ListTile(
+        leading: const Icon(Icons.file_upload_outlined),
+        title: const Text('Import from JSON'),
+        subtitle: Text(
+          'Pick a SillyTavern World Info / lorebook JSON from your device.',
+          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+        ),
+        onTap: () async {
+          Navigator.pop(sheet);
+          await importLorebookFile(context);
+        },
+      ),
+    ],
   );
 }
 
@@ -279,61 +273,55 @@ Future<void> _showLorebookAddSheet(BuildContext context) async {
 /// Character Creator) vs "Create manually" (the classic persona form).
 /// Mirrors how characters offer build-with-AI vs from-scratch.
 Future<void> _showPersonaAddSheet(BuildContext context) async {
-  await showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: EmberColors.bgPanel,
-    builder: (sheet) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading:
-                Icon(Icons.auto_awesome, color: EmberColors.primary),
-            title: const Text('Build with AI assistant'),
-            subtitle: Text(
-              'Chat with an AI that helps you flesh out your persona — who '
-              'you are in chats — then writes it for you.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () {
-              Navigator.pop(sheet);
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) =>
-                    const CharacterAssistantScreen(personaMode: true),
-              ));
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.edit_note, color: EmberColors.primary),
-            title: const Text('Create manually'),
-            subtitle: Text(
-              'Fill in the persona fields yourself in the in-app editor.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () {
-              Navigator.pop(sheet);
-              showPersonaEditor(context);
-            },
-          ),
-          Divider(color: EmberColors.stroke, height: 1),
-          // Wave CY.18.250: import a persona from a file — either a
-          // chara_card PNG/JSON (converted via buildPersonaFromCharacter)
-          // or a native Pyre persona JSON.
-          ListTile(
-            leading: const Icon(Icons.file_upload_outlined),
-            title: const Text('Import from file'),
-            subtitle: Text(
-              'Pick a character card PNG/JSON or a Pyre persona JSON from your device.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () async {
-              Navigator.pop(sheet);
-              await _pickAndImportPersona(context);
-            },
-          ),
-        ],
+  await showMenuSheet<void>(
+    context,
+    itemsBuilder: (sheet) => [
+      ListTile(
+        leading:
+            Icon(Icons.auto_awesome, color: EmberColors.primary),
+        title: const Text('Build with AI assistant'),
+        subtitle: Text(
+          'Chat with an AI that helps you flesh out your persona — who '
+          'you are in chats — then writes it for you.',
+          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+        ),
+        onTap: () {
+          Navigator.pop(sheet);
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) =>
+                const CharacterAssistantScreen(personaMode: true),
+          ));
+        },
       ),
-    ),
+      ListTile(
+        leading: Icon(Icons.edit_note, color: EmberColors.primary),
+        title: const Text('Create manually'),
+        subtitle: Text(
+          'Fill in the persona fields yourself in the in-app editor.',
+          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+        ),
+        onTap: () {
+          Navigator.pop(sheet);
+          showPersonaEditor(context);
+        },
+      ),
+      Divider(color: EmberColors.stroke, height: 1),
+      // Wave CY.18.250: import a persona from a file — either a
+      // chara_card PNG/JSON (converted via buildPersonaFromCharacter)
+      // or a native Pyre persona JSON.
+      ListTile(
+        leading: const Icon(Icons.file_upload_outlined),
+        title: const Text('Import from file'),
+        subtitle: Text(
+          'Pick a character card PNG/JSON or a Pyre persona JSON from your device.',
+          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+        ),
+        onTap: () async {
+          Navigator.pop(sheet);
+          await _pickAndImportPersona(context);
+        },
+      ),
+    ],
   );
 }
 
@@ -469,73 +457,67 @@ Persona _personaFromImportedCard(Character c) {
 }
 
 Future<void> _showImportSourceSheet(BuildContext context) async {
-  await showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: EmberColors.bgPanel,
-    builder: (sheet) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: Icon(Icons.auto_awesome, color: EmberColors.primary),
-            title: const Text('Build with AI assistant'),
-            subtitle: Text(
-              'Chat with an AI that helps you flesh out a character, then writes the card for you.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () {
-              Navigator.pop(sheet);
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const CharacterAssistantScreen(),
-              ));
-            },
-          ),
-          // Wave BL: drafts only live INSIDE the "Create from scratch"
-          // path. They're a feature of the manual editor — the AI
-          // assistant has its own session system, and surfacing drafts
-          // at the Create root mixed the two metaphors. Now: tap Create
-          // from scratch → if drafts exist, show chooser (Resume X /
-          // Start fresh); if none, go straight to new editor.
-          ListTile(
-            leading: Icon(Icons.edit_note, color: EmberColors.primary),
-            title: const Text('Create from scratch'),
-            subtitle: Text(
-              'Build a new chara_card_v2 card from blank in the in-app editor.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () async {
-              Navigator.pop(sheet);
-              await _createBlankCharacter(context);
-            },
-          ),
-          Divider(color: EmberColors.stroke, height: 1),
-          ListTile(
-            leading: const Icon(Icons.link),
-            title: const Text('From URL'),
-            subtitle: Text(
-              'Paste a direct PNG link from botbooru or chub.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () {
-              Navigator.pop(sheet);
-              _showImportCharacterDialog(context);
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.file_upload_outlined),
-            title: const Text('From file'),
-            subtitle: Text(
-              'Pick a Tavern Card PNG (or .json) from your device.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () async {
-              Navigator.pop(sheet);
-              await _pickAndImportCard(context);
-            },
-          ),
-        ],
+  await showMenuSheet<void>(
+    context,
+    itemsBuilder: (sheet) => [
+      ListTile(
+        leading: Icon(Icons.auto_awesome, color: EmberColors.primary),
+        title: const Text('Build with AI assistant'),
+        subtitle: Text(
+          'Chat with an AI that helps you flesh out a character, then writes the card for you.',
+          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+        ),
+        onTap: () {
+          Navigator.pop(sheet);
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => const CharacterAssistantScreen(),
+          ));
+        },
       ),
-    ),
+      // Wave BL: drafts only live INSIDE the "Create from scratch"
+      // path. They're a feature of the manual editor — the AI
+      // assistant has its own session system, and surfacing drafts
+      // at the Create root mixed the two metaphors. Now: tap Create
+      // from scratch → if drafts exist, show chooser (Resume X /
+      // Start fresh); if none, go straight to new editor.
+      ListTile(
+        leading: Icon(Icons.edit_note, color: EmberColors.primary),
+        title: const Text('Create from scratch'),
+        subtitle: Text(
+          'Build a new chara_card_v2 card from blank in the in-app editor.',
+          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+        ),
+        onTap: () async {
+          Navigator.pop(sheet);
+          await _createBlankCharacter(context);
+        },
+      ),
+      Divider(color: EmberColors.stroke, height: 1),
+      ListTile(
+        leading: const Icon(Icons.link),
+        title: const Text('From URL'),
+        subtitle: Text(
+          'Paste a direct PNG link from botbooru or chub.',
+          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+        ),
+        onTap: () {
+          Navigator.pop(sheet);
+          _showImportCharacterDialog(context);
+        },
+      ),
+      ListTile(
+        leading: const Icon(Icons.file_upload_outlined),
+        title: const Text('From file'),
+        subtitle: Text(
+          'Pick a Tavern Card PNG (or .json) from your device.',
+          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+        ),
+        onTap: () async {
+          Navigator.pop(sheet);
+          await _pickAndImportCard(context);
+        },
+      ),
+    ],
   );
 }
 
@@ -575,6 +557,7 @@ Future<void> _showResumeOrStartFreshSheet(BuildContext context) async {
   await showModalBottomSheet<void>(
     context: context,
     backgroundColor: EmberColors.bgPanel,
+    isScrollControlled: true,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
