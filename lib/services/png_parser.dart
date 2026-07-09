@@ -165,7 +165,10 @@ CharaCard parseCharaCardPng(Uint8List bytes) {
   // the base64 layer or the JSON layer.
   var usedBase64Fallback = false;
   String? base64FailureMessage;
-  final tryKeys = ['chara', 'ccv3'];
+  // Audit: ccv3 must win when both chunks exist. ST's own reader and the
+  // ccv3 spec treat ccv3 as authoritative — ST writes BOTH chunks on
+  // export, with `chara` being the downgraded v2 copy for compatibility.
+  final tryKeys = ['ccv3', 'chara'];
   for (final k in tryKeys) {
     final v = entries[k];
     if (v == null) continue;

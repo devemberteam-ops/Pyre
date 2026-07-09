@@ -41,6 +41,34 @@ Uint8List _pngWithTextChara(Map<String, dynamic> card) {
   ]);
 }
 
+/// Build a PNG carrying BOTH a `chara` and a `ccv3` `tEXt` chunk (each
+/// base64 JSON), mirroring what ST's own exporter writes: `ccv3` is the
+/// authoritative v3 payload and `chara` is the downgraded v2 copy.
+Uint8List _pngWithCharaAndCcv3(
+  Map<String, dynamic> charaCard,
+  Map<String, dynamic> ccv3Card,
+) {
+  final charaB64 = base64Encode(utf8.encode(jsonEncode(charaCard)));
+  final ccv3B64 = base64Encode(utf8.encode(jsonEncode(ccv3Card)));
+  final charaData = <int>[
+    ...ascii.encode('chara'),
+    0,
+    ...ascii.encode(charaB64),
+  ];
+  final ccv3Data = <int>[
+    ...ascii.encode('ccv3'),
+    0,
+    ...ascii.encode(ccv3B64),
+  ];
+  return Uint8List.fromList([
+    ..._pngSig,
+    ..._chunk('IHDR', List<int>.filled(13, 0)),
+    ..._chunk('tEXt', charaData),
+    ..._chunk('tEXt', ccv3Data),
+    ..._chunk('IEND', const []),
+  ]);
+}
+
 /// Build a PNG carrying `chara` in a COMPRESSED `iTXt` chunk.
 /// iTXt layout: keyword \0 compressionFlag(1) compressionMethod(1) lang \0
 /// translatedKeyword \0 text. With compressionFlag==1 the text is zlib-deflated.
@@ -116,6 +144,17 @@ void main() {
       final mojibake = String.fromCharCodes(utf8Bytes); // old behaviour
       expect(mojibake, isNot(name));
       expect(utf8.decode(utf8Bytes), name); // the fix
+    });
+  });
+
+  group('chara/ccv3 chunk precedence', () {
+    test('ccv3 wins over chara when both chunks exist', () {
+      final png = _pngWithCharaAndCcv3(
+        {'name': 'OldV2', 'description': 'd'},
+        {'name': 'NewV3', 'description': 'd'},
+      );
+      final card = parseCharaCardPng(png);
+      expect(card.card['name'], 'NewV3');
     });
   });
 
