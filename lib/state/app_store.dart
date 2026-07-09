@@ -517,6 +517,16 @@ class AppStore extends ChangeNotifier {
   static String? _jStr(dynamic v) => v is String ? v : null;
   static bool _jBool(dynamic v, bool d) => v is bool ? v : d;
 
+  // Audit B2 (BLOCKER): tolerant string-list decoder — eager filter, same
+  // philosophy as models.dart's `_jStringList`. `(v as List?)?.cast<String>()`
+  // returns a lazy CastList view: a corrupted (non-String) element doesn't
+  // throw at decode time, it throws the FIRST time something iterates/reads
+  // it. `charSelectedTags` backs the Characters-tab tag chips row, read on
+  // every `_applyFiltersAndSort` rebuild — a single bad element bricked the
+  // main library screen permanently (every rebuild re-threw the TypeError).
+  static List<String> _jStringList(dynamic v) =>
+      v is List ? v.whereType<String>().toList() : <String>[];
+
   Future<void> load() async {
     loadErrors = [];
     // BATCH P1-state: load() reassigns the collections wholesale (e.g.
@@ -658,8 +668,7 @@ class AppStore extends ChangeNotifier {
       folders = _parseList<Folder>(
           raw['folders'], 'folders', Folder.fromJson);
       charSortKey = _jStr(raw['charSortKey']) ?? 'recent';
-      charSelectedTags =
-          (raw['charSelectedTags'] as List?)?.cast<String>() ?? [];
+      charSelectedTags = _jStringList(raw['charSelectedTags']);
       charFolderId = _jStr(raw['charFolderId']);
       charFavoritesExpanded = _jBool(raw['charFavoritesExpanded'], true);
       personaSortKey = _jStr(raw['personaSortKey']) ?? 'recent';
