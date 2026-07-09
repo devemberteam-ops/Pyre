@@ -39,6 +39,7 @@ import '../widgets/chat_text.dart';
 import '../widgets/confirm_dialog.dart';
 import '../widgets/export_snack.dart';
 import '../widgets/fallback_prompt_card.dart';
+import 'api_connections_screen.dart';
 import 'character_details_sheet.dart';
 import 'chat_info_sheet.dart';
 import 'chat_picker_screens.dart';
@@ -1016,6 +1017,167 @@ class _ChatScreenState extends State<ChatScreen> {
       },
     );
     quickEditCtl.dispose();
+  }
+
+  /// 1.2.1 (owner design): curated in-chat provider quick-swap. Mirrors
+  /// [_showPresetSwitcher] — a bottom sheet listing the ACTIVE provider
+  /// first, then the user's curated pins (Settings → API connections →
+  /// pin icon), skipping the active one if it's also pinned so it never
+  /// shows twice. Tapping a row swaps `store.activeProviderId` via the
+  /// SAME `setActiveProvider` the API connections screen uses. Provider-
+  /// level only — each provider carries its own model, so this is
+  /// deliberately NOT a model-list dump.
+  Future<void> _showProviderSwitcher() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: EmberColors.bgPanel,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheet) {
+        return Builder(
+          builder: (sheetCtx) {
+            // Read live from the store on every rebuild — same reasoning
+            // as the preset switcher (an external change, e.g. a backup
+            // restore, shouldn't leave a stale active marker). No local
+            // ephemeral state here (unlike the preset sheet's quick-edit
+            // expander), so a plain Builder is enough — no StatefulBuilder.
+            final liveStore = sheetCtx.watch<AppStore>();
+            final activeId = liveStore.activeProviderId;
+            final active = liveStore.activeProvider;
+            final pinnedIds = liveStore.uiPrefs.chatSwapProviderIds;
+
+            // Active provider first, then each pin — skip the active one
+            // if it's ALSO pinned so it doesn't render twice.
+            final rows = <ApiProvider>[
+              if (active != null) active,
+              for (final id in pinnedIds)
+                if (id != activeId)
+                  ...liveStore.providers.where((p) => p.id == id).take(1),
+            ];
+
+            void switchTo(String id) {
+              liveStore.setActiveProvider(id);
+              final name = liveStore.activeProvider?.name ?? '';
+              Navigator.pop(sheet);
+              messenger.showSnackBar(
+                SnackBar(content: Text('Switched to $name')),
+              );
+            }
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(sheetCtx).viewInsets.bottom,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Padding(
+                          padding: EdgeInsets.only(top: 8, bottom: 12),
+                          child: SizedBox(
+                            width: 40,
+                            height: 4,
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: EmberColors.stroke,
+                                borderRadius:
+                                    BorderRadius.all(Radius.circular(2)),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(20, 0, 20, 2),
+                        child: Text(
+                          'Provider',
+                          style: TextStyle(
+                              fontSize: 17, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+                        child: Text(
+                          'The AI backend for this chat. Takes effect on '
+                          'your next message.',
+                          style: TextStyle(
+                              color: EmberColors.textMid, fontSize: 12),
+                        ),
+                      ),
+                      if (rows.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                          child: Text(
+                            'Pin providers in Settings → API connections '
+                            'to quick-swap here.',
+                            style: TextStyle(
+                                color: EmberColors.textMid, fontSize: 12),
+                          ),
+                        )
+                      else
+                        RadioGroup<String>(
+                          groupValue: activeId,
+                          onChanged: (id) {
+                            if (id == null) return;
+                            switchTo(id);
+                          },
+                          child: Column(
+                            children: [
+                              for (final p in rows)
+                                ListTile(
+                                  leading: Radio<String>(
+                                    value: p.id,
+                                    activeColor: EmberColors.primary,
+                                  ),
+                                  title: Text(
+                                    p.name,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                  subtitle: Text(
+                                    p.model.isEmpty ? p.baseUrl : p.model,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        color: EmberColors.textMid,
+                                        fontSize: 12),
+                                  ),
+                                  onTap: () => switchTo(p.id),
+                                ),
+                            ],
+                          ),
+                        ),
+                      Divider(color: EmberColors.stroke, height: 8),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.tune, size: 16),
+                          label: const Text('Manage providers'),
+                          onPressed: () {
+                            Navigator.pop(sheet);
+                            navigator.push(MaterialPageRoute(
+                              builder: (_) => const ApiConnectionsScreen(),
+                            ));
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   /// One-line flattened preview of a preset's main prompt for the switcher.
@@ -2720,6 +2882,23 @@ class _ChatScreenState extends State<ChatScreen> {
                     onTap: () {
                       Navigator.pop(sheet);
                       _showPresetSwitcher();
+                    },
+                  ),
+                  // 1.2.1: sibling of the Preset switcher above — curated
+                  // in-chat provider quick-swap (owner design). The active
+                  // provider is GLOBAL state (store.activeProviderId), same
+                  // as Preset, so the subtitle reflects whatever's active.
+                  ListTile(
+                    leading: const Icon(Icons.dns_outlined),
+                    title: const Text('Provider'),
+                    subtitle: Text(
+                      'Provider · ${store.activeProvider?.name ?? "None"}',
+                      style: TextStyle(
+                          color: EmberColors.textMid, fontSize: 12),
+                    ),
+                    onTap: () {
+                      Navigator.pop(sheet);
+                      _showProviderSwitcher();
                     },
                   ),
                   if (primary != null)

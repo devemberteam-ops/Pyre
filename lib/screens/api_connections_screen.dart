@@ -244,6 +244,28 @@ class _ApiConnectionsScreenState extends State<ApiConnectionsScreen> {
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              // 1.2.1: pin/unpin for the curated in-chat
+                              // quick-swap list (Settings → API connections
+                              // is where the curation happens; the chat
+                              // sheet only ever shows what's pinned here).
+                              Builder(builder: (_) {
+                                final pinned = store
+                                    .uiPrefs.chatSwapProviderIds
+                                    .contains(p.id);
+                                return IconButton(
+                                  icon: Icon(
+                                    pinned
+                                        ? Icons.push_pin
+                                        : Icons.push_pin_outlined,
+                                    color: pinned
+                                        ? EmberColors.primary
+                                        : EmberColors.textDim,
+                                  ),
+                                  tooltip: 'Show in chat quick-swap',
+                                  onPressed: () =>
+                                      store.toggleChatSwapProvider(p.id),
+                                );
+                              }),
                               // 2026-07-03: kebab menu — matches the app's
                               // convention (characters/personas/lorebooks all
                               // use one) and un-stacks the edit dialog, which

@@ -2930,6 +2930,14 @@ class UiPrefs {
   /// `primaryDim` on top of the active curated palette. null = no override.
   int? accentArgb;
 
+  /// 1.2.1: curated in-chat provider quick-swap. The user PINS a few
+  /// providers here (from API Connections); the chat provider-switcher
+  /// sheet lists the active provider plus these pins, so switching
+  /// mid-conversation never means scrolling every configured provider.
+  /// Default empty — no pins, no dead-end control (the sheet shows a
+  /// gentle hint pointing at API Connections instead).
+  List<String> chatSwapProviderIds;
+
   /// Lower bound for [uiScale]. Below this, UI chrome (buttons, chips)
   /// starts to read as broken rather than "small text".
   static const double kUiScaleMin = 0.8;
@@ -2966,7 +2974,9 @@ class UiPrefs {
     this.uiScale = 1.0,
     this.activeThemeId = 'ember',
     this.accentArgb,
-  }) : desktopShortcuts = desktopShortcuts ?? <String, dynamic>{};
+    List<String>? chatSwapProviderIds,
+  })  : desktopShortcuts = desktopShortcuts ?? <String, dynamic>{},
+        chatSwapProviderIds = chatSwapProviderIds ?? const [];
 
   factory UiPrefs.fromJson(Map<String, dynamic> j) => UiPrefs(
         activeTab: (j['activeTab'] as String?) ?? 'characters',
@@ -3013,6 +3023,11 @@ class UiPrefs {
         // Wave CY.18.1.3: null → no accent override (use palette default).
         // A non-int value also maps to null — fail-safe.
         accentArgb: j['accentArgb'] is int ? j['accentArgb'] as int : null,
+        // 1.2.1: defensive parse — anything but a List (missing key on
+        // legacy blobs, or a corrupted non-list value) falls back to no
+        // pins rather than throwing.
+        chatSwapProviderIds:
+            (j['chatSwapProviderIds'] as List?)?.cast<String>() ?? const [],
       );
 
   // Wave CY.18.48: defensively decode the bounds list. JSON could
@@ -3076,6 +3091,10 @@ class UiPrefs {
         // clean for users who never touched the theme (the common case).
         if (activeThemeId != 'ember') 'activeThemeId': activeThemeId,
         if (accentArgb != null) 'accentArgb': accentArgb,
+        // 1.2.1: persist only when the user actually pinned something —
+        // keeps backups clean for the common (no pins yet) case.
+        if (chatSwapProviderIds.isNotEmpty)
+          'chatSwapProviderIds': chatSwapProviderIds,
       };
 }
 

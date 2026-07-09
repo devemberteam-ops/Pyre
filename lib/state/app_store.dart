@@ -3698,6 +3698,18 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
+  /// 1.2.1: toggle a provider's pin in the curated in-chat quick-swap list
+  /// (API Connections → pin icon). Reassigns a fresh list rather than
+  /// mutating in place — [UiPrefs.chatSwapProviderIds] defaults to a
+  /// `const []`, which would throw on `.add`/`.remove`.
+  void toggleChatSwapProvider(String id) {
+    final current = uiPrefs.chatSwapProviderIds;
+    uiPrefs.chatSwapProviderIds = current.contains(id)
+        ? current.where((e) => e != id).toList()
+        : [...current, id];
+    _bump();
+  }
+
   /// Wave CY.18.46: toggle the desktop wide-layout setting. No effect
   /// on mobile (the layout decision happens at render time based on
   /// window width + this flag combined).
