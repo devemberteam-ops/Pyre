@@ -120,6 +120,31 @@ jobs:
       - run: flutter config --enable-linux-desktop
       - run: flutter pub get
       - run: flutter build linux --release
+      # issue #3 (Fedora 43): `./pyre: error while loading shared libraries:
+      # libayatana-appindicator3.so.1`. The tray_manager plugin links the
+      # ayatana appindicator stack at build time (libayatana-appindicator3-dev
+      # above), but Flutter's bundle never ships the runtime .so — so the plain
+      # tarball dies on any distro that doesn't already have it (Fedora, Arch,
+      # older Ubuntu…). Copy the appindicator/dbusmenu closure the built
+      # binary + bundled plugin libs actually reference into bundle/lib/;
+      # Flutter's RPATH is $ORIGIN/lib, so they resolve right next to `pyre`.
+      # Fully defensive (set +e / exit 0): this step can NEVER fail the build —
+      # worst case it copies nothing and the tarball is exactly as it was.
+      - name: Bundle appindicator runtime libs into the tarball (issue #3)
+        run: |
+          set +e
+          libdir=build/linux/x64/release/bundle/lib
+          mkdir -p "$libdir"
+          # appindicator is a dependency of the tray_manager plugin .so, not of
+          # `pyre` directly — so walk the binary AND every bundled plugin lib.
+          ldd "build/linux/x64/release/bundle/pyre" "$libdir"/*.so 2>/dev/null \
+            | grep -iE 'ayatana|dbusmenu|appindicator' \
+            | awk '{print $3}' | sort -u | grep -v '^$' \
+            | while read -r so; do [ -f "$so" ] && cp -vL "$so" "$libdir/"; done
+          echo "--- appindicator libs now shipped in the tarball ---"
+          ls -1 "$libdir" | grep -iE 'ayatana|dbusmenu|appindicator' \
+            || echo "(none matched — tarball unchanged from before)"
+          exit 0
       # Bundle the web client INTO the desktop build so the LAN server can
       # self-host the browser UI (pyre_server.dart looks for `web/` next to
       # the `pyre` binary). Without it the LAN server 404s at the root URL.
