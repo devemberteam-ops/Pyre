@@ -116,7 +116,7 @@ jobs:
       #   libayatana-appindicator3-dev           -> tray_manager (system tray icon)
       # Without them the CMake configure step fails before the build even starts.
       - name: Install Linux desktop build deps
-        run: sudo apt-get update && sudo apt-get install -y ninja-build libgtk-3-dev libsecret-1-dev libjsoncpp-dev libnotify-dev libayatana-appindicator3-dev
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libgtk-3-dev libsecret-1-dev libjsoncpp-dev libnotify-dev libayatana-appindicator3-dev patchelf
       - run: flutter config --enable-linux-desktop
       - run: flutter pub get
       - run: flutter build linux --release
@@ -135,15 +135,25 @@ jobs:
           set +e
           libdir=build/linux/x64/release/bundle/lib
           mkdir -p "$libdir"
-          # appindicator is a dependency of the tray_manager plugin .so, not of
+          # appindicator/libsecret are dependencies of PLUGIN .so's, not of
           # `pyre` directly — so walk the binary AND every bundled plugin lib.
           ldd "build/linux/x64/release/bundle/pyre" "$libdir"/*.so 2>/dev/null \
-            | grep -iE 'ayatana|dbusmenu|appindicator' \
+            | grep -iE 'ayatana|dbusmenu|appindicator|libsecret' \
             | awk '{print $3}' | sort -u | grep -v '^$' \
             | while read -r so; do [ -f "$so" ] && cp -vL "$so" "$libdir/"; done
-          echo "--- appindicator libs now shipped in the tarball ---"
-          ls -1 "$libdir" | grep -iE 'ayatana|dbusmenu|appindicator' \
+          echo "--- extra runtime libs now shipped in the tarball ---"
+          ls -1 "$libdir" | grep -iE 'ayatana|dbusmenu|appindicator|libsecret' \
             || echo "(none matched — tarball unchanged from before)"
+          # v1.2.1 smoke-gate finding (verified in a local clean-container
+          # repro): Flutter's plugin .so's ship a DEAD build-tree RUNPATH
+          # (/home/runner/.../ephemeral), so the loader never looks in the
+          # bundle's own lib/ for the plugins' dependencies — the copied
+          # libs were shipped but UNRESOLVABLE, and startup still died on
+          # clean distros. Point every bundled lib at its own directory.
+          for so in "$libdir"/*.so*; do
+            patchelf --set-rpath '$ORIGIN' "$so" 2>/dev/null
+          done
+          echo "--- plugin RUNPATHs repointed at \$ORIGIN ---"
           exit 0
       # Bundle the web client INTO the desktop build so the LAN server can
       # self-host the browser UI (pyre_server.dart looks for `web/` next to
@@ -184,7 +194,12 @@ jobs:
             set -e
             dnf install -y -q gtk3 glibc >/dev/null
             echo "--- unresolved libs in the shipped bundle (must be empty) ---"
-            missing=$(ldd /app/pyre /app/lib/*.so 2>/dev/null | grep "not found" | sort -u || true)
+            # Scan ONLY the executable: ldd on /app/pyre resolves the FULL
+            # recursive chain with real loader rules — exactly what happens
+            # at startup (the user-reported failure mode). Scanning each
+            # lib/*.so in isolation produced false positives (libflutter,
+            # libjvm) for libs that resolve fine inside the real process.
+            missing=$(ldd /app/pyre 2>/dev/null | grep "not found" | sort -u || true)
             if [ -n "$missing" ]; then
               echo "$missing"
               echo "FAIL: the tarball does not run on a clean desktop distro."
