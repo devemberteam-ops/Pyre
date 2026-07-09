@@ -186,17 +186,37 @@ Lorebook lorebookFromCharacterBook(
         _readKeyList(m['secondary_keys']) ??
         _readKeyList(m['secondaryKeys']) ??
         <String>[];
-    final selectiveLogic = loreSelectiveLogicFromSt(m['selectiveLogic']);
+    // Fix 2 (embedded character_book): ST's exporter
+    // (convertWorldInfoToCharacterBook) nests selective/probability/case
+    // fields under `entry.extensions.*` for a card's EMBEDDED
+    // character_book — the top-level location above is correct only for a
+    // standalone World Info export. Fall back to `extensions` (accepting
+    // both snake_case and camelCase key spellings, since ST has used both
+    // historically) whenever the top-level field is absent. Top-level
+    // always wins when present so the standalone shape is unaffected.
+    final extRaw = m['extensions'];
+    final ext = extRaw is Map ? extRaw.cast<String, dynamic>() : null;
+    final selectiveLogic = loreSelectiveLogicFromSt(
+      m['selectiveLogic'] ?? ext?['selectiveLogic'],
+    );
     // Bug 2 fix: SillyTavern/older exporters emit caseSensitive and
     // matchWholeWords as 0/1 ints rather than true/false booleans.
     // _lBoolOpt accepts bool and 0/1 int; returns null for absent/other.
-    final caseSensitive = _lBoolOpt(m['caseSensitive']);
-    final matchWholeWords = _lBoolOpt(m['matchWholeWords']);
+    final caseSensitive = _lBoolOpt(m['caseSensitive']) ??
+        _lBoolOpt(ext?['case_sensitive']) ??
+        _lBoolOpt(ext?['caseSensitive']);
+    final matchWholeWords = _lBoolOpt(m['matchWholeWords']) ??
+        _lBoolOpt(ext?['match_whole_words']) ??
+        _lBoolOpt(ext?['matchWholeWords']);
     // Bug 2 fix: probability can arrive as a numeric string.
-    final probability = _lNum(m['probability'])?.toInt() ?? 100;
+    final probability = _lNum(m['probability'])?.toInt() ??
+        _lNum(ext?['probability'])?.toInt() ??
+        100;
     final useProbability = m['useProbability'] is bool
         ? m['useProbability'] as bool
-        : false;
+        : (ext?['useProbability'] is bool
+            ? ext!['useProbability'] as bool
+            : false);
     entries.add(LoreEntry(
       id: 'lore_${DateTime.now().millisecondsSinceEpoch}_$i',
       keys: keys,

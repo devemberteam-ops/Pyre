@@ -7,6 +7,7 @@
 // Fix: _lBoolOpt / _lNum / _lStr coerce off-spec types gracefully.
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pyre/models/models.dart';
 import 'package:pyre/services/lorebook_import.dart';
 
 void main() {
@@ -163,6 +164,91 @@ void main() {
       final e = book!.entries.single;
       expect(e.caseSensitive, isNull);
       expect(e.matchWholeWords, isNull);
+    });
+  });
+
+  group('Fix 2: embedded character_book selective/probability fields under extensions', () {
+    // ST's card exporter (convertWorldInfoToCharacterBook) nests these
+    // fields under `entry.extensions.*` for a card's EMBEDDED
+    // character_book — only a STANDALONE World Info export has them at
+    // the entry's top level.
+    test('reads selectiveLogic/probability/case fields from extensions '
+        'when absent at top level', () {
+      final book = lorebookFromCharacterBook(<String, dynamic>{
+        'name': 'Embedded Book',
+        'entries': [
+          <String, dynamic>{
+            'keys': ['castle'],
+            'content': 'A great castle.',
+            'enabled': true,
+            'constant': false,
+            'insertion_order': 10,
+            'extensions': <String, dynamic>{
+              'selectiveLogic': 3,
+              'probability': 30,
+              'useProbability': true,
+              'case_sensitive': true,
+              'match_whole_words': true,
+            },
+          },
+        ],
+      });
+      final e = book.entries.single;
+      expect(e.selectiveLogic, LoreSelectiveLogic.andAll);
+      expect(e.probability, 30);
+      expect(e.useProbability, isTrue);
+      expect(e.caseSensitive, isTrue);
+      expect(e.matchWholeWords, isTrue);
+    });
+
+    test('also accepts camelCase caseSensitive/matchWholeWords inside '
+        'extensions', () {
+      final book = lorebookFromCharacterBook(<String, dynamic>{
+        'name': 'Embedded Book 2',
+        'entries': [
+          <String, dynamic>{
+            'keys': ['dragon'],
+            'content': 'Dragons roam the land.',
+            'extensions': <String, dynamic>{
+              'caseSensitive': true,
+              'matchWholeWords': true,
+            },
+          },
+        ],
+      });
+      final e = book.entries.single;
+      expect(e.caseSensitive, isTrue);
+      expect(e.matchWholeWords, isTrue);
+    });
+
+    test('top-level values win over extensions when both are present', () {
+      final book = lorebookFromCharacterBook(<String, dynamic>{
+        'name': 'Both Levels',
+        'entries': [
+          <String, dynamic>{
+            'keys': ['elf'],
+            'content': 'Elves live in the forest.',
+            'selectiveLogic': 0, // andAny — differs from extensions below
+            'probability': 55,
+            'useProbability': false,
+            'caseSensitive': false,
+            'matchWholeWords': false,
+            'extensions': <String, dynamic>{
+              'selectiveLogic': 3,
+              'probability': 30,
+              'useProbability': true,
+              'case_sensitive': true,
+              'match_whole_words': true,
+            },
+          },
+        ],
+      });
+      final e = book.entries.single;
+      expect(e.selectiveLogic, LoreSelectiveLogic.andAny);
+      expect(e.probability, 55);
+      expect(e.useProbability, isFalse);
+      expect(e.caseSensitive, isFalse);
+      expect(e.matchWholeWords, isFalse);
     });
   });
 }
