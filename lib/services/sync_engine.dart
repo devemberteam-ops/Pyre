@@ -240,6 +240,26 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
+  /// Batch E (audit) test seam: point the singleton at a store WITHOUT the
+  /// app-lifecycle wiring `install()` performs (WidgetsBinding observer,
+  /// LanClient listener, periodic poll Timer, delayed auto-tick) — none of
+  /// that is part of the merge/tombstone logic under test, and a real
+  /// `Timer.periodic` would outlive a unit test. Lets `test/sync_engine_
+  /// merge_test.dart` drive the REAL `_tick()` (via [forceTick]) against a
+  /// faked HTTP peer instead of re-implementing `_keepLocalMtime` / the
+  /// tombstone reap boundary locally. Also resets the per-tick cursors and
+  /// counters so each test starts clean regardless of prior singleton state.
+  @visibleForTesting
+  void debugInstallForTest(AppStore store) {
+    _store = store;
+    _lastServerTime = 0;
+    _lastPushTime = 0;
+    _tickInFlight = false;
+    _consecutiveFailures = 0;
+    _lastError = null;
+    _status = SyncStatus.idle;
+  }
+
   /// Manual force-tick from the "Force sync now" button.
   Future<void> forceTick() async {
     if (!LanClient.instance.isPaired) return;
