@@ -1900,6 +1900,7 @@ class ModelSettings {
   /// they don't support it.
   int topK;
   int maxTokens;
+  // UI removed 1.2.1 (was never consulted by any send path); field kept for blob compat.
   bool stream;
 
   // ── Creator-specific overrides ──────────────────────────────────

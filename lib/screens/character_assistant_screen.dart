@@ -27,7 +27,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData, LogicalKeyboardKey, TextInputAction;
@@ -205,6 +205,25 @@ class CharacterAssistantScreen extends StatefulWidget {
   @override
   State<CharacterAssistantScreen> createState() =>
       _CharacterAssistantScreenState();
+}
+
+/// Audit B4(a): sibling of `_creatorChatSettings` for the STRUCTURED /
+/// surgical-JSON creator calls — the canvas batch fill (`creator-structured`)
+/// and the surgical Description edit (`creator-surgical-desc`). These calls
+/// want [ModelSettings.sheetTemperature]'s near-deterministic sampling so
+/// the JSON / edited text parses reliably, distinct from the freeform design
+/// CONVERSATION (the architect turn), which stays on `creatorTemperature`.
+///
+/// Kept top-level (not a `_CharacterAssistantScreenState` method) and public
+/// so a plain unit test can exercise this pure seam directly — the enclosing
+/// State class is library-private. `@visibleForTesting`: production code
+/// should go through the State class's private `_sheetChatSettings` sibling,
+/// which just delegates here.
+@visibleForTesting
+ModelSettings sheetChatSettingsFor(ModelSettings base) {
+  return ModelSettings.fromJson(base.toJson())
+    ..temperature = base.sheetTemperature
+    ..maxTokens = base.creatorMaxTokens;
 }
 
 /// One attachment the user is staging next to the input bar.
@@ -921,6 +940,13 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       ..maxTokens = base.creatorMaxTokens;
   }
 
+  /// Audit B4(a): sibling used by the STRUCTURED / surgical-JSON calls in
+  /// `_runStructuredBuildFlow` (canvas batch fill + surgical Description
+  /// edit) — see [sheetChatSettingsFor]'s doc for why these get
+  /// `sheetTemperature` instead of `creatorTemperature`.
+  ModelSettings _sheetChatSettings(ModelSettings base) =>
+      sheetChatSettingsFor(base);
+
   static const int _kLorebookMaxTokensFloor = 32768;
 
   ModelSettings _lorebookChatSettings(ModelSettings base) {
@@ -1271,7 +1297,11 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
       );
       return;
     }
-    final settings = _creatorChatSettings(store.modelSettings);
+    // Audit B4(a): this `settings` feeds ONLY the structured / surgical-JSON
+    // calls below (creator-surgical-desc, creator-structured) — the design
+    // CONVERSATION (architect turn) is a separate call site further down
+    // that keeps `_creatorChatSettings` / creatorTemperature.
+    final settings = _sheetChatSettings(store.modelSettings);
 
     // Phase-1 transcript → ChatTurns. Skip transient cue/warning messages
     // (kind != null) and any empty turn.

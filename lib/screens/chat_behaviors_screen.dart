@@ -4,13 +4,13 @@
 // the old flat Chat Settings screen:
 //   • Delete behavior        (what deleting a message does)
 //   • Ask persona on new chat
-//   • Streaming               (generation behaviour — bind to ModelSettings)
 //
-// Behaviour is unchanged from the pre-split Chat Settings — the section
-// widgets were moved verbatim. Delete behavior + Ask persona bind to
-// `ChatSettings` (persist via updateChatSettings); Streaming binds to
-// the global `ModelSettings.stream` (persist via updateModelSettings),
-// exactly as before.
+// Delete behavior + Ask persona bind to `ChatSettings` (persist via
+// updateChatSettings). Audit B4(b) (owner-decided): the "Streaming" toggle
+// that used to live here (bound to the global `ModelSettings.stream`) was
+// removed — no send path ever consulted that field, so flipping it did
+// nothing observable. `ModelSettings.stream` itself stays parsed (backup/
+// sync compat); it's just no longer surfaced in the UI.
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -154,31 +154,10 @@ class _ChatBehaviorsScreenState extends State<ChatBehaviorsScreen> {
               },
             ),
           ),
-          // Wave CY.18.192: the "Streaming" toggle binds to the global
-          // `ModelSettings.stream`, not ChatSettings — so it commits via
-          // a separate update method. Wave CY.18.202 places it under
-          // Behaviors (it's a generation behaviour, not a display knob).
-          Card(
-            margin: const EdgeInsets.symmetric(vertical: 6),
-            child: SwitchListTile(
-              title: const Text(
-                'Streaming',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: Text(
-                'Display the response bit by bit as it is generated.',
-                style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-              ),
-              value: context.watch<AppStore>().modelSettings.stream,
-              activeThumbColor: EmberColors.primary,
-              onChanged: (v) {
-                final store = context.read<AppStore>();
-                final ms = store.modelSettings;
-                ms.stream = v;
-                store.updateModelSettings(ms);
-              },
-            ),
-          ),
+          // Audit B4(b): the "Streaming" toggle (bound to the global
+          // `ModelSettings.stream`) was removed 1.2.1 — no send path ever
+          // consulted that field, so flipping it did nothing observable.
+          // `ModelSettings.stream` itself stays (backup/sync compat).
         ],
       ),
     );
