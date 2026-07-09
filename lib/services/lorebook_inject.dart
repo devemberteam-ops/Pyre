@@ -91,9 +91,20 @@ List<Lorebook> collectBoundLorebooks({
       ? chat.characterIds
       : (responderId != null ? <String>[responderId] : const <String>[]);
   for (final cid in chatCharIds) {
-    final snap = chat.characterSnapshots[cid] ?? lookupCharacter(cid);
-    if (snap == null) continue;
-    for (final id in snap.lorebookIds) {
+    // Lorebook BINDINGS are live config, not frozen narrative content: read
+    // them from the CURRENT library character when it exists, falling back to
+    // the chat's frozen snapshot only for a snapshot-only member (library card
+    // since deleted). This mirrors the persona path (always live) and fixes a
+    // silent failure — a lorebook bound to a character AFTER a chat was created
+    // never activated in that chat, because the snapshot was frozen (with an
+    // empty/older `lorebookIds`) at creation and, being read FIRST, suppressed
+    // the live binding. Narrative CONTENT (description/personality/scenario)
+    // still reads snapshot-first at the assembly sites so an in-progress
+    // roleplay isn't retroactively rewritten by later card edits — only the
+    // binding list is taken live here.
+    final source = lookupCharacter(cid) ?? chat.characterSnapshots[cid];
+    if (source == null) continue;
+    for (final id in source.lorebookIds) {
       if (!disabled.contains(id)) ids.add(id);
     }
   }
