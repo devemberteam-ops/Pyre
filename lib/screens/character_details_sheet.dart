@@ -7,6 +7,7 @@ import '../theme.dart';
 import '../widgets/avatar.dart';
 import '../widgets/gallery_strip.dart';
 import '../widgets/lorebook_binding_section.dart';
+import '../widgets/menu_sheet.dart';
 import 'character_assistant_screen.dart';
 import 'character_edit_screen.dart';
 import 'chat_picker_screens.dart';
@@ -344,16 +345,9 @@ class CharacterDetailsSheet extends StatelessWidget {
       ));
       return;
     }
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: EmberColors.bgPanel,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (sheet) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+    showMenuSheet<void>(
+      context,
+      itemsBuilder: (sheet) => [
             const SizedBox(height: 8),
             Center(
               child: SizedBox(
@@ -418,8 +412,6 @@ class CharacterDetailsSheet extends StatelessWidget {
             ),
             const SizedBox(height: 8),
           ],
-        ),
-      ),
     );
   }
 }
@@ -496,16 +488,9 @@ class PersonaDetailsSheet extends StatelessWidget {
   /// manual (the classic persona form). Mirrors the character edit
   /// chooser in `CharacterDetailsSheet._onEditPressed`.
   void _onPersonaEditPressed(BuildContext context, Persona p) {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: EmberColors.bgPanel,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (sheet) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+    showMenuSheet<void>(
+      context,
+      itemsBuilder: (sheet) => [
             const SizedBox(height: 8),
             Center(
               child: SizedBox(
@@ -564,8 +549,6 @@ class PersonaDetailsSheet extends StatelessWidget {
             ),
             const SizedBox(height: 8),
           ],
-        ),
-      ),
     );
   }
 }

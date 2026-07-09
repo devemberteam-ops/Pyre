@@ -75,6 +75,7 @@ import '../theme.dart';
 import '../widgets/chat_text.dart';
 import '../widgets/confirm_dialog.dart';
 import '../widgets/lorebook_binding_section.dart';
+import '../widgets/menu_sheet.dart';
 // Wave CQ: avatar_crop_screen + character_edit_screen no longer
 // referenced from this file. The forced crop was removed (image goes
 // in as-is) and the "Save & open editor" save-action was retired.
@@ -2714,13 +2715,9 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     final hasChars = store.characters.any((c) => !c.deleted);
     final hasPersonas = store.personas.any((p) => !p.deleted);
     final hasLorebooks = store.lorebooks.any((b) => !b.deleted);
-    final source = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: EmberColors.bgPanel,
-      builder: (sheet) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+    final source = await showMenuSheet<String>(
+      context,
+      itemsBuilder: (sheet) => [
             if (hasChars)
               ListTile(
                 leading: Icon(Icons.badge_outlined,
@@ -2765,8 +2762,6 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
               onTap: () => Navigator.pop(sheet, 'device'),
             ),
           ],
-        ),
-      ),
     );
     if (source == null || !mounted) return;
     switch (source) {
@@ -3849,13 +3844,9 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
         messages.length >= 2 &&
         messages[messages.length - 2].role == 'user';
 
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: EmberColors.bgPanel,
-      builder: (sheet) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+    await showMenuSheet<void>(
+      context,
+      itemsBuilder: (sheet) => [
             if (canRetry)
               ListTile(
                 leading: Icon(Icons.refresh, color: EmberColors.primary),
@@ -3928,8 +3919,6 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
               },
             ),
           ],
-        ),
-      ),
     );
   }
 
@@ -7741,13 +7730,24 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
       return true;
     }).length;
 
+    // 1.2.1 audit fix: this sheet is stateful with NO cap/scroll of its
+    // own — the lorebook-binding chip Wrap above grows with every bound
+    // book, and on a short screen (or with several bindings) the Save
+    // buttons below it could be pushed off-screen entirely, blocking the
+    // Creator save flow. Cap at 85% of the screen height and make the
+    // whole sheet scrollable, same ceiling `showMenuSheet` uses elsewhere.
     return Padding(
       padding: EdgeInsets.only(
         bottom: MediaQuery.of(context).viewInsets.bottom,
       ),
       child: SafeArea(
         top: false,
-        child: Column(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.85,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             // Grabber
@@ -7988,6 +7988,8 @@ class _SaveCardSheetState extends State<_SaveCardSheet> {
                     ),
             ),
           ],
+            ),
+          ),
         ),
       ),
     );

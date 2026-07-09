@@ -39,6 +39,7 @@ import '../widgets/chat_text.dart';
 import '../widgets/confirm_dialog.dart';
 import '../widgets/export_snack.dart';
 import '../widgets/fallback_prompt_card.dart';
+import '../widgets/menu_sheet.dart';
 import 'api_connections_screen.dart';
 import 'character_details_sheet.dart';
 import 'chat_info_sheet.dart';
@@ -3140,13 +3141,9 @@ class _ChatScreenState extends State<ChatScreen> {
         m.kind == MessageKind.ooc ||
         m.kind == MessageKind.scene;
 
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: EmberColors.bgPanel,
-      builder: (sheet) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+    await showMenuSheet<void>(
+      context,
+      itemsBuilder: (sheet) => [
             if (isLast && (isChar || isUser))
               ListTile(
                 leading: Icon(Icons.play_arrow_rounded,
@@ -3295,11 +3292,8 @@ class _ChatScreenState extends State<ChatScreen> {
               );
             }),
           ],
-        ),
-      ),
     );
   }
-
 
   /// Continue the last assistant message by streaming more text into the
   /// SAME variant (in contrast to [_regenerateLast] which adds a new one).

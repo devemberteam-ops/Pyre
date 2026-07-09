@@ -14,6 +14,7 @@ import '../widgets/confirm_dialog.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/lorebook_binding_section.dart'
     show LorebookUsedBySection, askEmbeddedChoice;
+import '../widgets/menu_sheet.dart';
 import 'character_assistant_screen.dart' show CharacterAssistantScreen;
 
 // 2026-07-03 (Gui): Lorebooks moved OUT of More and into the library next to
@@ -139,13 +140,9 @@ class LorebookList extends StatelessWidget {
 Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
   final store = context.read<AppStore>();
   final messenger = ScaffoldMessenger.of(context);
-  await showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: EmberColors.bgPanel,
-    builder: (sheet) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+  await showMenuSheet<void>(
+    context,
+    itemsBuilder: (sheet) => [
           ListTile(
             leading: const Icon(Icons.edit_outlined),
             title: const Text('Edit entries'),
@@ -248,8 +245,6 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
             },
           ),
         ],
-      ),
-    ),
   );
 }
 

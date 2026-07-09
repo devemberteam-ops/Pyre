@@ -11,6 +11,7 @@ import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
 import '../widgets/how_it_works_card.dart';
+import '../widgets/menu_sheet.dart';
 import '../widgets/setting_slider.dart';
 
 class PresetsScreen extends StatelessWidget {
@@ -435,13 +436,9 @@ class _Pill extends StatelessWidget {
 Future<void> _openPresetKebab(BuildContext context, Preset p) async {
   final store = context.read<AppStore>();
   final messenger = ScaffoldMessenger.of(context);
-  await showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: EmberColors.bgPanel,
-    builder: (sheet) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+  await showMenuSheet<void>(
+    context,
+    itemsBuilder: (sheet) => [
           ListTile(
             leading: Icon(Icons.check_circle_outline,
                 color: EmberColors.primary),
@@ -572,8 +569,6 @@ Future<void> _openPresetKebab(BuildContext context, Preset p) async {
               },
             ),
         ],
-      ),
-    ),
   );
 }
 
