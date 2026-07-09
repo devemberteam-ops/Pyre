@@ -218,6 +218,31 @@ Future<void> _runBackupImport(
       } catch (_) {}
     }
 
+    // Fix (audit): a character's referenced (non-embedded) World —
+    // `extensions['world']` on the card, preserved wholesale by
+    // characterFromCharaCard — is already auto-bound at plan time
+    // (st_backup_import.dart) against any matching `worlds/*.json` included
+    // in THIS SAME backup. That leaves one gap: a World the character
+    // references that isn't part of this backup at all but DOES already
+    // exist in the user's library (an earlier import, or hand-built).
+    // Resolve that remaining case here against the now-current
+    // `store.lorebooks` (this-run ∪ pre-existing), using the exact same
+    // case-insensitive name match as the persona `lorebook` reference below
+    // — no fuzzy/partial matching, and never clobber an id a character
+    // already carries (e.g. from an embedded character_book).
+    for (final c in plan.characters) {
+      final worldRaw = c.extensions['world'];
+      final worldName = worldRaw is String ? worldRaw.trim() : '';
+      if (worldName.isEmpty) continue;
+      final key = worldName.toLowerCase();
+      for (final l in store.lorebooks) {
+        if (l.name.toLowerCase() == key) {
+          if (!c.lorebookIds.contains(l.id)) c.lorebookIds.add(l.id);
+          break;
+        }
+      }
+    }
+
     for (final p in plan.presets) {
       try {
         store.addPreset(p);

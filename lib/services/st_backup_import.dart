@@ -337,6 +337,32 @@ StBackupPlan planStBackupCore(Uint8List zipBytes) {
     skipped++;
   }
 
+  // Fix (audit): auto-bind a character's referenced (non-embedded) World.
+  // ST's recommended shared-lorebook pattern stores just the World NAME at
+  // `data.extensions.world` on the card; the actual book lives alongside it
+  // in the backup's `worlds/*.json` (parsed above into `lorebooks`). Without
+  // this, the name and the book both import but are never connected, so the
+  // character's lore never fires. Mirrors the exact case-insensitive
+  // name-matching rule the persona `persona_descriptions[file].lorebook`
+  // reference uses in the UI layer (st_bulk_import_flow.dart) — no
+  // fuzzy/partial matching. `extensions` is preserved wholesale by
+  // characterFromCharaCard, so `c.extensions['world']` is already the raw
+  // card value. A World NOT present in this backup (e.g. only in the user's
+  // existing library) is resolved separately by the UI layer against
+  // `store.lorebooks`.
+  final lorebookIdByWorldName = <String, String>{
+    for (final l in lorebooks) l.name.toLowerCase(): l.id,
+  };
+  for (final c in characters) {
+    final worldRaw = c.extensions['world'];
+    final worldName = worldRaw is String ? worldRaw.trim() : '';
+    if (worldName.isEmpty) continue;
+    final lbId = lorebookIdByWorldName[worldName.toLowerCase()];
+    if (lbId != null && !c.lorebookIds.contains(lbId)) {
+      c.lorebookIds.add(lbId);
+    }
+  }
+
   return StBackupPlan(
     characters: characters,
     lorebooks: lorebooks,

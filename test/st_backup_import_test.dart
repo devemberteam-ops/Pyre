@@ -240,6 +240,129 @@ void main() {
     });
   });
 
+  group("Fix 3: auto-bind a character's referenced (non-embedded) World", () {
+    test('extensions.world matching a worlds/*.json in this backup binds '
+        "the book's id onto the character", () {
+      final zip = _zip({
+        'characters/Vesna.png': _charaPng({
+          'name': 'Vesna',
+          'description': 'A druid.',
+          'extensions': {'world': 'Shared World'},
+        }),
+        'worlds/Shared World.json': _jsonBytes({
+          'name': 'Shared World',
+          'entries': {
+            '0': {
+              'key': ['forest'],
+              'content': 'A dense forest.',
+            },
+          },
+        }),
+      });
+      final plan = planStBackupCore(zip);
+      expect(plan.characters, hasLength(1));
+      expect(plan.lorebooks, hasLength(1));
+      final character = plan.characters.single;
+      final lorebook = plan.lorebooks.single;
+      expect(character.lorebookIds, contains(lorebook.id));
+    });
+
+    test('matching is case-insensitive (ST world names are free text)', () {
+      final zip = _zip({
+        'characters/Vesna.png': _charaPng({
+          'name': 'Vesna',
+          'extensions': {'world': 'sHaReD WoRlD'},
+        }),
+        'worlds/Shared World.json': _jsonBytes({
+          'name': 'Shared World',
+          'entries': {
+            '0': {
+              'key': ['forest'],
+              'content': 'A dense forest.',
+            },
+          },
+        }),
+      });
+      final plan = planStBackupCore(zip);
+      final character = plan.characters.single;
+      final lorebook = plan.lorebooks.single;
+      expect(character.lorebookIds, contains(lorebook.id));
+    });
+
+    test('a character without extensions.world is unaffected', () {
+      final zip = _zip({
+        'characters/NoWorld.png': _charaPng({
+          'name': 'NoWorld',
+          'description': 'No world reference.',
+        }),
+        'worlds/Unrelated.json': _jsonBytes({
+          'name': 'Unrelated',
+          'entries': {
+            '0': {
+              'key': ['x'],
+              'content': 'y',
+            },
+          },
+        }),
+      });
+      final plan = planStBackupCore(zip);
+      final character = plan.characters.single;
+      expect(character.lorebookIds, isEmpty);
+    });
+
+    test('a world name with no matching worlds/*.json leaves lorebookIds '
+        'unchanged and the import still succeeds (no throw, no error)', () {
+      final zip = _zip({
+        'characters/Orphan.png': _charaPng({
+          'name': 'Orphan',
+          'description': 'References a missing world.',
+          'extensions': {'world': 'Nowhere Land'},
+        }),
+      });
+      final plan = planStBackupCore(zip);
+      expect(plan.characters, hasLength(1));
+      final character = plan.characters.single;
+      expect(character.lorebookIds, isEmpty);
+      expect(plan.parseErrors, 0);
+    });
+
+    test('does not clobber an existing lorebookIds entry (e.g. from an '
+        'embedded character_book)', () {
+      final zip = _zip({
+        'characters/Both.png': _charaPng({
+          'name': 'Both',
+          'extensions': {'world': 'Shared World'},
+          'character_book': {
+            'name': 'Embedded Book',
+            'entries': [
+              {
+                'keys': ['embedded'],
+                'content': 'Embedded lore.',
+              },
+            ],
+          },
+        }),
+        'worlds/Shared World.json': _jsonBytes({
+          'name': 'Shared World',
+          'entries': {
+            '0': {
+              'key': ['forest'],
+              'content': 'A dense forest.',
+            },
+          },
+        }),
+      });
+      final plan = planStBackupCore(zip);
+      final character = plan.characters.single;
+      final lorebook = plan.lorebooks.single;
+      // The world binding adds to lorebookIds without wiping it out — an
+      // embedded character_book isn't auto-extracted during a backup import
+      // (see st_bulk_import_flow.dart), so lorebookIds should just contain
+      // the auto-bound World here, not be empty/cleared.
+      expect(character.lorebookIds, contains(lorebook.id));
+    });
+  });
+
   group('regexRulesFromSettings', () {
     test('array present → RegexRules', () {
       final rules = regexRulesFromSettings({
