@@ -160,6 +160,39 @@ jobs:
           path: pyre-linux-x64.tar.gz
           if-no-files-found: error
 
+  # Environment smoke (Tier 2, 1.2.1): boot-check the SHIPPED Linux tarball in
+  # a CLEAN container. The libayatana bug (issue #3) was invisible because the
+  # build runner has every build dep installed — "works where it was built" told
+  # us nothing about a user's machine. This job extracts the actual artifact
+  # into a bare Fedora with only the standard desktop baseline (GTK3 — what any
+  # desktop distro ships) and fails on ANY unresolved shared library.
+  # Deliberately NOT in the release job's `needs`: a red X here is a loud
+  # signal, but it can't brick the release pipeline while the job is young.
+  linux-clean-smoke:
+    name: Linux tarball smoke (clean container)
+    needs: [linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pyre-linux
+      - name: Extract tarball
+        run: mkdir -p bundle && tar -xzf pyre-linux-x64.tar.gz -C bundle
+      - name: ldd gate in bare Fedora (+GTK3 baseline only)
+        run: |
+          docker run --rm -v "$PWD/bundle:/app:ro" fedora:latest bash -c '
+            set -e
+            dnf install -y -q gtk3 glibc >/dev/null
+            echo "--- unresolved libs in the shipped bundle (must be empty) ---"
+            missing=$(ldd /app/pyre /app/lib/*.so 2>/dev/null | grep "not found" | sort -u || true)
+            if [ -n "$missing" ]; then
+              echo "$missing"
+              echo "FAIL: the tarball does not run on a clean desktop distro."
+              exit 1
+            fi
+            echo "(none — bundle is self-contained against a GTK3 baseline)"
+          '
+
   web:
     name: Web
     runs-on: ubuntu-latest
