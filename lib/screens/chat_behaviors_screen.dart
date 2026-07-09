@@ -76,9 +76,9 @@ class _ChatBehaviorsScreenState extends State<ChatBehaviorsScreen> {
                     '**Ask persona on new chat** — when on, starting a new '
                     'chat opens the persona picker first; when off, it uses '
                     'your default persona automatically.'),
-                HowItWorksBlock.bullet(
-                    '**Streaming** — show each reply token by token as it '
-                    'generates, instead of all at once when it\'s done.'),
+                // Audit B4(b): the Streaming bullet left with its toggle —
+                // replies always stream; describing a removed switch here
+                // would be stale help text.
               ]),
             ],
           ),
