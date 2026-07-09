@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../services/chat_persona.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
@@ -141,20 +142,13 @@ List<Widget> _buildLorebookSections(
   // showing (and letting the user toggle) the global default's books
   // even when the chat is bound to a different persona via
   // chat.personaId. Runtime injection uses chat.personaId, so the
-  // toggles were silently mismatched. Resolve via chat.personaId
-  // first (matches _chatPersona in chat_screen.dart) and fall back
-  // to the global default only for legacy chats.
-  Persona? activePersona;
-  final pid = chat.personaId;
-  if (pid != null) {
-    for (final p in store.personas) {
-      if (p.id == pid) {
-        activePersona = p;
-        break;
-      }
-    }
-  }
-  activePersona ??= store.activePersona;
+  // toggles were silently mismatched. Resolve via the shared
+  // [chatPersonaFor] (matches `_chatPersona` in chat_screen.dart),
+  // which ALSO honours the explicit "No persona" sentinel — audit
+  // (state-order, 1.2.1 batch D, finding #2): this inline copy used to
+  // fall back to the global active persona even for a no-persona chat,
+  // listing a phantom "(persona)" inherited lorebook.
+  final activePersona = chatPersonaFor(store, chat);
   final personaBooks = <Lorebook>[];
   if (activePersona != null) {
     for (final id in activePersona.lorebookIds) {

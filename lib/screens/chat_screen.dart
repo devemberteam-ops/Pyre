@@ -16,6 +16,7 @@ import '../services/chat_api.dart';
 import '../services/continuation_merge.dart';
 import '../services/chat_export.dart';
 import '../services/web_download.dart';
+import '../services/chat_persona.dart';
 import '../services/chat_prompt_builder.dart';
 import '../services/refusal_detector.dart';
 import '../services/generation_keepalive.dart';
@@ -1211,18 +1212,13 @@ class _ChatScreenState extends State<ChatScreen> {
   /// (or the switch-persona picker), we store that sentinel instead of
   /// `null` so the fall-through to the global default doesn't sneak
   /// the default persona back into a chat the user wanted clean.
-  Persona? _chatPersona(AppStore store, Chat chat) {
-    final pid = chat.personaId;
-    if (pid == kExplicitNoPersonaId) return null;
-    if (pid != null) {
-      for (final p in store.personas) {
-        if (p.id == pid) return p;
-      }
-      // pid points at a deleted persona — fall through to the global
-      // active so the user has SOMEONE to play as.
-    }
-    return store.activePersona;
-  }
+  ///
+  /// Audit (state-order, 1.2.1 batch D, finding #2): delegates to the
+  /// shared [chatPersonaFor] — this used to be a standalone copy, and two
+  /// OTHER standalone copies elsewhere forgot the sentinel check. Now
+  /// there's exactly one implementation.
+  Persona? _chatPersona(AppStore store, Chat chat) =>
+      chatPersonaFor(store, chat);
 
   Future<void> _send() async {
     final store = context.read<AppStore>();

@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../services/chat_persona.dart';
 import '../services/live_sheet.dart' as lsheet;
 import '../state/app_store.dart';
 import '../theme.dart';
@@ -60,19 +61,14 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
     return null;
   }
 
-  /// Inline copy of chat_screen.dart's private `_chatPersona`. Resolves the
-  /// chat-specific persona, falling back to the global active persona.
-  /// Returns null when the user has explicitly chosen "No persona".
-  Persona? _chatPersona(AppStore store, Chat chat) {
-    final pid = chat.personaId;
-    if (pid == kExplicitNoPersonaId) return null;
-    if (pid != null) {
-      for (final p in store.personas) {
-        if (p.id == pid) return p;
-      }
-    }
-    return store.activePersona;
-  }
+  /// Resolves the chat-specific persona, falling back to the global active
+  /// persona. Returns null when the user has explicitly chosen "No persona".
+  ///
+  /// Audit (state-order, 1.2.1 batch D, finding #2): delegates to the
+  /// shared [chatPersonaFor] instead of an inline copy of chat_screen.dart's
+  /// `_chatPersona`.
+  Persona? _chatPersona(AppStore store, Chat chat) =>
+      chatPersonaFor(store, chat);
 
   TextEditingController _controllerFor(
       String entityId, LiveSheetSection section, int index, String text) {

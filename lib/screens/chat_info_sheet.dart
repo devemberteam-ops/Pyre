@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../services/chat_persona.dart';
 import '../services/live_sheet.dart' as lsheet;
 import '../services/lorebook_inject.dart';
 import '../services/memory.dart' as ltm;
@@ -616,17 +617,12 @@ _ChatBreakdown _buildBreakdown(AppStore store, Chat chat) {
   // breakdown shows the wrong persona's numbers when the chat-bound
   // persona differs from store.activePersonaId.
   // Wave CY: was `store.activePersona` — caught by audit.
-  Persona? persona;
-  final pid = chat.personaId;
-  if (pid != null) {
-    for (final p in store.personas) {
-      if (p.id == pid) {
-        persona = p;
-        break;
-      }
-    }
-  }
-  persona ??= store.activePersona;
+  // Audit (state-order, 1.2.1 batch D, finding #2): resolved via the
+  // shared [chatPersonaFor] — this inline copy used to skip the
+  // [kExplicitNoPersonaId] sentinel and fall back to the global active
+  // persona even for a chat the user set to "No persona", showing a
+  // phantom persona name/token count and a phantom inherited lorebook.
+  final persona = chatPersonaFor(store, chat);
   final personaTokens = persona != null ? approxTokensForPersona(persona) : 0;
 
   // Lorebooks — the 3-source combined set (per-chat + char + persona),
