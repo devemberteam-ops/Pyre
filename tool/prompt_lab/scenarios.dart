@@ -879,11 +879,46 @@ CreatorScenario buildCreatorBatch(CreatorMode mode) {
   final greetings =
       (rendered['alternate_greetings'] as List?)?.cast<String>() ??
           const <String>[];
-  final renderBody = greetings.isEmpty
-      ? renderedDescription
-      : '$renderedDescription\n\n'
+
+  // Batch E Fix 2 (golden-tooling audit): `renderCard` also computes
+  // name/tagline/scenario/first_mes/mes_example/tags/creator_notes/
+  // (scenario-only) post_history_instructions from the SAME fixture — the
+  // dump used to drop all of it, so a regression in any of those fields
+  // would never show up in a golden diff. Appended AFTER the existing
+  // description + alternate_greetings text (unchanged above) so this is a
+  // pure addition, never a reformat of what was already there. Stable
+  // declared order mirrors chara_card_v2's own field order; a field absent
+  // or blank in the render (renderCard already omits empties) is skipped —
+  // no `Label: —` placeholders.
+  final extraSections = <String>[];
+  void addStringField(String label, String key) {
+    final v = rendered[key];
+    if (v is String && v.trim().isNotEmpty) {
+      extraSections.add('--- $label ---\n$v');
+    }
+  }
+
+  addStringField('name', 'name');
+  addStringField('tagline', 'tagline');
+  addStringField('scenario', 'scenario');
+  addStringField('first_mes', 'first_mes');
+  addStringField('mes_example', 'mes_example');
+  final tags = (rendered['tags'] as List?)?.cast<String>() ?? const <String>[];
+  if (tags.isNotEmpty) {
+    extraSections.add('--- tags ---\n${tags.join(', ')}');
+  }
+  addStringField('creator_notes', 'creator_notes');
+  addStringField('post_history_instructions', 'post_history_instructions');
+
+  final renderBody = <String>[
+    if (greetings.isEmpty)
+      renderedDescription
+    else
+      '$renderedDescription\n\n'
           '--- alternate_greetings (${greetings.length}) ---\n'
-          '${greetings.join('\n--- next greeting ---\n')}';
+          '${greetings.join('\n--- next greeting ---\n')}',
+    ...extraSections,
+  ].join('\n\n');
 
   // A synthetic, non-model turn so the golden + report carry the deterministic
   // render alongside the structured request. The role `render` is never sent to
