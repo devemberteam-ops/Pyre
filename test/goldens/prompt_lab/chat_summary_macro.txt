@@ -5,5 +5,10 @@ Story so far: RECAP-SENTINEL: Ren and Vesna reached the Maw and made a fragile t
 
 Stay in character and keep the scene moving.
 ----------------------------------------
+[lorebookBefore]
+
+--- Lore ---
+The Vael is a vast, old fantasy world stitched together out of jungle, tundra, desert, sea and stone — a place where gods walked once and left their doors standing open. It is roughly pre-industrial: steel and sail, candle and coin, no gunpowder to speak of and no machines, but threaded through with aether (raw magic) that leaks out of ancient ruins called Gates. Most people live ordinary lives in towns and holds, trade their goods, fear the wilds, and tell stories about the Gates the way a sailor tells stories about the deep. It is warm and adventurous and frankly dangerous, and it is the only world most of its people will ever know — though, very rarely, the Gates exhale and someone from another world entirely is spat out into the leaf-litter.
+----------------------------------------
 [history]
 user: "Where to now?"

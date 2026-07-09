@@ -385,10 +385,15 @@ void main() {
       final result = buildChatPrompt(inputs);
       final kinds = result.segments.map((s) => s.kind).toList();
       expect(kinds.first, PromptSegmentKind.systemPrompt);
-      // FLAT preset → no auto card/persona/lore injection (unchanged behaviour).
+      // FLAT preset → no auto card/persona injection: the user composed the
+      // complete prompt and OWNS its card content (unchanged behaviour).
       expect(kinds.contains(PromptSegmentKind.character), isFalse);
       expect(kinds.contains(PromptSegmentKind.persona), isFalse);
-      expect(kinds.contains(PromptSegmentKind.lorebookBefore), isFalse);
+      // Community bug fix (1.2.1): LORE is user-bound chat data, not preset
+      // content — a flat preset without {{wiBefore}} used to silently DROP
+      // every fired entry (scanned, traced, thrown away). Now the standalone
+      // lore block injects whenever no marker consumed it.
+      expect(kinds.contains(PromptSegmentKind.lorebookBefore), isTrue);
     });
   });
 

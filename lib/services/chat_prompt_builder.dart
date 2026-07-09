@@ -498,6 +498,19 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // was a logging side-effect only (no influence on the assembled turns);
   // it stays in the widget shim so this pure builder has no Flutter import.
 
+  // Community bug fix: does the preset reference `{{wiBefore}}` ANYWHERE
+  // `fill()` is applied? Mirrors the `summaryMacroUsed` pre-scan shape above
+  // — the system prompt PLUS every before/after/depth turn's content — so a
+  // marker living only inside a Prompt Manager Core turn (not the flattened
+  // system text) still counts. Used below to decide whether the fallback
+  // lore inject is needed at all.
+  final wiBeforeRegex = RegExp(r'\{\{\s*wiBefore\s*\}\}', caseSensitive: false);
+  final referencesWiBefore = asm != null &&
+      (wiBeforeRegex.hasMatch(asm.systemPrompt) ||
+          asm.beforeTurns.any((t) => wiBeforeRegex.hasMatch(t.content)) ||
+          asm.afterTurns.any((t) => wiBeforeRegex.hasMatch(t.content)) ||
+          asm.depthTurns.any((t) => wiBeforeRegex.hasMatch(t.content)));
+
   // Party mode v1 (2026-07): true only when the feature is ON for a chat
   // that actually has more than one member — a single-member "group" (or a
   // stray flag on a solo chat) is meaningless, so this condition keeps the
@@ -659,6 +672,30 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   var planSeq = 0;
   String nextId(String label) => 'plan-${chat.id}-${planSeq++}-$label';
 
+  // Also inline the lore so it isn't lost when no preset marker provides
+  // {{wiBefore}}. Extracted out of `injectCardFallback` (which still calls
+  // it at the end, unchanged order/content) so the community-bug fix below
+  // can also reach it WITHOUT running the rest of the card fallback
+  // (character/persona content a marker-carrying preset already owns).
+  // No-ops when no lore fired.
+  void injectLoreSegment() {
+    if (loreText.isEmpty) return;
+    final loreBuf = StringBuffer();
+    loreBuf.writeln('\n--- Lore ---');
+    loreBuf.writeln(loreText.toString().trim());
+    segments.add(PromptSegment(
+        PromptSegmentKind.lorebookBefore, loreBuf.toString().trimRight(),
+        note: '${scan.hits.length} entr${scan.hits.length == 1 ? "y" : "ies"} fired'));
+    planSegments.add(PlanSegment(
+      role: 'system',
+      slot: PlanSlot.leadingSystem,
+      kind: PromptSegmentKind.lorebookBefore,
+      content: loreBuf.toString(),
+      droppable: true, // D's trim proposal: oldest history, then lore
+      id: nextId('lore'),
+    ));
+  }
+
   // BLOCKER fix: inject the character / persona / lorebook-before content —
   // the SOLE injector of the card content when the preset's system text
   // doesn't carry it via markers. Extracted to a closure so BOTH the
@@ -736,24 +773,7 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
         id: nextId('persona'),
       ));
     }
-    // Also inline the lore so it isn't lost when no preset marker provides
-    // {{wiBefore}}.
-    if (loreText.isNotEmpty) {
-      final loreBuf = StringBuffer();
-      loreBuf.writeln('\n--- Lore ---');
-      loreBuf.writeln(loreText.toString().trim());
-      segments.add(PromptSegment(
-          PromptSegmentKind.lorebookBefore, loreBuf.toString().trimRight(),
-          note: '${scan.hits.length} entr${scan.hits.length == 1 ? "y" : "ies"} fired'));
-      planSegments.add(PlanSegment(
-        role: 'system',
-        slot: PlanSlot.leadingSystem,
-        kind: PromptSegmentKind.lorebookBefore,
-        content: loreBuf.toString(),
-        droppable: true, // D's trim proposal: oldest history, then lore
-        id: nextId('lore'),
-      ));
-    }
+    injectLoreSegment();
   }
 
   if (asm != null && asm.systemPrompt.trim().isNotEmpty) {
@@ -777,9 +797,21 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     // we inject the card content AROUND it. A FLAT preset is left untouched (the
     // user composed a complete prompt and chose its contents); a MODULAR preset
     // that DOES reference any marker already injects via fill() — no double-inject.
-    if (preset!.promptBlocks.isNotEmpty &&
-        !_referencesCardMarkers(asm.systemPrompt)) {
+    final fallbackRan = preset!.promptBlocks.isNotEmpty &&
+        !_referencesCardMarkers(asm.systemPrompt);
+    if (fallbackRan) {
       injectCardFallback();
+    }
+    // Community bug: a preset that carries card markers but no {{wiBefore}}
+    // (the common ST-import shape) used to silently DROP every fired lore
+    // entry — scanned, traced, then thrown away. Lore is user-bound data, not
+    // preset content, so when no marker consumed it and the full fallback
+    // didn't run, inject the standalone lore block anyway. Mirrors the
+    // {{summary}} pre-scan shape above: check the system prompt PLUS every
+    // before/after/depth turn's content so a {{wiBefore}} living only in a
+    // Prompt Manager Core turn still suppresses this (no duplicate).
+    if (!fallbackRan && !referencesWiBefore) {
+      injectLoreSegment();
     }
   } else {
     injectCardFallback();
