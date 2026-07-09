@@ -29,7 +29,35 @@ void main() {
     entries: [
       LoreEntry(
           id: 'e1', content: 'Overview', constant: true, order: 100),
-      LoreEntry(id: 'e2', keys: const ['Gate'], content: 'A Gate is…', order: 50),
+      // Batch E Fix 3: non-default values for EVERY field
+      // `_charaCardBookEntry` (png_encoder.dart) emits for a keyed entry, so
+      // the round-trip assertion below actually proves something — default
+      // values (empty secondaryKeys, andAny, null case/whole-word, 100/false
+      // probability) would round-trip even if the field were silently
+      // dropped on either side.
+      LoreEntry(
+        id: 'e2',
+        keys: const ['Gate'],
+        content: 'A Gate is…',
+        order: 50,
+        secondaryKeys: const ['Ashveil', 'sealed'],
+        selectiveLogic: LoreSelectiveLogic.andAll,
+        caseSensitive: true,
+        matchWholeWords: false,
+        probability: 30,
+        useProbability: true,
+      ),
+      // A DISABLED entry — `enabled` defaults to true on every other entry
+      // in this fixture, so this is the only one that proves `enabled:
+      // false` actually survives export → re-import rather than always
+      // reading back as the default.
+      LoreEntry(
+        id: 'e3',
+        keys: const ['Rumor'],
+        content: 'A disabled rumor entry.',
+        order: 10,
+        enabled: false,
+      ),
     ],
   );
 
@@ -43,14 +71,28 @@ void main() {
       expect(cb, isNotNull, reason: 'character_book should be embedded');
 
       final back = lorebookFromCharacterBook(cb!);
-      expect(back.entries.length, 2);
+      expect(back.entries.length, 3);
 
       final overview = back.entries.firstWhere((e) => e.constant);
       expect(overview.content, 'Overview');
+      expect(overview.enabled, isTrue);
 
       final keyed = back.entries.firstWhere((e) => e.keys.contains('Gate'));
       expect(keyed.content, 'A Gate is…');
       expect(keyed.order, 50); // insertion_order → order, preserved
+      expect(keyed.secondaryKeys, ['Ashveil', 'sealed']);
+      expect(keyed.selectiveLogic, LoreSelectiveLogic.andAll);
+      expect(keyed.caseSensitive, isTrue);
+      expect(keyed.matchWholeWords, isFalse);
+      expect(keyed.probability, 30);
+      expect(keyed.useProbability, isTrue);
+      expect(keyed.enabled, isTrue);
+
+      final disabled = back.entries.firstWhere((e) => e.keys.contains('Rumor'));
+      expect(disabled.content, 'A disabled rumor entry.');
+      expect(disabled.enabled, isFalse,
+          reason: 'the `enabled: false` PNG round-trip must not silently '
+              'reset to the default (true)');
     });
 
     test('without lorebook → no character_book (unchanged behaviour)', () {

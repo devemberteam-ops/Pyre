@@ -28,9 +28,34 @@ void main() {
           LoreEntry(
               id: 'e1', content: 'Overview of the world.',
               constant: true, order: 100),
+          // Batch E Fix 3: non-default values for EVERY field
+          // `_charaCardBookEntry` (png_encoder.dart) emits for a keyed
+          // entry, so the round-trip assertions below actually prove
+          // something — default values (empty secondaryKeys, andAny, null
+          // case/whole-word, 100/false probability) would round-trip even
+          // if the field were silently dropped on either side.
           LoreEntry(
-              id: 'e2', keys: const ['Gate'], content: 'A Gate connects realms.',
-              order: 50),
+            id: 'e2',
+            keys: const ['Gate'],
+            content: 'A Gate connects realms.',
+            order: 50,
+            secondaryKeys: const ['Ashveil', 'sealed'],
+            selectiveLogic: LoreSelectiveLogic.andAll,
+            caseSensitive: true,
+            matchWholeWords: false,
+            probability: 30,
+            useProbability: true,
+          ),
+          // A DISABLED entry — proves `enabled: false` survives the JSON
+          // export → re-import round-trip rather than always reading back
+          // as the default (true, like every other entry in this fixture).
+          LoreEntry(
+            id: 'e3',
+            keys: const ['Rumor'],
+            content: 'A disabled rumor entry.',
+            order: 10,
+            enabled: false,
+          ),
         ],
       );
       final c = Character(
@@ -78,13 +103,29 @@ void main() {
       final cb = extractCharacterBook(card.card);
       expect(cb, isNotNull, reason: 'character_book should be embedded');
       final backBook = lorebookFromCharacterBook(cb!);
-      expect(backBook.entries.length, 2);
+      expect(backBook.entries.length, 3);
       final overview = backBook.entries.firstWhere((e) => e.constant);
       expect(overview.content, 'Overview of the world.');
+      expect(overview.enabled, isTrue);
+
       final keyed =
           backBook.entries.firstWhere((e) => e.keys.contains('Gate'));
       expect(keyed.content, 'A Gate connects realms.');
       expect(keyed.order, 50);
+      expect(keyed.secondaryKeys, ['Ashveil', 'sealed']);
+      expect(keyed.selectiveLogic, LoreSelectiveLogic.andAll);
+      expect(keyed.caseSensitive, isTrue);
+      expect(keyed.matchWholeWords, isFalse);
+      expect(keyed.probability, 30);
+      expect(keyed.useProbability, isTrue);
+      expect(keyed.enabled, isTrue);
+
+      final disabled =
+          backBook.entries.firstWhere((e) => e.keys.contains('Rumor'));
+      expect(disabled.content, 'A disabled rumor entry.');
+      expect(disabled.enabled, isFalse,
+          reason: 'the `enabled: false` JSON round-trip must not silently '
+              'reset to the default (true)');
     });
 
     test('pretty-printed output is valid, spec-compliant JSON', () {
