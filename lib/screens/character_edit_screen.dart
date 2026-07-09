@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../services/attachment_store.dart';
+import '../services/chat_only_lorebook_binding.dart';
 import '../services/image_pick.dart';
 import '../services/token_estimate.dart';
 import '../state/app_store.dart';
@@ -76,7 +77,22 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   /// Wave CC: bound lorebook ids (a mutable copy of the source
   /// character's list). Edited inline via the LorebookBindingSection
   /// chip UI; flushed back into the Character on _save.
+  ///
+  /// In "this chat only" override mode (Wave: 1.2.1 audit fix #1), this is
+  /// seeded from the EFFECTIVE per-chat state (live bindings minus
+  /// disabled, plus per-chat attached) rather than the — possibly stale —
+  /// snapshot's `lorebookIds`, and on save the DIFF against
+  /// [_liveBindingsAtOpen] is routed through `chat.attachedLorebookIds` /
+  /// `chat.disabledInheritedLorebookIds` instead of the snapshot (which the
+  /// injection engine ignores for a still-live character).
   late List<String> _lorebookIds;
+
+  /// Override-mode only: the LIVE binding source's `lorebookIds` as they
+  /// were when this editor opened — i.e. what `collectBoundLorebooks`
+  /// resolves via `lookupCharacter(cid) ?? chat.characterSnapshots[cid]`.
+  /// Used as the "before" side of the save-time diff. Unused (stays empty)
+  /// outside override mode.
+  List<String> _liveBindingsAtOpen = const [];
 
   /// Wave CY.18.128: gallery refs (a mutable copy of the source
   /// character's list). Edited inline via the GalleryEditorSection;
@@ -86,6 +102,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   @override
   void initState() {
     super.initState();
+    final store = context.read<AppStore>();
     final c = _source();
     name = TextEditingController(text: c.name);
     tagline = TextEditingController(text: c.tagline ?? '');
@@ -115,7 +132,29 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
     // Wave CC: local copy of bound lorebook ids, mutated by the
     // LorebookBindingSection's onChanged and flushed back into the
     // character on _save → _composeFromForm.
-    _lorebookIds = List<String>.from(c.lorebookIds);
+    //
+    // 1.2.1 audit fix #1: in "this chat only" override mode, seed from the
+    // EFFECTIVE per-chat state instead — live bindings (from the LIVE
+    // library character, matching collectBoundLorebooks' resolution order)
+    // minus anything disabled for this chat, plus anything attached to
+    // this chat. Reading the stale snapshot's lorebookIds here was showing
+    // the user a binding list that didn't match what actually fires.
+    final overrideChat = _overrideChat(store);
+    if (widget.overrideChatId != null && overrideChat != null) {
+      final liveSource = store.characterById(widget.characterId!) ??
+          overrideChat.characterSnapshots[widget.characterId];
+      _liveBindingsAtOpen =
+          List<String>.from(liveSource?.lorebookIds ?? const []);
+      final disabled = overrideChat.disabledInheritedLorebookIds.toSet();
+      final effective = <String>{
+        for (final id in _liveBindingsAtOpen)
+          if (!disabled.contains(id)) id,
+        ...overrideChat.attachedLorebookIds,
+      };
+      _lorebookIds = effective.toList();
+    } else {
+      _lorebookIds = List<String>.from(c.lorebookIds);
+    }
     // Wave CY.18.128: local copy of gallery refs, mutated by the
     // GalleryEditorSection's onChanged + flushed back on _save.
     _gallery = List<String>.from(c.gallery);
@@ -168,6 +207,17 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
         Character(id: widget.characterId!, name: '(deleted)');
   }
 
+  /// Override-mode only: manual chat lookup (same pattern as `_source()` —
+  /// a chat deletion mid-edit shouldn't throw). Returns null outside
+  /// override mode or when the chat has been deleted.
+  Chat? _overrideChat(AppStore store) {
+    if (widget.overrideChatId == null) return null;
+    for (final chat in store.chats) {
+      if (chat.id == widget.overrideChatId) return chat;
+    }
+    return null;
+  }
+
   /// Wave BG: assemble the current form state into a Character, used
   /// both by Save (commit) and by the debounced auto-save in draft mode.
   ///
@@ -177,7 +227,7 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   /// their original values forward intact even though we don't surface
   /// a UI for editing them.
   Character _composeFromForm() {
-    return Character.fromJson(_source().toJson())
+    final composed = Character.fromJson(_source().toJson())
       ..name = name.text.trim()
       ..tagline = tagline.text.trim().isEmpty ? null : tagline.text.trim()
       ..description = description.text
@@ -201,8 +251,6 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
           .map((c) => c.text.trim())
           .where((s) => s.isNotEmpty)
           .toList()
-      // Wave CC: flush the locally-edited binding list.
-      ..lorebookIds = List<String>.from(_lorebookIds)
       // Wave CY.18.128: flush the locally-edited gallery refs.
       ..gallery = List<String>.from(_gallery)
       ..avatar = _avatar
@@ -212,6 +260,19 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
       // avatar" resets the crop relationship, so we always re-assert the
       // tracked value (which those paths clear → null).
       ..avatarOriginal = _avatarOriginal;
+    // Wave CC: flush the locally-edited binding list — EXCEPT in "this chat
+    // only" override mode. 1.2.1 audit fix #1: the injection engine reads
+    // lorebook BINDINGS live-first from the library character
+    // (collectBoundLorebooks), so writing them into the frozen snapshot here
+    // was dead — the edit looked saved but never fired. Override-mode
+    // binding edits are routed through chat.attachedLorebookIds /
+    // disabledInheritedLorebookIds in `_save()` instead; the snapshot's
+    // lorebookIds is left exactly as `_source()` gave it (a pure narrative
+    // freeze).
+    if (widget.overrideChatId == null) {
+      composed.lorebookIds = List<String>.from(_lorebookIds);
+    }
+    return composed;
   }
 
   /// Wave BG: debounced auto-save to the draft. Only fires in draft
@@ -325,6 +386,13 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
         }
       }
       if (chat != null) {
+        // 1.2.1 audit fix #1: lorebook binding edits made in "this chat
+        // only" mode don't go into the snapshot (the engine ignores
+        // lorebookIds there for a still-live character) — they're diffed
+        // against the LIVE bindings as they were when the editor opened and
+        // routed through the chat's own per-chat sets, which
+        // collectBoundLorebooks DOES honour.
+        applyChatOnlyBindingEdit(chat, _liveBindingsAtOpen, _lorebookIds);
         chat.characterSnapshots[widget.characterId!] = updated;
         chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
         // H-3: this per-chat character-snapshot override rides a chat sync,
@@ -530,10 +598,14 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
           LorebookBindingSection(
             selectedIds: _lorebookIds,
             onChanged: (next) => setState(() => _lorebookIds = next),
-            sublabel:
-                'These books inject in every chat with this character — '
-                'on top of any books attached per-chat. Use this for '
-                'world / setting context that travels with the character.',
+            sublabel: isOverride
+                ? 'Adding a book here attaches it to THIS chat only. '
+                    'Removing one only turns it off for this chat — the '
+                    'character\'s own bindings (and other chats) are '
+                    'unaffected.'
+                : 'These books inject in every chat with this character — '
+                    'on top of any books attached per-chat. Use this for '
+                    'world / setting context that travels with the character.',
           ),
           const SizedBox(height: 4),
 
