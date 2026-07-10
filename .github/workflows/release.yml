@@ -164,10 +164,38 @@ jobs:
           cp -r build/web build/linux/x64/release/bundle/web
       - name: Tarball Linux bundle
         run: tar -czf pyre-linux-x64.tar.gz -C build/linux/x64/release/bundle .
+      # AppImage (1.2.1, community ask): one downloadable file with desktop
+      # entry + icon baked in — no manual chmod/.desktop crafting. The bundle
+      # is already self-contained (libs + $ORIGIN rpaths above), so the
+      # AppImage is a thin wrapper: AppRun execs usr/bin/pyre, which finds its
+      # lib/ data/ web/ siblings exactly as in the tarball. Recipe validated
+      # end-to-end locally (WSL build + real boot) before landing here.
+      - name: Build AppImage
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p appdir/usr/bin
+          cp -r build/linux/x64/release/bundle/. appdir/usr/bin/
+          cp appdir/usr/bin/web/icons/Icon-512.png appdir/pyre.png
+          printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Pyre' \
+            'Comment=BYOK AI roleplay chat — SillyTavern-compatible' \
+            'Exec=pyre' 'Icon=pyre' 'Terminal=false' \
+            'Categories=Network;Chat;' 'StartupWMClass=app.pyre.pyre' \
+            > appdir/pyre.desktop
+          printf '%s\n' '#!/bin/sh' \
+            'HERE="$(dirname "$(readlink -f "$0")")"' \
+            'exec "$HERE/usr/bin/pyre" "$@"' > appdir/AppRun
+          chmod +x appdir/AppRun appdir/usr/bin/pyre
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \
+            ./appimagetool-x86_64.AppImage appdir "Pyre-${VERSION}-x86_64.AppImage"
+          ls -lh Pyre-*.AppImage
       - uses: actions/upload-artifact@v4
         with:
           name: pyre-linux
-          path: pyre-linux-x64.tar.gz
+          path: |
+            pyre-linux-x64.tar.gz
+            Pyre-*.AppImage
           if-no-files-found: error
 
   # Environment smoke (Tier 2, 1.2.1): boot-check the SHIPPED Linux tarball in
@@ -244,7 +272,7 @@ jobs:
       - name: Flatten + checksum
         run: |
           mkdir -p dist
-          find artifacts -type f \( -name '*.apk' -o -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} dist/ \;
+          find artifacts -type f \( -name '*.apk' -o -name '*.zip' -o -name '*.tar.gz' -o -name '*.AppImage' \) -exec cp {} dist/ \;
           mv dist/app-release.apk dist/pyre-android.apk 2>/dev/null || true
           cd dist
           sha256sum * > SHA256SUMS.txt
