@@ -623,7 +623,23 @@ _ChatBreakdown _buildBreakdown(AppStore store, Chat chat) {
   // persona even for a chat the user set to "No persona", showing a
   // phantom persona name/token count and a phantom inherited lorebook.
   final persona = chatPersonaFor(store, chat);
-  final personaTokens = persona != null ? approxTokensForPersona(persona) : 0;
+  // Persona TOKENS + NAME must cover a persona PARTY (owner-reported 2026-07-13:
+  // the party's personas weren't counted). The prompt's joined persona block
+  // includes EVERY member, so sum them all — counting only the resolved primary
+  // under-counted. A single / legacy chat keeps chatPersonaFor's resolution
+  // (incl. the global-default fallback for a null personaId); the
+  // kExplicitNoPersonaId sentinel ("No persona") contributes nothing.
+  final List<Persona> partyPersonas = chat.personaIds.isNotEmpty
+      ? [
+          for (final pid in chat.personaIds)
+            if (pid != kExplicitNoPersonaId) store.personaById(pid),
+        ].whereType<Persona>().toList()
+      : (persona != null ? [persona] : const <Persona>[]);
+  final personaTokens =
+      partyPersonas.fold<int>(0, (sum, p) => sum + approxTokensForPersona(p));
+  final personaDisplayName = partyPersonas.length > 1
+      ? partyPersonas.map((p) => p.name).join(' + ')
+      : (partyPersonas.isNotEmpty ? partyPersonas.first.name : null);
 
   // Lorebooks — the 3-source combined set (per-chat + char + persona),
   // deduped. Same path the runtime uses for injection.
@@ -709,7 +725,7 @@ _ChatBreakdown _buildBreakdown(AppStore store, Chat chat) {
     messages: msgTokens,
     characterNames: charNames,
     characterBreakdown: charBreakdown,
-    personaName: persona?.name,
+    personaName: personaDisplayName,
     lorebookNames: attachedBooks.map((b) => b.name).toList(),
     loreFired: loreFired,
     loreTotal: loreTotal,
