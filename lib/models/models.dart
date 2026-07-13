@@ -2944,6 +2944,16 @@ class UiPrefs {
   /// behavior identical to pre-fallback.
   bool askToSwitchOnFailure;
 
+  /// 2026-07-13 (owner: generations died when the app was backgrounded —
+  /// same root as the error-banner + checkpoint-lock-hang symptoms): keep
+  /// chat replies alive in background by promoting them to the existing
+  /// generation foreground service (silent MIN-importance notification).
+  /// ON by default — the notification is invisible in the status bar, and
+  /// losing replies to a backgrounded app is the worse default. OFF returns
+  /// to the pre-2026-07-13 light/heavy behaviour (Creator/vision still use
+  /// the service; chat replies don't).
+  bool backgroundGeneration;
+
   /// Wave CY.18.258: opt-in master switch for syncing AI providers —
   /// including their API key, encrypted — to paired NATIVE devices over
   /// the LAN. OFF by default; the web view never receives provider keys.
@@ -3014,6 +3024,7 @@ class UiPrefs {
     this.lanBindMode = 'lan',
     Map<String, dynamic>? desktopShortcuts,
     this.askToSwitchOnFailure = true,
+    this.backgroundGeneration = true,
     this.syncProviderKeys = false,
     this.syncConflictMode = SyncConflictMode.newestWins,
     this.uiScale = 1.0,
@@ -3046,6 +3057,7 @@ class UiPrefs {
         // Wave CY.18.99: default true so existing blobs opt in.
         askToSwitchOnFailure:
             (j['askToSwitchOnFailure'] as bool?) ?? true,
+        backgroundGeneration: (j['backgroundGeneration'] as bool?) ?? true,
         // Wave CY.18.258: opt-in, default OFF.
         syncProviderKeys: (j['syncProviderKeys'] as bool?) ?? false,
         // Mega-audit 2026-06-05 (H-4): default newestWins (today's behavior).
@@ -3125,6 +3137,7 @@ class UiPrefs {
         if (desktopShortcuts.isNotEmpty) 'desktopShortcuts': desktopShortcuts,
         // Wave CY.18.99: persist only the non-default `false`.
         if (!askToSwitchOnFailure) 'askToSwitchOnFailure': false,
+        if (!backgroundGeneration) 'backgroundGeneration': false,
         // Wave CY.18.258: persist only the non-default `true` opt-in.
         if (syncProviderKeys) 'syncProviderKeys': true,
         // Mega-audit 2026-06-05 (H-4): persist only when the user opted away

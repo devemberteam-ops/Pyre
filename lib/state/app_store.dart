@@ -17,6 +17,7 @@ import '../services/example_seed.dart';
 import '../services/live_sheet.dart'
     show ensureLiveSheetSeed, syncLiveSheetEntities;
 import '../services/lan_client.dart';
+import '../services/generation_keepalive.dart';
 import '../services/provider_fallback.dart';
 import '../services/regex_rules.dart';
 import '../services/secure_keys.dart';
@@ -1032,6 +1033,11 @@ class AppStore extends ChangeNotifier {
       accentArgb: uiPrefs.accentArgb,
     );
 
+    // 2026-07-13: mirror the background-generation pref into the keepalive
+    // layer (a static — it can't watch the store). Runs on BOTH load paths
+    // (fresh install and hydrated blob); the setter keeps it in sync after.
+    GenerationKeepAlive.promoteAllToHeavy = uiPrefs.backgroundGeneration;
+
     _loaded = true;
     notifyListeners();
 
@@ -1772,6 +1778,17 @@ class AppStore extends ChangeNotifier {
   void setAskToSwitchOnFailure(bool v) {
     if (uiPrefs.askToSwitchOnFailure == v) return;
     uiPrefs.askToSwitchOnFailure = v;
+    _bump();
+  }
+
+  /// Toggle background generation (chat streams ride the quiet foreground
+  /// service so Android can't kill them off-focus). Mirrors into the
+  /// keepalive layer immediately — mid-flight streams stay balanced via its
+  /// promoted-refs accounting.
+  void setBackgroundGeneration(bool v) {
+    if (uiPrefs.backgroundGeneration == v) return;
+    uiPrefs.backgroundGeneration = v;
+    GenerationKeepAlive.promoteAllToHeavy = v;
     _bump();
   }
 
@@ -2713,6 +2730,8 @@ class AppStore extends ChangeNotifier {
       themeId: uiPrefs.activeThemeId,
       accentArgb: uiPrefs.accentArgb,
     );
+    // 2026-07-13: same mirror as load() — the reset recreated uiPrefs.
+    GenerationKeepAlive.promoteAllToHeavy = uiPrefs.backgroundGeneration;
     seenOnboarding = false;
     exampleContentSeeded = false;
     defaultRegexRulesSeeded = false;

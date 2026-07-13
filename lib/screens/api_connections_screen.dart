@@ -490,6 +490,29 @@ class _AdvancedFallbackTile extends StatelessWidget {
               MaterialPageRoute(builder: (_) => const SmartFallbackScreen()),
             ),
           ),
+          // 2026-07-13 (owner): keep chat replies alive when the app is
+          // backgrounded — Android was killing the connection mid-stream
+          // ("Connection dropped mid-reply"), hanging checkpoints too. Rides
+          // the existing generation foreground service with a SILENT
+          // (status-bar-hidden) notification. Android-only effect; a no-op
+          // on desktop/web, so the toggle still shows everywhere without harm.
+          SwitchListTile(
+            secondary:
+                Icon(Icons.play_circle_outline, color: EmberColors.textMid),
+            title: const Text('Background generation',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            subtitle: Text(
+              store.uiPrefs.backgroundGeneration
+                  ? 'On — replies keep generating if you switch apps '
+                      '(silent notification while active).'
+                  : 'Off — switching apps mid-reply may drop the connection.',
+              style: TextStyle(
+                  color: EmberColors.textMid, fontSize: 12, height: 1.4),
+            ),
+            value: store.uiPrefs.backgroundGeneration,
+            activeThumbColor: EmberColors.primary,
+            onChanged: (v) => store.setBackgroundGeneration(v),
+          ),
         ],
       ),
     );

@@ -63,6 +63,38 @@ class GenerationKeepAlive {
   /// foreground service.
   static int _heavyRefs = 0;
 
+  /// 2026-07-13 (owner: "find another way to keep the app alive in
+  /// background" — after generation-dies + error-banner + checkpoint-lock-hang
+  /// all traced to Android suspending the app off-focus): when true, LIGHT
+  /// calls (regular chat replies) are PROMOTED to heavy, so the foreground
+  /// service keeps chat streams alive in background too — exactly the "future
+  /// change (a user setting to promote all calls to heavy)" the CY.18.35
+  /// comment anticipated. Driven by `UiPrefs.backgroundGeneration` (AppStore
+  /// mirrors it here on load + toggle). The notification cost that motivated
+  /// the light/heavy split is neutralised separately: the channel is now
+  /// IMPORTANCE_MIN (no status-bar icon, no sound — visible only when the
+  /// user expands the notification shade).
+  static bool promoteAllToHeavy = false;
+
+  /// Count of LIGHT starts that were promoted while [promoteAllToHeavy] was
+  /// on. Light stops drain this first, so start/stop bookkeeping stays
+  /// symmetric even if the setting is toggled mid-stream (the net effect on
+  /// [_heavyRefs] always balances back to zero).
+  static int _promotedRefs = 0;
+
+  /// TEST SEAMS — the plugin never runs in VM tests (platform gate), so the
+  /// refcounts are the observable behaviour.
+  @visibleForTesting
+  static int get heavyRefsForTest => _heavyRefs;
+  @visibleForTesting
+  static void resetForTest() {
+    _heavyRefs = 0;
+    _promotedRefs = 0;
+    _anyRefs = 0;
+    _anyStartedAt = null;
+    promoteAllToHeavy = false;
+  }
+
   /// Wave CY.18.56: ANY-stream refcount (light OR heavy). Used purely
   /// to drive the desktop completion toast — when this drops back to
   /// zero AND the last generation took long enough to be worth
@@ -100,13 +132,19 @@ class GenerationKeepAlive {
     try {
       FlutterForegroundTask.init(
         androidNotificationOptions: AndroidNotificationOptions(
-          channelId: 'pyre_generation',
-          channelName: 'Generation',
+          // 2026-07-13: NEW channel id — Android caches a channel's importance
+          // from its FIRST creation, so existing installs would keep the old
+          // LOW (status-bar icon) channel forever. The fresh id ships MIN to
+          // everyone: no status-bar icon, no sound; visible only when the
+          // notification shade is expanded. This is what makes promoting chat
+          // streams to the foreground service tolerable UX.
+          channelId: 'pyre_generation_quiet',
+          channelName: 'Background generation',
           channelDescription:
-              'Shown while Pyre is generating an LLM response. '
-              'Pyre uses this to stay alive when the app is minimized.',
-          channelImportance: NotificationChannelImportance.LOW,
-          priority: NotificationPriority.LOW,
+              'Keeps Pyre alive while it finishes a response in the '
+              'background. Silent and hidden from the status bar.',
+          channelImportance: NotificationChannelImportance.MIN,
+          priority: NotificationPriority.MIN,
           showWhen: false,
         ),
         iosNotificationOptions: const IOSNotificationOptions(
@@ -171,12 +209,13 @@ class GenerationKeepAlive {
     }
 
     if (!heavy) {
-      // Wave CY.18.35: light calls are no-ops for the foreground
-      // service. We keep the method signature uniform so callers can
-      // `start/stop` without branching, and so future changes (e.g.
-      // a user setting to promote all calls to heavy) can flip a
-      // single line here.
-      return;
+      // Wave CY.18.35: light calls are no-ops for the foreground service —
+      // UNLESS the user's background-generation setting promotes them
+      // (2026-07-13; this is the exact "future change" this comment always
+      // anticipated). A promoted light call is tracked in _promotedRefs so
+      // its matching light stop() drains the same accounting.
+      if (!promoteAllToHeavy) return;
+      _promotedRefs++;
     }
     _heavyRefs++;
     debugPrint('[GenerationKeepAlive] start(heavy) refs=$_heavyRefs');
@@ -191,10 +230,12 @@ class GenerationKeepAlive {
       }
       final result = await FlutterForegroundTask.startService(
         serviceId: 4242, // unique per-app
-        notificationTitle: 'Pyre — building your card',
+        // Neutral copy — this now covers chat replies (promoted lights), not
+        // just Creator cascades.
+        notificationTitle: 'Pyre is generating…',
         notificationText:
-            'Heavy generation in progress. Pyre will stay alive in '
-            'the background until it finishes.',
+            'Keeping the connection alive so the response finishes even '
+            'if you switch apps.',
       );
       debugPrint('[GenerationKeepAlive] startService → $result');
     } catch (e) {
@@ -227,7 +268,14 @@ class GenerationKeepAlive {
       }
     }
 
-    if (!heavy) return;
+    if (!heavy) {
+      // Symmetric to start(): a light stop drains a promoted light start if
+      // any is outstanding; otherwise it stays a no-op. Draining "first come"
+      // (not per-call identity) is fine — the NET heavy count still balances
+      // to zero even if the setting was toggled mid-stream.
+      if (_promotedRefs == 0) return;
+      _promotedRefs--;
+    }
     if (_heavyRefs > 0) _heavyRefs--;
     debugPrint('[GenerationKeepAlive] stop(heavy) refs=$_heavyRefs');
     if (_heavyRefs > 0) return;
