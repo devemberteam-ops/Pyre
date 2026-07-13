@@ -795,4 +795,61 @@ void main() {
       expect(countOrphanedCheckpoints(chat), 0);
     });
   });
+
+  group('buildManualCheckpoint (2026-07-13 community request)', () {
+    Message msg(String id, String text) => Message(
+        id: id, kind: MessageKind.user, variants: [text]);
+
+    Chat chatWith(List<Message> msgs) => Chat(
+          id: 'c-manual',
+          characterIds: const ['char1'],
+          messages: msgs,
+          createdAt: 0,
+          updatedAt: 0,
+        );
+
+    test('builds a checkpoint findValidCheckpoints accepts as-is', () {
+      final chat = chatWith(
+          [msg('a', 'hello'), msg('b', 'world'), msg('c', 'again')]);
+      final ckpt = buildManualCheckpoint(
+          chat: chat, anchorMessageIdx: 1, summary: '  My own recap.  ');
+      expect(ckpt, isNotNull);
+      expect(ckpt!.summary, 'My own recap.', reason: 'trimmed');
+      expect(ckpt.anchorMessageIdx, 1);
+      applyCheckpoint(chat, ckpt);
+      final valid = findValidCheckpoints(chat);
+      expect(valid.map((c) => c.id), contains(ckpt.id),
+          reason: 'same hash plumbing as generated checkpoints → valid on '
+              'the branch it was written on');
+    });
+
+    test('editing a COVERED message invalidates it (contentHash carried)', () {
+      final chat = chatWith([msg('a', 'hello'), msg('b', 'world')]);
+      final ckpt = buildManualCheckpoint(
+          chat: chat, anchorMessageIdx: 1, summary: 'recap');
+      applyCheckpoint(chat, ckpt!);
+      chat.messages[0].variants[0] = 'REWRITTEN'; // edit inside covered span
+      expect(findValidCheckpoints(chat).map((c) => c.id),
+          isNot(contains(ckpt.id)),
+          reason: 'a manual checkpoint gets the same stale-context '
+              'protection as a generated one');
+    });
+
+    test('blank summary and out-of-range anchors return null', () {
+      final chat = chatWith([msg('a', 'hello')]);
+      expect(
+          buildManualCheckpoint(
+              chat: chat, anchorMessageIdx: 0, summary: '   '),
+          isNull);
+      expect(
+          buildManualCheckpoint(
+              chat: chat, anchorMessageIdx: -1, summary: 'x'),
+          isNull);
+      expect(
+          buildManualCheckpoint(
+              chat: chat, anchorMessageIdx: 1, summary: 'x'),
+          isNull,
+          reason: 'anchor must index an existing message');
+    });
+  });
 }

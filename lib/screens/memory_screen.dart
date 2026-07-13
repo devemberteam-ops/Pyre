@@ -19,6 +19,7 @@ import '../services/memory.dart' as ltm;
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/empty_state.dart';
+import 'long_term_memory_screen.dart';
 
 class MemoryScreen extends StatefulWidget {
   final String chatId;
@@ -264,12 +265,181 @@ class _MemoryScreenState extends State<MemoryScreen> {
         summary: trimmed,
         anchorMessageIdx: target.anchorMessageIdx,
         pathHash: target.pathHash,
+        // 2026-07-13: carry the content fingerprint too — dropping it (the
+        // pre-fix behaviour) silently downgraded an edited checkpoint to
+        // "always content-valid" (the '' back-compat path), losing the
+        // round-12/14 stale-context protection.
+        contentHash: target.contentHash,
         createdAt: target.createdAt,
       ),
     );
     store.touchChat(chat); // F1: checkpoint edit syncs
     setState(() {});
     return true;
+  }
+
+  /// 2026-07-13 (community request): write a checkpoint BY HAND — no LLM.
+  /// The user picks which message it covers up to (default: the latest) and
+  /// types the summary. Uses the same hash plumbing as generated checkpoints
+  /// (buildManualCheckpoint), so branch/edit validity works identically.
+  Future<void> _writeManualCheckpoint() async {
+    if (_anyMemoryWorkInFlight) {
+      _toast('Another memory operation is already running — wait for it '
+          'to finish first.');
+      return;
+    }
+    final store = context.read<AppStore>();
+    final chat = _liveChat(store);
+    if (chat == null) return;
+    if (chat.messages.isEmpty) {
+      _toast('No messages yet — a checkpoint needs a message to anchor to.');
+      return;
+    }
+    final ctl = TextEditingController();
+    var anchor = chat.messages.length - 1;
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (d) {
+        return Dialog(
+          backgroundColor: EmberColors.bgPanel,
+          insetPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 32),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(d).size.height * 0.85,
+              maxWidth: 720,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+              child: StatefulBuilder(
+                builder: (d2, setLocal) {
+                  // Preview of the anchor message so "up to message N" is a
+                  // real thing on screen, not an abstract number.
+                  final m = chat.messages[anchor];
+                  final preview = m.text.replaceAll('\n', ' ');
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.edit_note,
+                              size: 20, color: EmberColors.primary),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Write a checkpoint',
+                            style: TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Your own summary, no AI involved. It covers the '
+                        'story up to the message you pick below.',
+                        style: TextStyle(
+                            color: EmberColors.textMid,
+                            fontSize: 12,
+                            height: 1.35),
+                      ),
+                      const SizedBox(height: 14),
+                      Expanded(
+                        child: TextField(
+                          controller: ctl,
+                          autofocus: true,
+                          maxLines: null,
+                          expands: true,
+                          keyboardType: TextInputType.multiline,
+                          textAlignVertical: TextAlignVertical.top,
+                          style: const TextStyle(fontSize: 13, height: 1.45),
+                          decoration: const InputDecoration(
+                            border: OutlineInputBorder(),
+                            hintText:
+                                'What has happened so far, in your words…',
+                            alignLabelWithHint: true,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Covers up to message ${anchor + 1} of '
+                        '${chat.messages.length}',
+                        style: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        preview.length > 80
+                            ? '${preview.substring(0, 80)}…'
+                            : preview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: EmberColors.textMid, fontSize: 11),
+                      ),
+                      Slider(
+                        value: anchor.toDouble(),
+                        min: 0,
+                        max: (chat.messages.length - 1).toDouble(),
+                        divisions: chat.messages.length > 1
+                            ? chat.messages.length - 1
+                            : null,
+                        activeColor: EmberColors.primary,
+                        onChanged: chat.messages.length > 1
+                            ? (v) => setLocal(() => anchor = v.round())
+                            : null,
+                      ),
+                      Row(
+                        children: [
+                          const Spacer(),
+                          TextButton(
+                            onPressed: () => Navigator.pop(d),
+                            child: const Text('Cancel'),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: () => Navigator.pop(d, ctl.text),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: EmberColors.primary,
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Text('Save'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    ctl.dispose();
+    if (!mounted || result == null) return;
+    if (result.trim().isEmpty) {
+      _toast('Checkpoint can\'t be empty.');
+      return;
+    }
+    // One checkpoint per anchor — a second one would ALSO feed the recap and
+    // double-cover the same span. Edit the existing one instead.
+    final clash = ltm
+        .findValidCheckpoints(chat)
+        .any((c) => c.anchorMessageIdx == anchor);
+    if (clash) {
+      _toast('There\'s already a checkpoint at that message — edit or '
+          'delete it instead.');
+      return;
+    }
+    final ckpt = ltm.buildManualCheckpoint(
+      chat: chat,
+      anchorMessageIdx: anchor,
+      summary: result,
+    );
+    if (ckpt == null) return; // guarded above; belt-and-braces
+    ltm.applyCheckpoint(chat, ckpt);
+    store.touchChat(chat); // F1: checkpoint add syncs
+    setState(() {});
   }
 
   Future<bool> _deleteCheckpoint(MemoryCheckpoint target) async {
@@ -393,6 +563,18 @@ class _MemoryScreenState extends State<MemoryScreen> {
       appBar: AppBar(
         title: const Text('Checkpoints'),
         actions: [
+          // 2026-07-13 (community feedback): the frequency / length / prompt
+          // knobs live in the GLOBAL Checkpoints settings (Chat Settings →
+          // Story continuity), and users asking for "shorter, more frequent
+          // chapters" didn't find them — surface a direct shortcut here.
+          IconButton(
+            tooltip: 'Frequency & length settings',
+            icon: const Icon(Icons.tune),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                  builder: (_) => const LongTermMemoryScreen()),
+            ),
+          ),
           if (chat.memoryCheckpoints.isNotEmpty)
             IconButton(
               tooltip: 'Wipe all',
@@ -545,30 +727,51 @@ class _MemoryScreenState extends State<MemoryScreen> {
             top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  // C4: gate on _anyMemoryWorkInFlight (not just _summarising)
-                  // so the button visibly disables and shows "Summarising…"
-                  // while a per-checkpoint Retry is in progress too.
-                  icon: _anyMemoryWorkInFlight
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Icon(Icons.add, size: 18),
-                  label: Text(
-                    _anyMemoryWorkInFlight ? 'Summarising…' : 'Summarise now',
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      // C4: gate on _anyMemoryWorkInFlight (not just
+                      // _summarising) so the button visibly disables and shows
+                      // "Summarising…" while a per-checkpoint Retry runs too.
+                      icon: _anyMemoryWorkInFlight
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.add, size: 18),
+                      label: Text(
+                        _anyMemoryWorkInFlight
+                            ? 'Summarising…'
+                            : 'Summarise now',
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: EmberColors.primary,
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed:
+                          _anyMemoryWorkInFlight ? null : _runManualSummarise,
+                    ),
                   ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: EmberColors.primary,
-                    foregroundColor: Colors.white,
+                  // 2026-07-13 (community request): hand-written checkpoint —
+                  // quiet secondary action under the primary one.
+                  TextButton.icon(
+                    icon: Icon(Icons.edit_note,
+                        size: 18, color: EmberColors.textMid),
+                    label: Text(
+                      'Write one yourself',
+                      style: TextStyle(
+                          color: EmberColors.textMid, fontSize: 13),
+                    ),
+                    onPressed: _anyMemoryWorkInFlight
+                        ? null
+                        : _writeManualCheckpoint,
                   ),
-                  onPressed:
-                      _anyMemoryWorkInFlight ? null : _runManualSummarise,
-                ),
+                ],
               ),
             ),
           ),

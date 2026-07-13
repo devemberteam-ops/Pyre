@@ -953,6 +953,33 @@ Future<MemoryCheckpoint?> _regenerateCheckpointBody({
 /// append-only, so the OLDEST sit at the FRONT; dropping from there can never
 /// strand the recent valid set the runtime reads (the cap is an order of
 /// magnitude larger than [kMaxCheckpointsInPrompt]).
+/// 2026-07-13 (community request): build a checkpoint the user wrote BY HAND —
+/// no LLM call, no lock. [anchorMessageIdx] is the message it covers up to
+/// (inclusive, an index into `chat.messages`); pathHash/contentHash are
+/// computed exactly like the generated path, so branch/edit validation treats
+/// a manual checkpoint identically to a generated one. Returns null for a
+/// blank summary or an out-of-range anchor. The caller decides how to handle
+/// an anchor that already has a valid checkpoint (the UI blocks it — two
+/// checkpoints on one anchor would both feed the recap).
+MemoryCheckpoint? buildManualCheckpoint({
+  required Chat chat,
+  required int anchorMessageIdx,
+  required String summary,
+}) {
+  final text = summary.trim();
+  if (text.isEmpty) return null;
+  if (anchorMessageIdx < 0 || anchorMessageIdx >= chat.messages.length) {
+    return null;
+  }
+  return MemoryCheckpoint(
+    id: newId('mc'),
+    summary: text,
+    anchorMessageIdx: anchorMessageIdx,
+    pathHash: computePathHash(chat.messages, anchorMessageIdx),
+    contentHash: computeContentHash(chat.messages, anchorMessageIdx),
+  );
+}
+
 void applyCheckpoint(Chat chat, MemoryCheckpoint c) {
   chat.memoryCheckpoints.add(c);
   if (chat.memoryCheckpoints.length > _kMaxRetainedCheckpoints) {
