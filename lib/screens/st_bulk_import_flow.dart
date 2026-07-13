@@ -22,6 +22,7 @@ import '../models/models.dart';
 import '../services/attachment_store.dart';
 import '../services/card_import.dart' show externalizeCharacterImages;
 import '../services/lorebook_import.dart' show handleEmbeddedBookForCharacter;
+import '../services/regex_safety.dart';
 import '../services/st_backup_import.dart';
 import '../services/st_bulk_import.dart';
 import '../services/st_chat_import.dart';
@@ -190,6 +191,16 @@ Future<void> _runBackupImport(
   var addedChats = 0;
   var orphanChats = 0;
 
+  // 2026-07-13 (audit round 19, ReDoS): probe backup regex rules HERE, in the
+  // async phase — the add-pass below is a SYNC runBatch closure and can't
+  // await. A catastrophic-backtracking pattern is kept but DISABLED (data
+  // conservation over a silent drop; see regex_safety.dart).
+  for (final r in plan.regexRules) {
+    if (r.enabled && !await regexPatternIsSafe(r.pattern, r.flags)) {
+      r.enabled = false;
+    }
+  }
+
   store.runBatch(() {
     for (final c in plan.characters) {
       try {
@@ -252,6 +263,7 @@ Future<void> _runBackupImport(
 
     for (final r in plan.regexRules) {
       try {
+        // (ReDoS probe ran in the async phase above — see the pre-batch loop.)
         // 2026-07-03 review: equivalence-dedup — re-running the same bulk
         // import used to stack duplicate rules that all ran.
         if (store.addRegexRuleIfNew(r)) addedRegex++;
@@ -442,6 +454,18 @@ Future<StRouteResult> _prepareRouted(
       );
     } catch (e) {
       return _failedCopy(r, 'Failed to save: $e');
+    }
+  }
+  // 2026-07-13 (audit round 19, ReDoS): probe loose-file regex artifacts here
+  // in the async phase — [_addRouted] runs sync inside the batch and can't
+  // await. A catastrophic-backtracking pattern is kept but DISABLED (data
+  // conservation; see regex_safety.dart).
+  if (r.artifact == StArtifact.regex && r.regexRules != null) {
+    for (final rule in r.regexRules!) {
+      if (rule.enabled &&
+          !await regexPatternIsSafe(rule.pattern, rule.flags)) {
+        rule.enabled = false;
+      }
     }
   }
   return r;

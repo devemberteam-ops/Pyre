@@ -1443,7 +1443,13 @@ class _ChatScreenState extends State<ChatScreen> {
     if (chat == null || chat.messages.isEmpty) return;
     final last = chat.messages.last;
     if (last.kind == MessageKind.char) {
-      return _regenerateMessage(chat, last);
+      // Audit round 15 (MED): thread the surviving one-shot guide. The error
+      // paths deliberately do NOT clear `_inFlightGuide` precisely so Retry
+      // can honour it — but this branch (error left a PARTIAL reply, CHAR
+      // tip) regenerated with a null guide, silently dropping the user's
+      // guidance while the empty-buffer branch below preserved it. Two
+      // semantics for the same Retry button.
+      return _regenerateMessage(chat, last, guide: _inFlightGuide);
     }
     _clearPendingFallback();
     await _startFreshAssistantTurn(store, chat);
@@ -3316,6 +3322,32 @@ class _ChatScreenState extends State<ChatScreen> {
                   _regenerateWithGuide(chat, m);
                 },
               ),
+            // 2026-07-13 (community feedback): branching has existed all
+            // along (the +/‹› variant affordances), but a user asked "does
+            // Pyre have branching like SillyTavern?" — they looked for it
+            // HERE. Name the action for non-tip messages (the tip already
+            // has Continue/Regenerate above). Same paths as the + button.
+            if (!isLast && (isChar || isUserSide))
+              ListTile(
+                leading: Icon(Icons.alt_route, color: EmberColors.primary),
+                title: const Text('Branch from here'),
+                subtitle: Text(
+                  isChar
+                      ? 'Re-roll a new reply at this point — the current '
+                          'continuation stays saved under this variant.'
+                      : 'Rewrite from this point — the current continuation '
+                          'stays saved under this variant.',
+                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+                ),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  if (isChar) {
+                    _regenerateMessage(chat, m);
+                  } else {
+                    _branchUserMessage(chat, m);
+                  }
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.copy),
               title: const Text('Copy text'),
@@ -3858,6 +3890,11 @@ class _ChatScreenState extends State<ChatScreen> {
         },
       );
     } catch (e) {
+      // Audit round 15 (MED): the SYNCHRONOUS throw path never released the
+      // keep-alive ref taken above — onError/onDone handle the async cases,
+      // but a listen() that throws sync left the ref stuck until screen
+      // dispose, which can block sync pushes (GenerationKeepAlive interlock).
+      _keepAliveStop();
       if (mounted) setState(() => _generating = false);
       messenger.showSnackBar(
         SnackBar(
@@ -4772,6 +4809,13 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_generating) return;
     _clearPendingFallback(); // audit C1
     if (m.kind != MessageKind.char) return;
+    // Audit round 15 (MED): a guided regenerate stamps its guide into the
+    // in-flight slot so a post-error snackbar Retry finds it (Retry threads
+    // `_inFlightGuide` — without this stamp a "Regenerate with guide" that
+    // failed retried unguided). A plain regenerate (guide == null) leaves the
+    // slot alone: the surviving guide of an errored SEND must not be wiped by
+    // the user regenerating some other message before tapping Retry.
+    if (guide != null) _inFlightGuide = guide;
     // Sub-task B: haptic on regenerate (mobile only).
     if (_isMobileForHaptics) HapticFeedback.lightImpact();
     final store = context.read<AppStore>();

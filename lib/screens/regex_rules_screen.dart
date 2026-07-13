@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../services/regex_rules.dart';
+import '../services/regex_safety.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
@@ -252,6 +253,14 @@ class RegexRulesScreen extends StatelessWidget {
       var skipped = 0;
       var disabledCount = 0;
       for (final r in parsed) {
+        // 2026-07-13 (audit round 19, ReDoS): a catastrophic-backtracking
+        // pattern arriving via import is KEPT but DISABLED — data
+        // conservation over silent drops; enabling it is then a conscious
+        // act (and the editor's own save probe will warn again). Counted in
+        // the existing "imported disabled (review before enabling)" bucket.
+        if (r.enabled && !await regexPatternIsSafe(r.pattern, r.flags)) {
+          r.enabled = false;
+        }
         if (store.addRegexRuleIfNew(r)) {
           added++;
           if (!r.enabled) disabledCount++;
@@ -382,23 +391,36 @@ class _RegexRuleEditorScreenState extends State<RegexRuleEditorScreen> {
     );
   }
 
-  void _save() {
+  Future<void> _save() async {
     final lit = parseRegexLiteral(_find.text);
+    final messenger = ScaffoldMessenger.of(context);
     // 2026-07-03 review: an empty pattern saves a dead rule and an invalid
     // one no-ops forever — stop at the door with a clear message instead.
     if (lit.pattern.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      messenger.showSnackBar(const SnackBar(
           content:
               Text('Add a Find pattern first — an empty rule never fires.')));
       return;
     }
     if (!regexPatternIsValid(lit.pattern, lit.flags)) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      messenger.showSnackBar(const SnackBar(
           content: Text(
               'Fix the Find pattern — it isn\'t a valid regex, so the rule '
               'would never fire.')));
       return;
     }
+    // 2026-07-13 (audit round 19, ReDoS): probe the pattern in a killable
+    // isolate before it can ever run against chat text — a catastrophic-
+    // backtracking pattern would otherwise freeze the UI on every bubble /
+    // prompt build with no way back but force-closing the app.
+    if (!await regexPatternIsSafe(lit.pattern, lit.flags)) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text(
+              'This pattern can freeze the app (catastrophic backtracking). '
+              'Simplify it — avoid nested quantifiers like (a+)+.')));
+      return;
+    }
+    if (!mounted) return;
     final trims = _trim.text
         .split('\n')
         .map((s) => s.trim())

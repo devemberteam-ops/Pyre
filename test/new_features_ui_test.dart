@@ -89,8 +89,14 @@ void main() {
           find.widgetWithText(TextField, 'Replace'), 'cat');
       await tester.pumpAndSettle();
 
-      // Save (the AppBar action).
-      await tester.tap(find.widgetWithText(TextButton, 'Save'));
+      // Save (the AppBar action). 2026-07-13: _save now awaits the ReDoS
+      // probe (regexPatternIsSafe spawns a REAL isolate), which never
+      // completes under the fake-async test clock — runAsync turns the real
+      // event loop so the probe verdict lands before the assertions.
+      await tester.runAsync(() async {
+        await tester.tap(find.widgetWithText(TextButton, 'Save'));
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      });
       await tester.pumpAndSettle();
 
       // The store gained exactly one rule with the typed values.
@@ -119,7 +125,11 @@ void main() {
           find.widgetWithText(TextField, 'Replace'), 'wolf');
       await tester.pumpAndSettle();
 
-      await tester.tap(find.widgetWithText(TextButton, 'Save'));
+      // 2026-07-13: runAsync for the real-isolate ReDoS probe (see above).
+      await tester.runAsync(() async {
+        await tester.tap(find.widgetWithText(TextButton, 'Save'));
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      });
       await tester.pumpAndSettle();
 
       final r = store.regexRules.single;
