@@ -1589,7 +1589,17 @@ Do not write {{user}}'s actions, dialogue, or thoughts. Do not summarise or reca
     temperature: 0.95,
     topP: 0.95,
     topK: 0,
-    maxTokens: 1024,
+    // maxTokens deliberately UNPINNED (null): unlike temp/top-p (a sampling
+    // taste this preset intentionally sets), response LENGTH is a user
+    // resource preference. Pinning it here (was 1024) silently overrode the
+    // user-editable "Default generation" value AND — since this preset is
+    // locked — left no way to raise it without forking (owner-reported
+    // 2026-07-13: set the default to 2048, chat stayed at 1024). Null lets
+    // `preset?.maxTokens ?? settings.maxTokens` fall through to the editable
+    // global default, matching the "used when a preset leaves a field blank"
+    // contract. The global default stays conservative (1024) for untouched
+    // installs.
+    maxTokens: null,
     locked: true,
   );
 }
