@@ -1239,7 +1239,7 @@ assistant
 *Sera wipes her brow.* "Evening."
 ===TURN===
 user
-[OOC]: keep replies short for this scene
+[OOC - response direction, outside the scene]: keep replies short for this scene
 ===TURN===
 user
 Long day?''';

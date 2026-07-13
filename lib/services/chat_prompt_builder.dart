@@ -1050,7 +1050,17 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
         break;
       case MessageKind.ooc:
         // Wave CY.14: send as a user-role turn (not system).
-        final t = ChatTurn('user', '[OOC]: $txt');
+        // 2026-07-13 (Codex): self-DESCRIBING marker instead of a separate
+        // post-history rule. The 1.2.2 approach — a standalone system note
+        // ("never narrate the OOC…") — got RECITED verbatim by small RP tunes
+        // (owner saw a paraphrase leak into replies) and was reverted. This
+        // classifies the instruction INLINE with its own data, so there is no
+        // free-floating directive to echo. Affirmative ("outside the scene"),
+        // no XML/tool role (fragile on OpenAI-compatible runtimes). The chat
+        // DISPLAY + export/import keep the bare `[OOC]:`; only the model sees
+        // this. STILL an experiment — must be verified on the owner's real
+        // model (it reproduced the echo) before it's trusted.
+        final t = ChatTurn('user', '[OOC - response direction, outside the scene]: $txt');
         historyTurns.add(t);
         break;
       case MessageKind.scene:

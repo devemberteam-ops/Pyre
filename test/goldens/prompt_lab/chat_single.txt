@@ -180,7 +180,7 @@ Vesna found Ren dazed at the foot of the Sunken Gate and, against her better jud
 --- end current state ---
 ----------------------------------------
 [history]
-user: [OOC]: keep Vesna wary but not unkind here
+user: [OOC - response direction, outside the scene]: keep Vesna wary but not unkind here
 user: "Then why are we standing at the edge of it?"
 ----------------------------------------
 [script]
