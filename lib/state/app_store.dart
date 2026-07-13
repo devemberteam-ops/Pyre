@@ -119,6 +119,19 @@ class AppStore extends ChangeNotifier {
   /// separately. Null means "use the impersonate provider".
   String? guideProviderId;
 
+  /// 2026-07-13: per-chat PREFERRED provider (owner: an in-chat provider swap
+  /// must affect ONLY that chat). Keyed by `chat.id` → `provider.id`. A missing
+  /// entry inherits [activeProvider]; a dangling id (provider deleted / absent
+  /// on this device) also falls back to it — never a silent "first provider"
+  /// (see [chatPrimaryProvider]). DEVICE-LOCAL by design (Codex): a provider is
+  /// a local capability, not synced content — so this map is persisted in the
+  /// local blob but OMITTED from [syncedSettingsToJson]. Putting it inside the
+  /// synced `Chat` record would (a) let a provider swap clobber a concurrent
+  /// message edit on another device via whole-record LWW, and (b) bypass the
+  /// [withoutProviderRolePointers] defense that keeps web peers from steering
+  /// the host's provider. Cleared for a chat/provider on delete.
+  Map<String, String> chatProviderOverrides = {};
+
   List<Character> characters = [];
   List<Persona> personas = [];
   String? activePersonaId;
@@ -590,6 +603,14 @@ class AppStore extends ChangeNotifier {
       visionProviderId = _jStr(raw['visionProviderId']);
       impersonateProviderId = _jStr(raw['impersonateProviderId']);
       guideProviderId = _jStr(raw['guideProviderId']);
+      // 2026-07-13: per-chat preferred provider (device-local; string→string).
+      final rawChatProviders = raw['chatProviderOverrides'];
+      if (rawChatProviders is Map) {
+        chatProviderOverrides = {
+          for (final e in rawChatProviders.entries)
+            if (e.value != null) e.key.toString(): e.value.toString(),
+        };
+      }
       // Wave CY.18.99: per-provider refusal history (self-learning).
       final rawRefusals = raw['providerRefusals'];
       if (rawRefusals is Map) {
@@ -1362,6 +1383,10 @@ class AppStore extends ChangeNotifier {
       'visionProviderId': visionProviderId,
       'impersonateProviderId': impersonateProviderId,
       'guideProviderId': guideProviderId,
+      // 2026-07-13: per-chat preferred provider — LOCAL blob only, NEVER in
+      // syncedSettingsToJson (device-local capability, see the field doc).
+      if (chatProviderOverrides.isNotEmpty)
+        'chatProviderOverrides': chatProviderOverrides,
       // Wave CY.18.99: refusal history (omit when empty to keep blobs clean).
       if (providerRefusals.isNotEmpty) 'providerRefusals': providerRefusals,
       // Slice D-2: learned context-limit cache (omit when empty).
@@ -1633,14 +1658,51 @@ class AppStore extends ChangeNotifier {
 
   // ── Wave CY.18.99: smart provider fallback ─────────────────────────
 
-  /// Ordered chat fallback chain — primary first, then the rest in list
-  /// order. Collapses to [primary] only when the master toggle is off.
-  /// Pure ordering lives in provider_fallback.dart.
-  List<ApiProvider> chatFallbackChain() => buildFallbackChain(
-        all: providers,
-        primaryId: activeProviderId,
-        enabled: uiPrefs.askToSwitchOnFailure,
-      );
+  /// The PRIMARY provider for [chat]'s AI turns: its per-chat preferred
+  /// provider if set AND still present, else the global [activeProvider]. A
+  /// dangling override (provider deleted / absent on this device) falls back to
+  /// the global — never a silent "first provider". THIS is the one resolver
+  /// every chat-owned AI op must use (send, retry, regenerate, continue,
+  /// fill-in, memory, live sheet, scene classification, guide/impersonate) so
+  /// the chat's choice is honoured everywhere the UI implies it. Creator/Vision
+  /// keep their own global roles.
+  ApiProvider? chatPrimaryProvider(Chat chat) {
+    final id = chatProviderOverrides[chat.id];
+    if (id != null) {
+      for (final p in providers) {
+        if (p.id == id) return p;
+      }
+    }
+    return activeProvider;
+  }
+
+  /// Ordered chat fallback chain for [chat] — its preferred provider first (or
+  /// the global primary when unset/dangling), then the rest in list order.
+  /// Collapses to the primary only when the master toggle is off. The per-chat
+  /// pick means "use this FIRST here", NOT "forbid the rest" — the existing
+  /// failover is preserved. Pure ordering lives in provider_fallback.dart.
+  List<ApiProvider> chatFallbackChain(Chat chat) {
+    final overrideId = chatProviderOverrides[chat.id];
+    final valid = overrideId != null && providers.any((p) => p.id == overrideId);
+    return buildFallbackChain(
+      all: providers,
+      primaryId: valid ? overrideId : activeProviderId,
+      enabled: uiPrefs.askToSwitchOnFailure,
+    );
+  }
+
+  /// Set (or clear, with null) [chat]'s preferred provider. Accepts only an
+  /// existing provider id; null / unknown removes the override (inherit the
+  /// global). DEVICE-LOCAL: persists via [_bump] but deliberately does NOT
+  /// [_touchSettings] — this pref never rides the synced settings unit.
+  void setChatProvider(String chatId, String? providerId) {
+    if (providerId == null || !providers.any((p) => p.id == providerId)) {
+      chatProviderOverrides.remove(chatId);
+    } else {
+      chatProviderOverrides[chatId] = providerId;
+    }
+    _bump();
+  }
 
   /// Bump a provider's refusal counter + persist. Called when a reply
   /// from [providerId] is classified as a content refusal.
@@ -1688,11 +1750,15 @@ class AppStore extends ChangeNotifier {
   /// tail after [afterIndex] (the current failed provider's position) so
   /// the suggestion can never point back to an already-tried provider
   /// (audit C3). Null when none.
+  /// [chain] is the FROZEN turn chain (the caller's `_fallbackChain`), NOT a
+  /// freshly-recomputed one — with a per-chat preferred provider the head can
+  /// differ, so recomputing here would search a different order than the turn
+  /// actually used (Codex 2026-07-13).
   ApiProvider? cleanestChatAlternative({
+    required List<ApiProvider> chain,
     required String nextId,
     required int afterIndex,
   }) {
-    final chain = chatFallbackChain();
     final start = (afterIndex + 1).clamp(0, chain.length);
     final tail = chain.sublist(start);
     return pickCleanAlternative(
@@ -1862,6 +1928,10 @@ class AppStore extends ChangeNotifier {
       guideProviderId = null;
       pointerChanged = true;
     }
+    // Device-local per-chat preferred-provider overrides pointing at the
+    // deleted provider → drop them so those chats fall back to the global
+    // (2026-07-13, Codex finding D). Not a synced pointer, so no _touchSettings.
+    chatProviderOverrides.removeWhere((_, pid) => pid == id);
     if (pointerChanged) _touchSettings();
     SecureKeys.delete(id);
     _bump();

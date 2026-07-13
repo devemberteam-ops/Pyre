@@ -1039,15 +1039,14 @@ class _ChatScreenState extends State<ChatScreen> {
     quickEditCtl.dispose();
   }
 
-  /// 1.2.1 (owner design): curated in-chat provider quick-swap. Mirrors
-  /// [_showPresetSwitcher] — a bottom sheet listing the ACTIVE provider
-  /// first, then the user's curated pins (Settings → API connections →
-  /// pin icon), skipping the active one if it's also pinned so it never
-  /// shows twice. Tapping a row swaps `store.activeProviderId` via the
-  /// SAME `setActiveProvider` the API connections screen uses. Provider-
-  /// level only — each provider carries its own model, so this is
-  /// deliberately NOT a model-list dump.
-  Future<void> _showProviderSwitcher() async {
+  /// 1.2.1 (owner design): curated in-chat provider quick-swap. 2026-07-13:
+  /// the pick is now PER-CHAT (`setChatProvider`) — swapping here changes ONLY
+  /// [chat], never the global default or other chats. Offers "Use global
+  /// default" (clears the override) first, then this chat's override, the
+  /// global active, and the user's curated pins (Settings → API connections →
+  /// pin icon), deduped. Provider-level only — each provider carries its own
+  /// model, so this is deliberately NOT a model-list dump.
+  Future<void> _showProviderSwitcher(Chat chat) async {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
 
@@ -1067,25 +1066,47 @@ class _ChatScreenState extends State<ChatScreen> {
             // ephemeral state here (unlike the preset sheet's quick-edit
             // expander), so a plain Builder is enough — no StatefulBuilder.
             final liveStore = sheetCtx.watch<AppStore>();
-            final activeId = liveStore.activeProviderId;
-            final active = liveStore.activeProvider;
+            final globalId = liveStore.activeProviderId;
+            final globalActive = liveStore.activeProvider;
+            final overrideId = liveStore.chatProviderOverrides[chat.id];
+            final overrideValid = overrideId != null &&
+                liveStore.providers.any((p) => p.id == overrideId);
             final pinnedIds = liveStore.uiPrefs.chatSwapProviderIds;
 
-            // Active provider first, then each pin — skip the active one
-            // if it's ALSO pinned so it doesn't render twice.
-            final rows = <ApiProvider>[
-              if (active != null) active,
-              for (final id in pinnedIds)
-                if (id != activeId)
-                  ...liveStore.providers.where((p) => p.id == id).take(1),
-            ];
+            // The specific providers to offer, in priority order and deduped:
+            // THIS chat's override (even if not pinned), the global active, then
+            // the curated pins (Codex 2026-07-13).
+            final seen = <String>{};
+            final rows = <ApiProvider>[];
+            void addProvider(String? id) {
+              if (id == null || seen.contains(id)) return;
+              for (final p in liveStore.providers) {
+                if (p.id == id) {
+                  rows.add(p);
+                  seen.add(id);
+                  return;
+                }
+              }
+            }
+            if (overrideValid) addProvider(overrideId);
+            addProvider(globalId);
+            for (final id in pinnedIds) {
+              addProvider(id);
+            }
 
-            void switchTo(String id) {
-              liveStore.setActiveProvider(id);
-              final name = liveStore.activeProvider?.name ?? '';
+            // Radio value: a provider id when this chat is pinned, else '' =
+            // "use the global default" (the sentinel — provider ids are never
+            // empty).
+            final selectedValue = overrideValid ? overrideId! : '';
+
+            void switchTo(String? id) {
+              // '' / null clears the override so the chat inherits the global.
+              liveStore.setChatProvider(
+                  chat.id, (id == null || id.isEmpty) ? null : id);
+              final name = liveStore.chatPrimaryProvider(chat)?.name ?? 'None';
               Navigator.pop(sheet);
               messenger.showSnackBar(
-                SnackBar(content: Text('Switched to $name')),
+                SnackBar(content: Text('This chat now uses $name')),
               );
             }
 
@@ -1126,31 +1147,53 @@ class _ChatScreenState extends State<ChatScreen> {
                       Padding(
                         padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                         child: Text(
-                          'The AI backend for this chat. Takes effect on '
-                          'your next message.',
+                          'The AI backend for THIS chat only — other chats keep '
+                          'the global default. Takes effect on your next message.',
                           style: TextStyle(
                               color: EmberColors.textMid, fontSize: 12),
                         ),
                       ),
-                      if (rows.isEmpty)
+                      if (liveStore.providers.isEmpty)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
                           child: Text(
-                            'Pin providers in Settings → API connections '
-                            'to quick-swap here.',
+                            'Add providers in Settings → API connections '
+                            'to pick one here.',
                             style: TextStyle(
                                 color: EmberColors.textMid, fontSize: 12),
                           ),
                         )
                       else
                         RadioGroup<String>(
-                          groupValue: activeId,
+                          groupValue: selectedValue,
                           onChanged: (id) {
                             if (id == null) return;
                             switchTo(id);
                           },
                           child: Column(
                             children: [
+                              // "Use global default" — clears this chat's
+                              // override so it follows the global active again.
+                              ListTile(
+                                leading: Radio<String>(
+                                  value: '',
+                                  activeColor: EmberColors.primary,
+                                ),
+                                title: const Text(
+                                  'Use global default',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600),
+                                ),
+                                subtitle: Text(
+                                  globalActive?.name ?? 'None',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      color: EmberColors.textMid,
+                                      fontSize: 12),
+                                ),
+                                onTap: () => switchTo(''),
+                              ),
                               for (final p in rows)
                                 ListTile(
                                   leading: Radio<String>(
@@ -1262,7 +1305,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // uses (fallback chain, else active provider). Keep the draft; offer a
     // one-tap deep-link. No auto-send on return — a fresh Send is a conscious,
     // possibly-paid action.
-    if (store.chatFallbackChain().isEmpty && store.activeProvider == null) {
+    if (store.chatPrimaryProvider(chat) == null) {
       _promptSetUpProvider();
       return;
     }
@@ -1381,7 +1424,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // candidate. Streaming + outcome handling lives in _runGenerationInto so
     // the fallback-retry path reuses it verbatim.
     _fallbackIndex = 0;
-    _fallbackChain = store.chatFallbackChain();
+    _fallbackChain = store.chatFallbackChain(chat);
     await _runGenerationInto(assistantId);
   }
 
@@ -1420,7 +1463,7 @@ class _ChatScreenState extends State<ChatScreen> {
             _fallbackIndex >= 0 &&
             _fallbackIndex < _fallbackChain.length)
         ? _fallbackChain[_fallbackIndex]
-        : store.activeProvider;
+        : store.chatPrimaryProvider(chat);
     if (provider == null) {
       _finishWithError(
           'No provider configured. Open "More → API Connections".');
@@ -1791,7 +1834,7 @@ class _ChatScreenState extends State<ChatScreen> {
       // provider.
       if ((store.providerRefusals[next.id] ?? 0) > 0) {
         clean = store.cleanestChatAlternative(
-            nextId: next.id, afterIndex: _fallbackIndex);
+            chain: _fallbackChain, nextId: next.id, afterIndex: _fallbackIndex);
       }
     }
     setState(() {
@@ -1937,7 +1980,7 @@ class _ChatScreenState extends State<ChatScreen> {
           LlmDebugLog.instance.trace('ltm.auto: skipped (latch busy)'));
       return;
     }
-    final provider = store.activeProvider;
+    final provider = store.chatPrimaryProvider(chat);
     if (provider == null) return;
     _summarising = true;
     try {
@@ -2020,7 +2063,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!chat.liveSheetEnabled) return;
     if (!lsheet.shouldUpdateLiveSheet(chat, store.liveSheetSettings)) return;
     if (_liveSheetUpdating) return;
-    final provider = store.activeProvider;
+    final provider = store.chatPrimaryProvider(chat);
     if (provider == null) return;
     _liveSheetUpdating = true;
     try {
@@ -2150,7 +2193,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     if (_sceneClassifying) return;
-    final provider = store.activeProvider;
+    final provider = store.chatPrimaryProvider(chat);
     if (provider == null) return;
 
     // Audit fix 3: service-level in-flight lock. The widget-local
@@ -2974,20 +3017,21 @@ class _ChatScreenState extends State<ChatScreen> {
                     },
                   ),
                   // 1.2.1: sibling of the Preset switcher above — curated
-                  // in-chat provider quick-swap (owner design). The active
-                  // provider is GLOBAL state (store.activeProviderId), same
-                  // as Preset, so the subtitle reflects whatever's active.
+                  // in-chat provider quick-swap (owner design). 2026-07-13: the
+                  // pick is now PER-CHAT (chatProviderOverrides), so the subtitle
+                  // reflects THIS chat's preferred provider (inherits the global
+                  // when unset).
                   ListTile(
                     leading: const Icon(Icons.dns_outlined),
                     title: const Text('Provider'),
                     subtitle: Text(
-                      'Provider · ${store.activeProvider?.name ?? "None"}',
+                      'Provider · ${store.chatPrimaryProvider(chat)?.name ?? "None"}',
                       style: TextStyle(
                           color: EmberColors.textMid, fontSize: 12),
                     ),
                     onTap: () {
                       Navigator.pop(sheet);
-                      _showProviderSwitcher();
+                      _showProviderSwitcher(chat);
                     },
                   ),
                   if (primary != null)
@@ -3401,7 +3445,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _streamBuffer = last.text;
     setState(() => _generating = true);
 
-    final provider = store.activeProvider;
+    final provider = store.chatPrimaryProvider(chat);
     if (provider == null) {
       _finishWithError(
           'No provider configured. Open "More → API Connections".');
@@ -3626,13 +3670,13 @@ class _ChatScreenState extends State<ChatScreen> {
     final store = context.read<AppStore>();
     final chat = _chat(store);
     if (chat == null) return;
-    // Feature (A): per-function provider routing. A GUIDED call (outline /
-    // perspective came from "Guide my message") uses the guide provider; a plain
-    // "Impersonate me" uses the impersonate provider. Both fall back to the chat
-    // provider when no override is set — so the default behaviour is unchanged.
+    // Guide / Impersonate are CHAT-owned ops, so they resolve through the
+    // chat's preferred provider (2026-07-13, Codex): the guide/impersonate
+    // getters were dead (returned the global activeProvider), so an in-chat
+    // provider pick used to be ignored here. `isGuided` still labels the
+    // failure toast below.
     final isGuided = outline != null || perspective != null;
-    final provider =
-        isGuided ? store.guideProvider : store.impersonateProvider;
+    final provider = store.chatPrimaryProvider(chat);
     if (provider == null) {
       // Was a SILENT return — the tap looked like a no-op. Match the main
       // send path's toast so the user knows why nothing happened. (Guide /
@@ -4216,7 +4260,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         }
                         return;
                       }
-                      final provider = store.activeProvider;
+                      final provider = store.chatPrimaryProvider(chat);
                       if (provider == null) {
                         setLocal(() => status =
                             'No provider configured.');
@@ -4753,7 +4797,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _streamBuffer = '';
     });
 
-    final provider = store.activeProvider;
+    final provider = store.chatPrimaryProvider(chat);
     if (provider == null) {
       _finishWithError(
           'No provider configured. Open "More → API Connections".');
