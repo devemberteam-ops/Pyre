@@ -19,7 +19,6 @@ import '../services/memory.dart' as ltm;
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/empty_state.dart';
-import 'long_term_memory_screen.dart';
 
 class MemoryScreen extends StatefulWidget {
   final String chatId;
@@ -563,18 +562,6 @@ class _MemoryScreenState extends State<MemoryScreen> {
       appBar: AppBar(
         title: const Text('Checkpoints'),
         actions: [
-          // 2026-07-13 (community feedback): the frequency / length / prompt
-          // knobs live in the GLOBAL Checkpoints settings (Chat Settings →
-          // Story continuity), and users asking for "shorter, more frequent
-          // chapters" didn't find them — surface a direct shortcut here.
-          IconButton(
-            tooltip: 'Frequency & length settings',
-            icon: const Icon(Icons.tune),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                  builder: (_) => const LongTermMemoryScreen()),
-            ),
-          ),
           if (chat.memoryCheckpoints.isNotEmpty)
             IconButton(
               tooltip: 'Wipe all',

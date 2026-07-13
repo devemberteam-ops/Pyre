@@ -3322,32 +3322,6 @@ class _ChatScreenState extends State<ChatScreen> {
                   _regenerateWithGuide(chat, m);
                 },
               ),
-            // 2026-07-13 (community feedback): branching has existed all
-            // along (the +/‹› variant affordances), but a user asked "does
-            // Pyre have branching like SillyTavern?" — they looked for it
-            // HERE. Name the action for non-tip messages (the tip already
-            // has Continue/Regenerate above). Same paths as the + button.
-            if (!isLast && (isChar || isUserSide))
-              ListTile(
-                leading: Icon(Icons.alt_route, color: EmberColors.primary),
-                title: const Text('Branch from here'),
-                subtitle: Text(
-                  isChar
-                      ? 'Re-roll a new reply at this point — the current '
-                          'continuation stays saved under this variant.'
-                      : 'Rewrite from this point — the current continuation '
-                          'stays saved under this variant.',
-                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-                ),
-                onTap: () {
-                  Navigator.pop(sheet);
-                  if (isChar) {
-                    _regenerateMessage(chat, m);
-                  } else {
-                    _branchUserMessage(chat, m);
-                  }
-                },
-              ),
             ListTile(
               leading: const Icon(Icons.copy),
               title: const Text('Copy text'),
