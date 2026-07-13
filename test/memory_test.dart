@@ -486,6 +486,24 @@ void main() {
       expect(isCheckpointInFlight('chat-A'), isFalse);
     });
 
+    test('a STALE lock (a hung call) is reaped and reported free', () {
+      // A fresh lock still reads as in-flight...
+      setCheckpointInFlightAgedForTest('chat-S',
+          ageMs: checkpointStaleAfterMsForTest - 5000);
+      expect(isCheckpointInFlight('chat-S'), isTrue);
+      // ...but one older than the threshold (a call that hung — e.g. the
+      // connection died while backgrounded so its own timers never fired) is
+      // reaped, so a new checkpoint can proceed instead of blocking forever.
+      setCheckpointInFlightAgedForTest('chat-H',
+          ageMs: checkpointStaleAfterMsForTest + 5000);
+      expect(isCheckpointInFlight('chat-H'), isFalse);
+      // Reaping is durable — the entry is gone, not just reported false.
+      setCheckpointInFlightAgedForTest('chat-H',
+          ageMs: checkpointStaleAfterMsForTest + 5000);
+      isCheckpointInFlight('chat-H'); // triggers the reap
+      expect(isCheckpointInFlight('chat-H'), isFalse);
+    });
+
     test('locks are per-chat: setting one does not affect another', () {
       setCheckpointInFlightForTest('chat-X', inFlight: true);
       setCheckpointInFlightForTest('chat-Y', inFlight: true);

@@ -66,15 +66,45 @@ export 'chat_fingerprint.dart'
 /// manual path ([memory_screen._runManualSummarise]) calls
 /// [isCheckpointInFlight] to distinguish "lock held" from "LLM error" and
 /// shows the appropriate toast.
-final Map<String, bool> _checkpointInFlight = {};
+/// chatId → the wall-clock ms when its checkpoint lock was acquired. Value is a
+/// TIMESTAMP (not a bool) so a lock can go STALE and be reaped — see
+/// [_kCheckpointStaleAfterMs].
+final Map<String, int> _checkpointInFlight = {};
 
-/// Returns true while a [generateCheckpoint] or [regenerateCheckpoint] call
-/// is in progress for [chatId].
-///
-/// Use this from callers that receive a null return value to distinguish
-/// "already running" from "LLM error".
-bool isCheckpointInFlight(String chatId) =>
-    _checkpointInFlight[chatId] == true;
+/// A checkpoint lock older than this is treated as STALE and reaped. The LLM
+/// call almost certainly hung: a dropped connection while the app was
+/// backgrounded (Android suspends the isolate, so completeChatStreamed's OWN
+/// 45s/300s timers don't count down) leaves the try/finally that releases the
+/// lock unreached — blocking every future auto AND manual checkpoint forever
+/// (owner-reported 2026-07-13: "Summarise now" said one was already being
+/// generated, but it never came). Wall-clock based (DateTime.now), so recovery
+/// does NOT depend on paused timers. Kept safely ABOVE a live call's real
+/// ceiling (`_kLocalCompleteTimeout` = 300s) so a genuinely slow call is never
+/// falsely reaped into a duplicate anchor.
+const int _kCheckpointStaleAfterMs = 330 * 1000;
+
+/// Returns true while a FRESH [generateCheckpoint] / [regenerateCheckpoint] call
+/// holds the lock for [chatId]. A stale lock (a hung call — see above) is
+/// reaped here and reported as free. Callers that receive a null return use
+/// this to distinguish "already running" from "LLM error".
+bool isCheckpointInFlight(String chatId) {
+  final at = _checkpointInFlight[chatId];
+  if (at == null) return false;
+  if (DateTime.now().millisecondsSinceEpoch - at >= _kCheckpointStaleAfterMs) {
+    _checkpointInFlight.remove(chatId); // reap the stale lock
+    return false;
+  }
+  return true;
+}
+
+/// Take the per-chat checkpoint lock. Returns false (caller aborts with the
+/// null sentinel) when a FRESH call already holds it; a stale lock is reaped
+/// and re-acquired.
+bool _acquireCheckpointLock(String chatId) {
+  if (isCheckpointInFlight(chatId)) return false;
+  _checkpointInFlight[chatId] = DateTime.now().millisecondsSinceEpoch;
+  return true;
+}
 
 /// TEST SEAM — forcibly marks [chatId] as in-flight or clears it.
 /// Only used in unit tests to verify the C1 concurrent-call guard
@@ -82,11 +112,22 @@ bool isCheckpointInFlight(String chatId) =>
 @visibleForTesting
 void setCheckpointInFlightForTest(String chatId, {required bool inFlight}) {
   if (inFlight) {
-    _checkpointInFlight[chatId] = true;
+    _checkpointInFlight[chatId] = DateTime.now().millisecondsSinceEpoch;
   } else {
     _checkpointInFlight.remove(chatId);
   }
 }
+
+/// TEST SEAM — mark [chatId] in-flight but acquired [ageMs] ago, to exercise
+/// the stale-lock reaping in [isCheckpointInFlight].
+@visibleForTesting
+void setCheckpointInFlightAgedForTest(String chatId, {required int ageMs}) {
+  _checkpointInFlight[chatId] = DateTime.now().millisecondsSinceEpoch - ageMs;
+}
+
+/// TEST SEAM — the stale threshold, so tests don't hard-code the constant.
+@visibleForTesting
+int get checkpointStaleAfterMsForTest => _kCheckpointStaleAfterMs;
 
 /// TEST SEAM — clears ALL in-flight state. Call in setUp/tearDown so
 /// lock state from one test never leaks into the next.
@@ -636,12 +677,13 @@ Future<MemoryCheckpoint?> generateCheckpoint({
   // manual path (memory_screen) call this function; their separate per-screen
   // `_summarising` latches can't see each other. Acquiring here prevents a
   // concurrent call from a DIFFERENT screen from producing a duplicate anchor.
-  if (_checkpointInFlight[chat.id] == true) {
-    // Caller (manual path) calls isCheckpointInFlight() to distinguish this
-    // from an LLM error; auto path already treats null as "skip".
+  if (!_acquireCheckpointLock(chat.id)) {
+    // A FRESH call already holds the lock. Caller (manual path) calls
+    // isCheckpointInFlight() to distinguish this from an LLM error; auto path
+    // treats null as "skip". A STALE lock (a hung call) is reaped inside the
+    // acquire, so this can never block a new checkpoint forever.
     return null;
   }
-  _checkpointInFlight[chat.id] = true;
   try {
     return await _generateCheckpointBody(
       chat: chat,
@@ -809,11 +851,11 @@ Future<MemoryCheckpoint?> regenerateCheckpoint({
   required ModelSettings settings,
   MemorySettings? memorySettings,
 }) async {
-  // C1: service-level per-chat lock (same guard as generateCheckpoint).
-  if (_checkpointInFlight[chat.id] == true) {
+  // C1: service-level per-chat lock (same guard as generateCheckpoint) — with
+  // the same stale-lock reaping (a hung regenerate can't wedge it forever).
+  if (!_acquireCheckpointLock(chat.id)) {
     return null;
   }
-  _checkpointInFlight[chat.id] = true;
   try {
     return await _regenerateCheckpointBody(
       chat: chat,
