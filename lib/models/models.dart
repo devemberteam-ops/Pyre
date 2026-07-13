@@ -627,6 +627,13 @@ class Folder {
   /// compatibility; treat as a set conceptually (the UI dedupes on
   /// add).
   List<String> characterIds;
+  /// 2026-07-13 (community request): folders now organise Personas and
+  /// Lorebooks too — one folder can group all three kinds (e.g. a whole
+  /// campaign: its cast + your persona + its world book). Same List-as-set
+  /// convention as [characterIds]; empty lists are omitted from JSON so
+  /// pre-existing folders stay byte-identical.
+  List<String> personaIds;
+  List<String> lorebookIds;
   int createdAt;
   int updatedAt;
   /// Mega-audit 2026-06-05 (F2): LAN sync metadata. See Character.mtime for
@@ -642,11 +649,15 @@ class Folder {
     required this.id,
     required this.name,
     List<String>? characterIds,
+    List<String>? personaIds,
+    List<String>? lorebookIds,
     int? createdAt,
     int? updatedAt,
     this.mtime = 0,
     this.deleted = false,
   })  : characterIds = characterIds ?? [],
+        personaIds = personaIds ?? [],
+        lorebookIds = lorebookIds ?? [],
         createdAt = createdAt ?? DateTime.now().millisecondsSinceEpoch,
         updatedAt = updatedAt ?? DateTime.now().millisecondsSinceEpoch;
 
@@ -654,6 +665,8 @@ class Folder {
         id: j['id'] as String,
         name: (j['name'] as String?) ?? 'Untitled folder',
         characterIds: _jStringList(j['characterIds']),
+        personaIds: _jStringList(j['personaIds']),
+        lorebookIds: _jStringList(j['lorebookIds']),
         createdAt: _jTimestamp(j['createdAt']),
         updatedAt: _jTimestamp(j['updatedAt']),
         mtime: _jInt(j['mtime']) ?? 0,
@@ -664,6 +677,8 @@ class Folder {
         'id': id,
         'name': name,
         'characterIds': characterIds,
+        if (personaIds.isNotEmpty) 'personaIds': personaIds,
+        if (lorebookIds.isNotEmpty) 'lorebookIds': lorebookIds,
         'createdAt': createdAt,
         'updatedAt': updatedAt,
         'mtime': mtime,

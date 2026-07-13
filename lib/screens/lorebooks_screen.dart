@@ -16,6 +16,19 @@ import '../widgets/lorebook_binding_section.dart'
     show LorebookUsedBySection, askEmbeddedChoice;
 import '../widgets/menu_sheet.dart';
 import 'character_assistant_screen.dart' show CharacterAssistantScreen;
+// 2026-07-13 (community request): folders organise lorebooks too. The shared
+// folder-section widgets + the generalized add-to-folder sheet live next to
+// their character originals; this narrow re-import mirrors the
+// chat_picker_screens.dart `show topLevelVisibleCharacters` pattern
+// (characters_screen already imports this file the same way).
+import 'characters_screen.dart'
+    show
+        ActiveFolderChip,
+        AllFiledHint,
+        FolderRow,
+        FolderSectionHeader,
+        showAddToFolderSheet,
+        topLevelVisibleLorebooks;
 
 // 2026-07-03 (Gui): Lorebooks moved OUT of More and into the library next to
 // Characters and Personas — they're content, not a setting. The standalone
@@ -39,9 +52,20 @@ class LorebookList extends StatelessWidget {
     final allVisible = store.lorebooks
         .where((b) => !b.hidden && !b.deleted)
         .toList(growable: false);
+    // 2026-07-13 (community request): folder-aware pool (mirrors the
+    // Characters list). The pure helper handles the folder-scoped view
+    // (via store.loreFolderId), the search-all override, and hide-filed-
+    // on-home; text matching stays below — the helper only decides which
+    // books are in scope.
+    final pool = topLevelVisibleLorebooks(
+      store.lorebooks,
+      store.folders,
+      activeFolderId: store.loreFolderId,
+      query: q,
+    );
     final visibleBooks = q.isEmpty
-        ? allVisible
-        : allVisible
+        ? pool
+        : pool
             .where((b) =>
                 '${b.name} ${b.description}'.toLowerCase().contains(q))
             .toList(growable: false);
@@ -61,79 +85,150 @@ class LorebookList extends StatelessWidget {
         onCta: () => editLorebook(context, null),
       );
     }
-    if (visibleBooks.isEmpty) {
-      return const EmptyState(
-        icon: Icons.search_off,
-        title: 'No matches',
-        subtitle: 'Nothing matches your search.',
-      );
+
+    // 2026-07-13 (community request): inline Folders section on the home
+    // view + the book cards, flattened into one row list (mirrors the
+    // Characters list's item flattening; rows here are cheap to construct —
+    // no avatar decode — and the builder below still inflates lazily).
+    final liveFolders = store.folders.where((f) => !f.deleted).toList();
+    final onHome = store.loreFolderId == null && q.isEmpty;
+    final items = <Widget>[];
+    if (onHome && liveFolders.isNotEmpty) {
+      items.add(const FolderSectionHeader());
+      for (final f in liveFolders) {
+        items.add(FolderRow(
+          folder: f,
+          count: f.lorebookIds.length,
+          countNoun: 'book',
+          onTap: () => store.setLoreFolderId(f.id),
+        ));
+      }
+      // Gap between folders and the unfiled books below.
+      items.add(const SizedBox(height: 8));
     }
-    return ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        itemCount: visibleBooks.length,
-        separatorBuilder: (context, index) => const SizedBox(height: 8),
-        itemBuilder: (context, i) {
-          final l = visibleBooks[i];
-                return Card(
-                  child: ListTile(
-                    leading: Icon(Icons.menu_book_outlined,
-                        color: EmberColors.textMid),
-                    title: Text(l.name,
-                        style: const TextStyle(fontWeight: FontWeight.w600)),
-                    // Wave CM: subtitle now includes the lorebook's
-                    // token weight (sum across enabled entries) so the
-                    // user can see at a glance how much of their
-                    // context budget a book consumes.
-                    subtitle: Builder(builder: (_) {
-                      final tokenLabel =
-                          formatTokenCount(approxTokensForLorebook(l));
-                      final base = '${l.entries.length} entries'
-                          '${l.description.isNotEmpty ? "  ·  ${l.description}" : ""}';
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              base,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                  color: EmberColors.textMid),
-                            ),
-                          ),
-                          if (tokenLabel != null) ...[
-                            const SizedBox(width: 6),
-                            Padding(
-                              padding: const EdgeInsets.only(top: 1),
-                              child: Text(
-                                tokenLabel,
-                                style: TextStyle(
-                                  color: EmberColors.textDim,
-                                  fontSize: 10,
-                                  fontFeatures: [
-                                    FontFeature.tabularFigures()
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      );
-                    }),
-                    trailing: IconButton(
-                      icon: Icon(Icons.more_vert,
-                          color: EmberColors.textMid),
-                      tooltip: 'Lorebook actions',
-                      onPressed: () => _openLorebookKebab(context, l),
-                    ),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => LorebookEditScreen(lorebookId: l.id),
-                      ),
+    for (final l in visibleBooks) {
+      items.add(Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: _bookCard(context, l),
+      ));
+    }
+    if (visibleBooks.isEmpty && onHome && liveFolders.isNotEmpty) {
+      // All books are filed — a gentle hint below the Folders section
+      // instead of the abrupt "No matches" empty state.
+      items.add(const AllFiledHint(
+        message: 'All your lorebooks are in folders.\n'
+            'Open a folder above to browse.',
+      ));
+    }
+
+    // Name of the active folder for the back-affordance chip. Empty string =
+    // the folder vanished mid-view (chip falls back, ✕ still exits).
+    final folderName = store.loreFolderId == null
+        ? null
+        : store.folders
+            .firstWhere(
+              (f) => f.id == store.loreFolderId,
+              orElse: () => Folder(id: '', name: ''),
+            )
+            .name;
+
+    return Column(
+      children: [
+        // Back affordance out of the open folder — identical to the
+        // Characters chip's ✕ exit. Only rendered inside a folder (this
+        // segment has no other org controls).
+        if (folderName != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: ActiveFolderChip(
+                folderName: folderName,
+                onClear: () => store.setLoreFolderId(null),
+              ),
+            ),
+          ),
+        Expanded(
+          child: items.isEmpty
+              ? const EmptyState(
+                  icon: Icons.search_off,
+                  title: 'No matches',
+                  subtitle: 'Nothing matches your search.',
+                )
+              : ListView.builder(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  itemCount: items.length,
+                  itemBuilder: (context, i) => items[i],
+                ),
+        ),
+      ],
+    );
+  }
+
+  /// One lorebook row card. Extracted unchanged from the pre-folders
+  /// `ListView.separated` itemBuilder (2026-07-13 — the list body now mixes
+  /// folder rows and book cards, see `build`).
+  Widget _bookCard(BuildContext context, Lorebook l) {
+    return Card(
+      child: ListTile(
+        leading: Icon(Icons.menu_book_outlined,
+            color: EmberColors.textMid),
+        title: Text(l.name,
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        // Wave CM: subtitle now includes the lorebook's
+        // token weight (sum across enabled entries) so the
+        // user can see at a glance how much of their
+        // context budget a book consumes.
+        subtitle: Builder(builder: (_) {
+          final tokenLabel =
+              formatTokenCount(approxTokensForLorebook(l));
+          final base = '${l.entries.length} entries'
+              '${l.description.isNotEmpty ? "  ·  ${l.description}" : ""}';
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  base,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      color: EmberColors.textMid),
+                ),
+              ),
+              if (tokenLabel != null) ...[
+                const SizedBox(width: 6),
+                Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: Text(
+                    tokenLabel,
+                    style: TextStyle(
+                      color: EmberColors.textDim,
+                      fontSize: 10,
+                      fontFeatures: [
+                        FontFeature.tabularFigures()
+                      ],
                     ),
                   ),
-                );
-        });
+                ),
+              ],
+            ],
+          );
+        }),
+        trailing: IconButton(
+          icon: Icon(Icons.more_vert,
+              color: EmberColors.textMid),
+          tooltip: 'Lorebook actions',
+          onPressed: () => _openLorebookKebab(context, l),
+        ),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => LorebookEditScreen(lorebookId: l.id),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -225,6 +320,45 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
             onTap: () async {
               Navigator.pop(sheet);
               await _embedIntoCard(context, store, l, messenger);
+            },
+          ),
+          // 2026-07-13 (community request): lorebooks file into folders too —
+          // the same sub-sheet as the character/persona kebabs, over
+          // folder.lorebookIds.
+          ListTile(
+            leading: const Icon(Icons.folder_open_outlined),
+            title: const Text('Add to folder…'),
+            subtitle: Builder(builder: (_) {
+              final memberOf = store.folders
+                  .where((f) => f.lorebookIds.contains(l.id))
+                  .map((f) => f.name)
+                  .toList();
+              if (memberOf.isEmpty) {
+                return Text(
+                  'Group this book with others.',
+                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
+                );
+              }
+              return Text(
+                'In: ${memberOf.join(", ")}',
+                style: TextStyle(
+                    color: EmberColors.textMid, fontSize: 12),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              );
+            }),
+            onTap: () async {
+              Navigator.pop(sheet);
+              await showAddToFolderSheet(
+                context,
+                store,
+                itemName: l.name,
+                countNoun: 'book',
+                countOf: (f) => f.lorebookIds.length,
+                isMember: (f) => f.lorebookIds.contains(l.id),
+                add: (f) => store.addLorebookToFolder(f.id, l.id),
+                remove: (f) => store.removeLorebookFromFolder(f.id, l.id),
+              );
             },
           ),
           ListTile(

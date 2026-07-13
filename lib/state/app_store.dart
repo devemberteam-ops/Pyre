@@ -232,6 +232,8 @@ class AppStore extends ChangeNotifier {
   /// Wave CY.18.38: user-created character folders. Each folder
   /// references character ids; characters can be in multiple folders.
   /// Empty list = no folders, library renders as the flat "All" view.
+  /// 2026-07-13 (community request): folders also reference persona and
+  /// lorebook ids now — one folder can group all three kinds.
   List<Folder> folders = [];
 
   /// Wave CY.18.38: persisted filter / sort state for the Characters
@@ -247,12 +249,19 @@ class AppStore extends ChangeNotifier {
   bool charFavoritesExpanded = true;
 
   /// Wave CY.18.38: same idea for Personas, but Personas tab is
-  /// simpler — sort + favorites only, no tag filter, no folders.
+  /// simpler — sort + favorites only, no tag filter.
   String personaSortKey = 'recent';
 
   /// Completeness-gaps: persisted collapse state of the Personas
   /// Favorites section header (parity with [charFavoritesExpanded]).
   bool personaFavoritesExpanded = true;
+
+  /// 2026-07-13 (community request): folders organise Personas and
+  /// Lorebooks too. Active folder filter for the Personas / Lorebooks
+  /// library segments — parity with [charFolderId] (local view state,
+  /// persisted in the local blob only; null = "All").
+  String? personaFolderId;
+  String? loreFolderId;
 
   /// Wave CY.18.39: latches to true the moment the user hits "Get
   /// started" on the welcome screen. Pre-Wave the onboarding gate
@@ -696,6 +705,10 @@ class AppStore extends ChangeNotifier {
       personaSortKey = _jStr(raw['personaSortKey']) ?? 'recent';
       personaFavoritesExpanded =
           _jBool(raw['personaFavoritesExpanded'], true);
+      // 2026-07-13 (community request): persona/lorebook folder filters
+      // (parity with charFolderId; missing on older blobs → null = "All").
+      personaFolderId = _jStr(raw['personaFolderId']);
+      loreFolderId = _jStr(raw['loreFolderId']);
       seenOnboarding = _jBool(raw['seenOnboarding'], false);
       dismissedUpdateVersion = _jStr(raw['dismissedUpdateVersion']);
       // Wave CY.18.121: example-seed latch. Missing on pre-Wave backups
@@ -1435,6 +1448,10 @@ class AppStore extends ChangeNotifier {
       'charFavoritesExpanded': charFavoritesExpanded,
       'personaSortKey': personaSortKey,
       'personaFavoritesExpanded': personaFavoritesExpanded,
+      // 2026-07-13 (community request): persona/lorebook folder filters
+      // (omit when null, mirroring charFolderId).
+      if (personaFolderId != null) 'personaFolderId': personaFolderId,
+      if (loreFolderId != null) 'loreFolderId': loreFolderId,
       if (seenOnboarding) 'seenOnboarding': true,
       // Wave CY.18.121: example-seed latch (omit when false, mirroring
       // seenOnboarding, to keep fresh-install blobs clean).
@@ -2298,6 +2315,12 @@ class AppStore extends ChangeNotifier {
         c.personaId = null;
       }
     }
+    // 2026-07-13: folders hold personas now — drop the membership so the
+    // deleted persona doesn't linger in folder lists (mirrors the character
+    // cleanup in removeCharacter).
+    for (final f in folders) {
+      f.personaIds.remove(id);
+    }
     _bump();
   }
 
@@ -2431,10 +2454,11 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
-  /// Delete a folder. Characters inside the folder stay in the library
-  /// — folders are just groupings, not containers. The deleted folder
-  /// also clears from the active filter (`charFolderId`) if it was
-  /// the one selected, so the user doesn't end up looking at an
+  /// Delete a folder. Characters (and, 2026-07-13, personas/lorebooks)
+  /// inside the folder stay in the library — folders are just groupings,
+  /// not containers. The deleted folder also clears from the active
+  /// filters (`charFolderId` / `personaFolderId` / `loreFolderId`) if it
+  /// was the one selected, so the user doesn't end up looking at an
   /// orphaned filter.
   void deleteFolder(String folderId) {
     folders.removeWhere((f) => f.id == folderId);
@@ -2442,6 +2466,10 @@ class AppStore extends ChangeNotifier {
     // over sync (mirrors removeLorebook / removePreset).
     recordTombstone('folder', folderId);
     if (charFolderId == folderId) charFolderId = null;
+    // 2026-07-13 (community request): same guard for the persona/lorebook
+    // segment filters — a deleted folder must not linger as an active view.
+    if (personaFolderId == folderId) personaFolderId = null;
+    if (loreFolderId == folderId) loreFolderId = null;
     _bump();
   }
 
@@ -2464,6 +2492,49 @@ class AppStore extends ChangeNotifier {
     if (i < 0) return;
     folders[i].characterIds =
         folders[i].characterIds.where((id) => id != characterId).toList();
+    folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
+    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
+    _bump();
+  }
+
+  // 2026-07-13 (community request): folders organise Personas and Lorebooks
+  // too — same membership semantics + sync metadata as the character ops.
+
+  void addPersonaToFolder(String folderId, String personaId) {
+    final i = folders.indexWhere((f) => f.id == folderId);
+    if (i < 0) return;
+    if (folders[i].personaIds.contains(personaId)) return;
+    folders[i].personaIds = [...folders[i].personaIds, personaId];
+    folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
+    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
+    _bump();
+  }
+
+  void removePersonaFromFolder(String folderId, String personaId) {
+    final i = folders.indexWhere((f) => f.id == folderId);
+    if (i < 0) return;
+    folders[i].personaIds =
+        folders[i].personaIds.where((id) => id != personaId).toList();
+    folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
+    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
+    _bump();
+  }
+
+  void addLorebookToFolder(String folderId, String lorebookId) {
+    final i = folders.indexWhere((f) => f.id == folderId);
+    if (i < 0) return;
+    if (folders[i].lorebookIds.contains(lorebookId)) return;
+    folders[i].lorebookIds = [...folders[i].lorebookIds, lorebookId];
+    folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
+    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
+    _bump();
+  }
+
+  void removeLorebookFromFolder(String folderId, String lorebookId) {
+    final i = folders.indexWhere((f) => f.id == folderId);
+    if (i < 0) return;
+    folders[i].lorebookIds =
+        folders[i].lorebookIds.where((id) => id != lorebookId).toList();
     folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
     folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
     _bump();
@@ -2534,6 +2605,20 @@ class AppStore extends ChangeNotifier {
   void setPersonaFavoritesExpanded(bool expanded) {
     if (personaFavoritesExpanded == expanded) return;
     personaFavoritesExpanded = expanded;
+    _bump();
+  }
+
+  /// 2026-07-13 (community request): active folder filter on the Personas
+  /// segment. Null = "All" (parity with [setCharFolderId]).
+  void setPersonaFolderId(String? folderId) {
+    personaFolderId = folderId;
+    _bump();
+  }
+
+  /// 2026-07-13 (community request): active folder filter on the Lorebooks
+  /// segment. Null = "All" (parity with [setCharFolderId]).
+  void setLoreFolderId(String? folderId) {
+    loreFolderId = folderId;
     _bump();
   }
 
@@ -3364,6 +3449,11 @@ class AppStore extends ChangeNotifier {
     }
     for (final p in personas) {
       p.lorebookIds.remove(id);
+    }
+    // 2026-07-13: folders hold lorebooks now — drop the membership so the
+    // deleted book doesn't linger in folder lists.
+    for (final f in folders) {
+      f.lorebookIds.remove(id);
     }
     _bump();
   }
