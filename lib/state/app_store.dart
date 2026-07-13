@@ -2862,6 +2862,26 @@ class AppStore extends ChangeNotifier {
   ///
   /// No-op when the message has only one variant — the caller should
   /// fall through to [removeMessage] in that case.
+  /// Keep `greetingVariant`-bound notes consistent when a variant is removed
+  /// from the GREETING (the first char message). Fill-In scenario notes sit
+  /// ABOVE the greeting and pin to a greeting-variant INDEX; deleting that
+  /// variant must drop the note bound to it and shift every higher-bound note
+  /// down one — exactly like the `downstreamByVariant` reindex. Without this,
+  /// deleting a Fill-In greeting ORPHANS its scenario note, which then survives
+  /// `removeScenarioNotesAbove` (it only sweeps UNBOUND notes) and DUPLICATES
+  /// on the next Fill-In (owner-reported 2026-07-13: two identical "Scenario:"
+  /// bubbles). No-op unless [messageId] is the first char message.
+  void _reindexGreetingVariantNotes(Chat chat, String messageId, int removed) {
+    final firstCharIdx =
+        chat.messages.indexWhere((m) => m.kind == MessageKind.char);
+    if (firstCharIdx < 0 || chat.messages[firstCharIdx].id != messageId) return;
+    chat.messages.removeWhere((m) => m.greetingVariant == removed);
+    for (final m in chat.messages) {
+      final gv = m.greetingVariant;
+      if (gv != null && gv > removed) m.greetingVariant = gv - 1;
+    }
+  }
+
   void removeMessageVariant(String chatId, String messageId) {
     final chat = _chatById(chatId);
     if (chat == null) return;
@@ -2888,6 +2908,7 @@ class AppStore extends ChangeNotifier {
     msg.downstreamByVariant
       ..clear()
       ..addAll(shifted);
+    _reindexGreetingVariantNotes(chat, messageId, removed);
 
     // Pick the new selected variant — prefer the one immediately
     // before the deleted index. Clamp into bounds.
@@ -2940,6 +2961,7 @@ class AppStore extends ChangeNotifier {
     msg.downstreamByVariant
       ..clear()
       ..addAll(shifted);
+    _reindexGreetingVariantNotes(chat, messageId, indexToRemove);
     // Keep the SAME variant content selected: indices above the removed one
     // shift down by one.
     if (indexToRemove < msg.selectedVariant) {
