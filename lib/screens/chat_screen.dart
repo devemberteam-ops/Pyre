@@ -7121,9 +7121,11 @@ class _InputBar extends StatelessWidget {
 
 /// Inline warning above the chat input when the transcript has piled
 /// up enough characters to start crowding common LLM context windows.
-/// Soft warning at ~15k tokens, hard at ~30k. Hidden below that.
-/// Long-term memory's auto-summarize covers the gap eventually, but
-/// the user still needs to know mid-session that cost is climbing.
+/// Hard warning at ~30k tokens ONLY. (Owner request 2026-07-13: the ~15k soft
+/// "cost climbs" heads-up was naggy for a BYOK app — the user picked their own
+/// model and pays their own tokens.) The remaining banner is the FUNCTIONAL one:
+/// many models reject a chat this large, so the user gets a heads-up before the
+/// request fails with a cryptic API error. Hidden below ~30k.
 ///
 /// Wave CY.1: caches totalChars and only walks the messages list when
 /// a cheap signature (n / last-variant-length / selected-variant)
@@ -7134,8 +7136,9 @@ class _ChatSizeBanner extends StatefulWidget {
   final List<Message> messages;
   const _ChatSizeBanner({required this.messages});
 
-  static const int _softThreshold = 60 * 1000;   // ~15k tokens
-  static const int _hardThreshold = 120 * 1000;  // ~30k tokens
+  // Owner request 2026-07-13: the ~15k soft warning was removed; only the hard
+  // (~30k) "the request may be rejected" banner remains.
+  static const int _hardThreshold = 120 * 1000; // ~30k tokens
 
   @override
   State<_ChatSizeBanner> createState() => _ChatSizeBannerState();
@@ -7203,8 +7206,8 @@ class _ChatSizeBannerState extends State<_ChatSizeBanner> {
       _cachedSig = sig;
     }
     final totalChars = _cachedTotal;
-    if (totalChars < _ChatSizeBanner._softThreshold) {
-      // Below threshold — reset hidden state so a future cross
+    if (totalChars < _ChatSizeBanner._hardThreshold) {
+      // Below the (hard) threshold — reset hidden state so a future cross
       // re-arms the heads-up.
       if (_hiddenAfterTimeout || _hideTimer != null) {
         _hiddenAfterTimeout = false;
