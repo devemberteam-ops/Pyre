@@ -1242,10 +1242,7 @@ user
 [OOC]: keep replies short for this scene
 ===TURN===
 user
-Long day?
-===TURN===
-system
-User turns prefixed `[OOC]` are out-of-character instructions, not story events or character dialogue. Apply their requested effect silently, but never mention, quote, narrate, or attribute the OOC note itself as any character's speech, thought, or action.''';
+Long day?''';
 
 const String _expected10 = '''system
 You are Sera. Alex approaches.

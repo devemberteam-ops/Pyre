@@ -188,6 +188,3 @@ user: "Then why are we standing at the edge of it?"
 Build these in GRADUALLY across many messages. Foreshadow and set up; advance at most a small step per reply, and only when the story organically reaches it. NEVER trigger a beat before the conditions written into it ("when X happens…"), never resolve a whole beat in one reply, never collapse multiple beats together. You may hint at a beat obliquely, but do NOT state its SPECIFIC payload — the secret, the what, or the why — until that beat's written condition has actually been met in the story; keep the details withheld even if the conversation drifts toward the topic early. Anything already established in the story is done — keep it consistent, do not repeat or re-trigger it.
 - When Ren finally trusts Vesna, she admits the Charter sent her to map the Maw, not to rescue strays.
 --- end roadmap ---
-----------------------------------------
-[postHistory]
-User turns prefixed `[OOC]` are out-of-character instructions, not story events or character dialogue. Apply their requested effect silently, but never mention, quote, narrate, or attribute the OOC note itself as any character's speech, thought, or action.

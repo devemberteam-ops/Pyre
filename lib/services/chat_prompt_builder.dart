@@ -1004,11 +1004,6 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     windowed = windowed.sublist(windowed.length - keep);
   }
   final historyTurns = <ChatTurn>[];
-  // OOC convention gate (2026-07-12): true once an `[OOC]` note is actually
-  // replayed into the effective history. Hidden-by-greeting OOC is skipped above
-  // (line ~1014) so it never sets this — the convention note below only appears
-  // when an OOC turn genuinely reaches the model.
-  var hasOocTurn = false;
   for (final m in windowed) {
     if (m.id == inputs.inFlightMessageId) continue;
     // 2026-07-05 (Gui): a Fill-In scenario note bound to another greeting
@@ -1055,7 +1050,6 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
         break;
       case MessageKind.ooc:
         // Wave CY.14: send as a user-role turn (not system).
-        hasOocTurn = true;
         final t = ChatTurn('user', '[OOC]: $txt');
         historyTurns.add(t);
         break;
@@ -1161,33 +1155,6 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
                   : 'preset.postHistoryInstructions + '
                       'character.postHistoryInstructions')));
     }
-  }
-
-  // OOC convention (2026-07-12, owner-reported: "the story sometimes treats OOC
-  // as character speech"). The model is otherwise NEVER told what an `[OOC]:`
-  // user turn means, so some models weave the note into the narrative as
-  // dialogue. Teach it ONCE, as a Pyre-OWNED post-history segment (does NOT
-  // touch the preset/character PHI), placed AFTER the combined PHI (most recent).
-  // Gated purely on an OOC actually being replayed — independent of
-  // `includePostHistory` (the convention is useful even when generating the
-  // user's own voice). Party inherits it for free (the line names no character).
-  // Wording (Codex): "requested effect" = act on it; "silently" = no meta
-  // preamble; never narrate the note itself.
-  if (hasOocTurn) {
-    const oocConventionNote =
-        'User turns prefixed `[OOC]` are out-of-character instructions, not '
-        'story events or character dialogue. Apply their requested effect '
-        'silently, but never mention, quote, narrate, or attribute the OOC note '
-        "itself as any character's speech, thought, or action.";
-    planSegments.add(PlanSegment(
-      role: 'system',
-      slot: PlanSlot.postHistoryTurn,
-      kind: PromptSegmentKind.postHistory,
-      content: oocConventionNote,
-      id: nextId('oocConvention'),
-    ));
-    segments.add(PromptSegment(PromptSegmentKind.postHistory, oocConventionNote,
-        note: 'OOC convention'));
   }
 
   // Prompt Manager Core: role-`user`/`assistant` blocks placed AFTER history
