@@ -893,6 +893,13 @@ class MemoryCheckpoint {
   int anchorMessageIdx;
   /// Deterministic branch fingerprint — see class-level docs.
   String pathHash;
+  /// Content fingerprint of the covered messages [0..anchorMessageIdx] at
+  /// creation (audit round 12/14 context-loss fix). A checkpoint is valid only
+  /// if this ALSO matches the current content — so an in-place EDIT / Continue
+  /// of a covered message invalidates the now-stale recap. EMPTY = legacy
+  /// (pre-fix) checkpoint → treated as content-valid for back-compat. See
+  /// services/chat_fingerprint.dart (computeContentHash).
+  String contentHash;
   int createdAt;
   /// Wave CY.18.62: LAN sync metadata. See Character.mtime for rationale.
   int mtime;
@@ -903,6 +910,7 @@ class MemoryCheckpoint {
     required this.summary,
     required this.anchorMessageIdx,
     required this.pathHash,
+    this.contentHash = '',
     int? createdAt,
     this.mtime = 0,
     this.deleted = false,
@@ -914,6 +922,7 @@ class MemoryCheckpoint {
         summary: (j['summary'] as String?) ?? '',
         anchorMessageIdx: _jInt(j['anchorMessageIdx']) ?? 0,
         pathHash: (j['pathHash'] as String?) ?? '',
+        contentHash: (j['contentHash'] as String?) ?? '',
         createdAt: _jInt(j['createdAt']),
         mtime: _jInt(j['mtime']) ?? 0,
         deleted: (j['deleted'] as bool?) ?? false,
@@ -924,6 +933,8 @@ class MemoryCheckpoint {
         'summary': summary,
         'anchorMessageIdx': anchorMessageIdx,
         'pathHash': pathHash,
+        // Byte-clean back-compat: legacy/empty checkpoints serialise identically.
+        if (contentHash.isNotEmpty) 'contentHash': contentHash,
         'createdAt': createdAt,
         'mtime': mtime,
         if (deleted) 'deleted': true,
@@ -2329,27 +2340,35 @@ class LiveSheetSnapshot {
   String id;
   String anchorMessageId;
   String pathHash;
+  /// Content fingerprint of the covered messages at creation (audit round
+  /// 12/14). Valid only if it ALSO matches the current content — so an in-place
+  /// edit / Continue of a covered message invalidates the stale state. EMPTY =
+  /// legacy snapshot → content-valid for back-compat. See chat_fingerprint.dart.
+  String contentHash;
   int createdAt;
   int mtime;
   List<LiveSheetEntity> entities;
   LiveSheetSnapshot({required this.id, required this.anchorMessageId, required this.pathHash,
-      int? createdAt, this.mtime = 0, List<LiveSheetEntity>? entities})
+      this.contentHash = '', int? createdAt, this.mtime = 0, List<LiveSheetEntity>? entities})
       : createdAt = createdAt ?? DateTime.now().millisecondsSinceEpoch,
         entities = entities ?? [];
   factory LiveSheetSnapshot.fromJson(Map<String, dynamic> j) => LiveSheetSnapshot(
         id: (j['id'] as String?) ?? newId('lss'),
         anchorMessageId: (j['anchorMessageId'] as String?) ?? '',
         pathHash: (j['pathHash'] as String?) ?? '',
+        contentHash: (j['contentHash'] as String?) ?? '',
         createdAt: _jInt(j['createdAt']), // null → constructor defaults to now()
         mtime: _jInt(j['mtime']) ?? 0,
         entities: ((j['entities'] as List?) ?? const []).whereType<Map>()
             .map((m) => LiveSheetEntity.fromJson(m.cast<String, dynamic>())).toList());
   Map<String, dynamic> toJson() => {
         'id': id, 'anchorMessageId': anchorMessageId, 'pathHash': pathHash,
+        // Byte-clean back-compat: legacy/empty snapshots serialise identically.
+        if (contentHash.isNotEmpty) 'contentHash': contentHash,
         'createdAt': createdAt, 'mtime': mtime,
         'entities': entities.map((e) => e.toJson()).toList()};
   LiveSheetSnapshot clone() => LiveSheetSnapshot(id: id, anchorMessageId: anchorMessageId,
-      pathHash: pathHash, createdAt: createdAt, mtime: mtime,
+      pathHash: pathHash, contentHash: contentHash, createdAt: createdAt, mtime: mtime,
       entities: entities.map((e) => e.clone()).toList());
 }
 

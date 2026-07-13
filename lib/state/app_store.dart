@@ -2905,6 +2905,51 @@ class AppStore extends ChangeNotifier {
     _bump();
   }
 
+  /// Remove a SPECIFIC variant [indexToRemove] of a message — used when the
+  /// variant to drop is NOT necessarily the selected one (audit round 11
+  /// CRITICAL). Removing the selected variant delegates to
+  /// [removeMessageVariant] (drop the active tail, pick a neighbour). Removing a
+  /// NON-selected variant — e.g. the PINNED empty stream placeholder after the
+  /// user swiped to a good reply, then hit Stop / got an error — leaves the
+  /// SELECTED variant's active downstream tail (a real conversation) UNTOUCHED,
+  /// and only drops the target variant + its stashed snapshot, shifting the
+  /// downstream keys and the selection index so the same content stays selected.
+  void removeMessageVariantAt(
+      String chatId, String messageId, int indexToRemove) {
+    final chat = _chatById(chatId);
+    if (chat == null) return;
+    final mi = chat.messages.indexWhere((m) => m.id == messageId);
+    if (mi < 0) return;
+    final msg = chat.messages[mi];
+    if (msg.variants.length <= 1) return;
+    if (indexToRemove < 0 || indexToRemove >= msg.variants.length) return;
+    if (indexToRemove == msg.selectedVariant) {
+      // Same semantics as before: this variant owns the visible active tail.
+      removeMessageVariant(chatId, messageId);
+      return;
+    }
+    // Non-selected: the active tail (chat.messages after `mi`) belongs to the
+    // SELECTED variant — do NOT drop it. Only remove the target variant + its
+    // stashed downstream.
+    msg.variants.removeAt(indexToRemove);
+    msg.downstreamByVariant.remove(indexToRemove);
+    final shifted = <int, List<Message>>{};
+    msg.downstreamByVariant.forEach((k, v) {
+      shifted[k > indexToRemove ? k - 1 : k] = v;
+    });
+    msg.downstreamByVariant
+      ..clear()
+      ..addAll(shifted);
+    // Keep the SAME variant content selected: indices above the removed one
+    // shift down by one.
+    if (indexToRemove < msg.selectedVariant) {
+      msg.selectedVariant = msg.selectedVariant - 1;
+    }
+    chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
+    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    _bump();
+  }
+
   /// Switch which variant of a message is showing. Also swaps the
   /// downstream conversation tail: the chat tail that was visible under
   /// the OLD variant is stashed on the message (so coming back restores

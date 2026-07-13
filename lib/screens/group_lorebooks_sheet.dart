@@ -237,7 +237,7 @@ List<Widget> _buildLorebookSections(
       padding: EdgeInsets.symmetric(vertical: 12),
       child: Text(
         'No lorebooks created. Add one from the Lorebooks section of the '
-        'Characters tab.',
+        'Library tab.',
         style: TextStyle(color: EmberColors.textMid, fontSize: 13),
       ),
     ));

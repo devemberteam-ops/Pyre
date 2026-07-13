@@ -463,7 +463,7 @@ class _OrganizedCharacterPickerBodyState
                   ? 'No matches'
                   : 'Every character is already in this chat',
           subtitle: liveCount == 0
-              ? 'Import or create one from the Characters tab.'
+              ? 'Import or create one from the Library tab.'
               : q.isNotEmpty
                   ? 'Try a different search term.'
                   : 'They\'re all members already.',
@@ -1162,7 +1162,7 @@ class _LorebookAttachPickerScreenState
                       title: 'No lorebooks available',
                       subtitle:
                           'Create or import lorebooks from the Lorebooks '
-                          'section of the Characters tab.',
+                          'section of the Library tab.',
                     ),
                   )
                 : ListView.separated(

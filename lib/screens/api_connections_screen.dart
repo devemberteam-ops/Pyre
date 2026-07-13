@@ -671,6 +671,53 @@ class _DialogFieldLabel extends StatelessWidget {
   }
 }
 
+/// True when [a] and [b] are BOTH valid http(s) URLs with a host AND share the
+/// same ORIGIN (scheme + host + port). ANYTHING unprovable — unparseable, a
+/// non-http(s) scheme, or a host-less URL — returns false, so an egress guard
+/// that blocks on `!sameHttpOrigin(...)` FAILS CLOSED (a malformed URL is never
+/// treated as "same host as before"). Path/query differences don't matter.
+/// Host is compared case-insensitively; `Uri.port` resolves the scheme default
+/// (443/80) so `https://a` and `https://a:443` match.
+bool sameHttpOrigin(String a, String b) {
+  final ua = Uri.tryParse(a.trim());
+  final ub = Uri.tryParse(b.trim());
+  if (ua == null || ub == null) return false;
+  final sa = ua.scheme.toLowerCase();
+  final sb = ub.scheme.toLowerCase();
+  if (sa != 'http' && sa != 'https') return false;
+  if (sb != 'http' && sb != 'https') return false;
+  if (ua.host.isEmpty || ub.host.isEmpty) return false;
+  return sa == sb &&
+      ua.host.toLowerCase() == ub.host.toLowerCase() &&
+      ua.port == ub.port;
+}
+
+/// Security (audit round 16): the API key saved for one provider host must NEVER
+/// be transmitted to a DIFFERENT (or unverifiable) host. Returns true — the key
+/// in the field is STALE and a Test / Browse / Save must be BLOCKED — when
+/// [existing] is being edited, its stored key is still unchanged in the field,
+/// the URL actually changed, and the new URL is NOT PROVABLY the same http(s)
+/// origin as the stored one. Never stale for: a new provider, a blank stored key,
+/// a key the user changed to something else, or a byte-unchanged URL (a no-op edit
+/// of a provider with an oddly-formatted stored URL must still be savable). FAILS
+/// CLOSED: an origin-changed OR malformed current URL blocks — the fix is at the
+/// egress, so "mid-typing safety" deliberately does NOT live here (Codex review).
+bool providerKeyStaleForChangedHost({
+  required ApiProvider? existing,
+  required String currentUrl,
+  required String currentKey,
+}) {
+  if (existing == null) return false;
+  final storedKey = existing.apiKey.trim();
+  if (storedKey.isEmpty) return false;
+  if (currentKey.trim() != storedKey) return false;
+  // URL literally unchanged → same host for sure → not stale (never false-block
+  // a no-op edit, even if the stored URL isn't a clean http(s) origin).
+  if (currentUrl.trim() == existing.baseUrl.trim()) return false;
+  // URL changed → block UNLESS we can PROVE the new URL is the same origin.
+  return !sameHttpOrigin(existing.baseUrl, currentUrl);
+}
+
 Future<void> _testConnection(
   BuildContext context,
   TextEditingController nameCtl,
@@ -679,12 +726,22 @@ Future<void> _testConnection(
   TextEditingController modelCtl,
   ProviderKind kind,
   ApiFormat format,
+  ApiProvider? existing,
 ) async {
   final messenger = ScaffoldMessenger.of(context);
   final base = urlCtl.text.trim();
   if (base.isEmpty) {
     messenger.showSnackBar(
         const SnackBar(content: Text('Fill in the base URL first.')));
+    return;
+  }
+  // Security (audit round 16): never send the SAVED key to a CHANGED host.
+  if (providerKeyStaleForChangedHost(
+      existing: existing, currentUrl: base, currentKey: keyCtl.text)) {
+    messenger.showSnackBar(const SnackBar(
+        content: Text('You changed the host — enter a different API key (or '
+            'clear it) before testing. Your saved key is never sent to a new '
+            'host.')));
     return;
   }
   // Mega-audit 2026-06-05 (H-7): SSRF gate. Refuse to probe a private /
@@ -1085,6 +1142,21 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
                         );
                         return;
                       }
+                      // Security (audit round 16): Browse is the THIRD egress —
+                      // it builds `temp` with the host + key and fetches /models,
+                      // so it must gate on the same stale-key check as Test/Save
+                      // (Codex review — this path was leaking).
+                      if (providerKeyStaleForChangedHost(
+                          existing: existing,
+                          currentUrl: temp.baseUrl,
+                          currentKey: keyCtl.text)) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                            content: Text('You changed the host — enter a '
+                                'different API key (or clear it) before '
+                                'browsing. Your saved key is never sent to a '
+                                'new host.')));
+                        return;
+                      }
                       final picked = await showModelPicker(ctx, temp);
                       if (picked != null) {
                         setState(() => modelCtl.text = picked);
@@ -1324,7 +1396,7 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
           // Save — its actual job.
           TextButton(
             onPressed: () => _testConnection(ctx, nameCtl, urlCtl, keyCtl,
-                modelCtl, kind, format),
+                modelCtl, kind, format, existing),
             child: const Text('Test'),
           ),
           TextButton(
@@ -1357,6 +1429,21 @@ Future<void> _editProvider(BuildContext context, ApiProvider? existing) async {
               final ctxRaw = ctxCtl.text.trim();
               final ctxWindow =
                   ctxRaw.isEmpty ? null : int.tryParse(ctxRaw);
+              // Security (audit round 16): never PERSIST the old host's key to a
+              // new host. Origin changed but the key field still holds the stored
+              // key → block; the user re-enters (or clears) the key for the new
+              // host — a conscious act. (Egress-point guard: mirrors the Test
+              // path, so neither test nor save can leak the key.)
+              if (providerKeyStaleForChangedHost(
+                  existing: existing,
+                  currentUrl: urlCtl.text,
+                  currentKey: keyCtl.text)) {
+                ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                    content: Text('You changed the host — enter a different API '
+                        'key for the new host (or clear it). Your saved key is '
+                        'never sent to a different host.')));
+                return;
+              }
               // Wave CY.18.120: hold the persisted provider so we can fire
               // a warm-up off it after the store write (local + opted-in).
               final ApiProvider savedProvider;

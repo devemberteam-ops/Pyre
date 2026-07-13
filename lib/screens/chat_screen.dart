@@ -1243,6 +1243,19 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
+    // Design study round 3 — first-message provider preflight. WITHOUT this,
+    // _send clears the composer + persists the user turn, and only later does
+    // _runGenerationInto discover there's no provider: the typed message is
+    // left as an orphan turn under a dead "Retry". Catch it here, BEFORE the
+    // draft is consumed, using the SAME provider resolution _runGenerationInto
+    // uses (fallback chain, else active provider). Keep the draft; offer a
+    // one-tap deep-link. No auto-send on return — a fresh Send is a conscious,
+    // possibly-paid action.
+    if (store.chatFallbackChain().isEmpty && store.activeProvider == null) {
+      _promptSetUpProvider();
+      return;
+    }
+
     _inputCtl.clear();
 
     // Guide (Part 2 — "Guide the reply"): consume the armed one-shot guide for
@@ -1289,6 +1302,28 @@ class _ChatScreenState extends State<ChatScreen> {
 
     // Start a fresh assistant turn for the just-appended user message.
     await _startFreshAssistantTurn(store, chat);
+  }
+
+  /// Design study round 3: the provider preflight prompt. Shown by [_send] when
+  /// a send would hit "no provider" — but BEFORE the composer is cleared, so the
+  /// user's draft survives. Deep-links straight to API Connections instead of
+  /// printing a "go to More → API Connections" path the user must follow by
+  /// hand. Deliberately does NOT auto-send on return: a fresh Send is a
+  /// conscious (and potentially paid) action.
+  void _promptSetUpProvider() {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    messenger.showSnackBar(SnackBar(
+      content: const Text('Connect an AI provider to send this message.'),
+      duration: const Duration(seconds: 8),
+      action: SnackBarAction(
+        label: 'Set up provider',
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute(
+              builder: (_) => const ApiConnectionsScreen()),
+        ),
+      ),
+    ));
   }
 
   /// Wave CY.18.154: open a fresh assistant turn at the chat tip and run the
@@ -2241,7 +2276,13 @@ class _ChatScreenState extends State<ChatScreen> {
     final mi = chat.messages.indexWhere((m) => m.id == messageId);
     if (mi < 0) return;
     if (chat.messages[mi].variants.length > 1) {
-      store.removeMessageVariant(chat.id, messageId);
+      // Audit round 11 CRITICAL: drop the PINNED stream variant, NOT the
+      // selectedVariant. If the user swiped to another (good) reply mid-stream
+      // then hit Stop / got an error, removing the SELECTED variant would delete
+      // that good reply + its downstream. The write path already pins via
+      // `_streamVariantIndex`; the remove must too.
+      final pinned = _streamVariantIndex ?? chat.messages[mi].selectedVariant;
+      store.removeMessageVariantAt(chat.id, messageId, pinned);
     } else {
       store.removeMessage(chat.id, messageId, cascadeOverride: false);
     }
@@ -2656,8 +2697,19 @@ class _ChatScreenState extends State<ChatScreen> {
       // non-empty (e.g. `<think>…</think>` or a bare finish-reason marker)
       // but renders as nothing, so it should be dropped as a phantom
       // bubble rather than kept.
-      if (idx >= 0 &&
-          stripStreamArtifacts(chat.messages[idx].text).trim().isEmpty) {
+      //
+      // chat-core round 11 (Codex): judge emptiness on the PINNED stream variant,
+      // NOT chat.messages[idx].text (= selectedVariant). After a mid-stream swipe
+      // the selected variant is a GOOD reply, so reading it would wrongly keep the
+      // empty pinned placeholder as a "partial" (keptPartial=true) and leave it
+      // orphaned. Mirrors the error path, which already decides via the pinned buffer.
+      final pv = _streamVariantIndex;
+      final pinnedText = idx < 0
+          ? ''
+          : (pv != null && pv >= 0 && pv < chat.messages[idx].variants.length
+              ? chat.messages[idx].variants[pv]
+              : chat.messages[idx].text);
+      if (idx >= 0 && stripStreamArtifacts(pinnedText).trim().isEmpty) {
         // Variant-aware drop (audit 2026-06-04 Critical): a Stop-before-first-
         // token on a regenerate must drop only the new empty variant, never
         // the whole message (which would take every prior variant + branch).

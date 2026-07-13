@@ -4,7 +4,8 @@ import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
 import '../models/models.dart';
 import 'chat_api.dart';
-import 'memory.dart' show computePathHash;
+import 'memory.dart'
+    show computePathHash, computeContentHash, computeContentHashesAtAnchors;
 
 // ---------------------------------------------------------------------------
 // LS-2 fix: service-level in-flight lock (mirrors memory.dart's C1 /
@@ -201,11 +202,13 @@ LiveSheetSnapshot applyLiveSheetDelta({
   required LiveSheetDelta delta,
   required String anchorMessageId,
   required String pathHash,
+  String contentHash = '',
 }) {
   final next = prev.clone()
     ..id = newId('lss')
     ..anchorMessageId = anchorMessageId
     ..pathHash = pathHash
+    ..contentHash = contentHash
     ..createdAt = DateTime.now().millisecondsSinceEpoch
     ..mtime = DateTime.now().millisecondsSinceEpoch;
 
@@ -259,16 +262,39 @@ int _lsAnchorIdx(Chat chat, LiveSheetSnapshot s) =>
 LiveSheetSnapshot? activeLiveSheetSnapshot(Chat chat) {
   if (chat.liveSheetSnapshots.isEmpty) return null;
 
+  // Round-12/14 content-loss fix: resolve anchor indices once and collect the
+  // ones that carry a contentHash, then compute their content hashes in ONE
+  // pass (Codex's O(N×K) concern — never re-hash 0..anchor per snapshot).
+  final idxOf = <LiveSheetSnapshot, int>{};
+  final contentAnchors = <int>{};
+  for (final s in chat.liveSheetSnapshots) {
+    final idx = _lsAnchorIdx(chat, s);
+    if (idx < 0) continue;
+    idxOf[s] = idx;
+    if (s.contentHash.isNotEmpty) contentAnchors.add(idx);
+  }
+  final contentHashes = contentAnchors.isEmpty
+      ? const <int, String>{}
+      : computeContentHashesAtAnchors(chat.messages, contentAnchors);
+
   LiveSheetSnapshot? best;
   int bestIdx = -1;
 
   for (final s in chat.liveSheetSnapshots) {
-    final idx = _lsAnchorIdx(chat, s);
-    if (idx < 0) continue;
+    final idx = idxOf[s];
+    if (idx == null) continue;
 
-    // Empty pathHash = legacy/manual sentinel → always valid
+    // Empty pathHash = legacy/manual sentinel → always branch-valid.
     if (s.pathHash.isNotEmpty &&
         s.pathHash != computePathHash(chat.messages, idx)) {
+      continue;
+    }
+
+    // Content check (round-12/14) — empty contentHash is the back-compat
+    // sentinel (never invalidate a pre-fix snapshot). A stored contentHash that
+    // no longer matches means a covered message was edited / Continue'd → this
+    // "authoritative current state" is stale → skip it.
+    if (s.contentHash.isNotEmpty && s.contentHash != contentHashes[idx]) {
       continue;
     }
 
@@ -618,6 +644,12 @@ Future<LiveSheetSnapshot?> _generateLiveSheetUpdateBody({
   // anchor/pathHash (list changed shape but stayed long enough).
   final cutoffMessageId = chat.messages[cutoffIdx].id;
   final activeSnapshotId = active.id;
+  // Round-12/14: capture the content fingerprint of the covered range NOW, from
+  // the same PRE-await body the LLM reads (Codex — must not compute it after the
+  // call). Stored on the new snapshot; if a covered message is edited /
+  // Continue'd during or after the call, this fingerprint stops matching the
+  // current content → the snapshot's stale "current state" is dropped.
+  final snapshotContentHash = computeContentHash(chat.messages, cutoffIdx);
   final ls = liveSheetSettings ?? LiveSheetSettings();
   final turns = <ChatTurn>[
     ChatTurn('system', ls.updatePrompt),
@@ -669,6 +701,7 @@ Future<LiveSheetSnapshot?> _generateLiveSheetUpdateBody({
       delta: delta,
       anchorMessageId: cutoffMessageId,
       pathHash: computePathHash(chat.messages, newCutoffIdx),
+      contentHash: snapshotContentHash,
     );
   } catch (e) {
     LiveSheetErrors.record('generateLiveSheetUpdate', e);
@@ -791,6 +824,10 @@ LiveSheetSnapshot seedInitialSnapshot(Chat chat, List<LiveSheetEntity> entities)
     id: newId('lss'),
     anchorMessageId: anchorId,
     pathHash: idx >= 0 ? computePathHash(chat.messages, idx) : '',
+    // Round-12/14 (Codex review): fingerprint the covered content too, so an
+    // edit to the greeting before the first auto-update invalidates this seed
+    // instead of leaving it always-content-valid.
+    contentHash: idx >= 0 ? computeContentHash(chat.messages, idx) : '',
     entities: entities,
   );
 }
@@ -921,4 +958,8 @@ void reanchorSnapshotToLatest(Chat chat, LiveSheetSnapshot snapshot) {
   if (idx < 0) return;
   snapshot.anchorMessageId = chat.messages[idx].id;
   snapshot.pathHash = computePathHash(chat.messages, idx);
+  // Round-12/14 (Codex review): the anchor moved → the covered range changed, so
+  // the content fingerprint MUST move with it — otherwise it would cover the
+  // wrong prefix and immediately invalidate the re-anchored snapshot.
+  snapshot.contentHash = computeContentHash(chat.messages, idx);
 }

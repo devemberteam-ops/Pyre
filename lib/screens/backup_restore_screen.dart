@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
@@ -345,8 +346,16 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     // attachment file right after, so a refs-only backup restores blank
     // avatars/gallery/backgrounds.
     String? backupPath;
+    int missingImages = 0;
     try {
       final blob = await buildSafetyBackupBlob(store);
+      // F-gate (audit round 18): a referenced image whose .bin is gone is
+      // silently skipped by embedBackupAttachments — so the "backup" can be
+      // missing images while still reporting success, and the wipe right after
+      // would lose them for good. Count them so the final confirm can make the
+      // loss EXPLICIT instead of silent. NOT a hard abort: an image may only
+      // exist on another synced device, which must never trap the user forever.
+      missingImages = missingBackupAttachmentHashes(blob).length;
       final json = const JsonEncoder.withIndent('  ').convert(blob);
       final ts = DateTime.now()
           .toIso8601String()
@@ -376,16 +385,23 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     final reset = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
-        title: const Text('Backup saved'),
+        title: Text(
+            missingImages > 0 ? 'Backup saved — with a warning' : 'Backup saved'),
         content: Text(
-          backupPath != null
-              ? 'A full backup (everything except API keys) was saved to:\n\n'
-                  '$backupPath\n\n'
-                  "You'll re-enter API keys after restoring. If you want a "
-                  'totally clean slate afterwards, you can delete that file '
-                  'yourself. Reset now?'
-              : 'Web: a full backup (no API keys) was downloaded to your '
-                  'device. Keep that file safe. Reset now?',
+          (missingImages > 0
+                  ? '⚠ $missingImages image file(s) could NOT be included in the '
+                      'backup — their files are missing (they may only exist on '
+                      'another synced device). If you reset now, those images '
+                      'will be lost on this device.\n\n'
+                  : '') +
+              (backupPath != null
+                  ? 'A full backup (everything except API keys) was saved to:'
+                      '\n\n$backupPath\n\n'
+                      "You'll re-enter API keys after restoring. If you want a "
+                      'totally clean slate afterwards, you can delete that file '
+                      'yourself. Reset now?'
+                  : 'Web: a full backup (no API keys) was downloaded to your '
+                      'device. Keep that file safe. Reset now?'),
         ),
         actions: [
           TextButton(
@@ -900,6 +916,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     // entry that throws doesn't half-apply.
     List<ApiProvider>? providers;
     List<Character>? characters;
+    List<Character>? characterDrafts;
     List<Persona>? personas;
     List<Chat>? chats;
     List<Lorebook>? lorebooks;
@@ -915,6 +932,11 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       }
       if (raw.containsKey('characters')) {
         characters = ((raw['characters'] as List?) ?? [])
+            .map((c) => Character.fromJson((c as Map).cast<String, dynamic>()))
+            .toList();
+      }
+      if (raw.containsKey('characterDrafts')) {
+        characterDrafts = ((raw['characterDrafts'] as List?) ?? [])
             .map((c) => Character.fromJson((c as Map).cast<String, dynamic>()))
             .toList();
       }
@@ -977,6 +999,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       }
     }
     if (characters != null) s.characters = characters;
+    if (characterDrafts != null) s.characterDrafts = characterDrafts;
     if (personas != null) {
       s.personas = personas;
       if (raw.containsKey('activePersonaId')) {
@@ -1218,6 +1241,12 @@ void writeBackupSettingsCategory(AppStore s, Map<String, dynamic> blob) {
   // BotBooru creator profile (feeds the {{creator}} macro + Creator prompt).
   blob['botbooruUsername'] = s.botbooruUsername;
   if (s.botbooruAvatar != null) blob['botbooruAvatar'] = s.botbooruAvatar;
+  // Audit round 18 (Codex): the non-destructive-recrop ORIGINAL of the BotBooru
+  // avatar is GC-kept as a live ref but was omitted from the backup — export it
+  // so the uncropped image round-trips (and the wipe-safety detector sees it).
+  if (s.botbooruAvatarOriginal != null) {
+    blob['botbooruAvatarOriginal'] = s.botbooruAvatarOriginal;
+  }
   blob['botbooruAboutMe'] = s.botbooruAboutMe;
   blob['botbooruTitle'] = s.botbooruTitle;
   blob['botbooruPronouns'] = s.botbooruPronouns;
@@ -1258,6 +1287,9 @@ void applyBackupSettingsCategory(AppStore s, Map<String, dynamic> raw) {
   }
   if (raw.containsKey('botbooruAvatar')) {
     s.botbooruAvatar = raw['botbooruAvatar'] as String?;
+  }
+  if (raw.containsKey('botbooruAvatarOriginal')) {
+    s.botbooruAvatarOriginal = raw['botbooruAvatarOriginal'] as String?;
   }
   if (raw.containsKey('botbooruAboutMe')) {
     s.botbooruAboutMe = (raw['botbooruAboutMe'] as String?) ?? '';
@@ -1325,13 +1357,49 @@ Future<void> embedBackupAttachments(Map<String, dynamic> blob) async {
   final hashes = collectBackupAttachmentHashes(blob);
   if (hashes.isEmpty) return;
   final out = <String, String>{};
+  final mimes = <String, String>{};
   for (final hash in hashes) {
-    final bytes =
-        await AttachmentStore.readBytes('${AttachmentStore.urlPrefix}$hash');
+    final url = '${AttachmentStore.urlPrefix}$hash';
+    final bytes = await AttachmentStore.readBytes(url);
     if (bytes == null || bytes.isEmpty) continue;
+    // Integrity (Codex): a corrupt .bin whose content no longer hashes to its
+    // name would embed fine but restore under a DIFFERENT hash (AttachmentStore.
+    // store re-hashes on restore), silently breaking the ref. Skip it so the
+    // missing-hash detector turns the corruption into an explicit warning — the
+    // last net before a wipe should not preserve bytes that won't round-trip.
+    if (!attachmentBytesMatchHash(hash, bytes)) continue;
     out[hash] = base64Encode(bytes);
+    // Audit round 18: carry the mime sidecar too, so a fresh-device restore
+    // recreates it — else restored images serve as application/octet-stream.
+    // Separate map = back-compat (old backups / old builds ignore the key).
+    final mime = await AttachmentStore.mimeFor(url);
+    if (mime != null && mime.isNotEmpty) mimes[hash] = mime;
   }
   if (out.isNotEmpty) blob['attachments'] = out;
+  if (mimes.isNotEmpty) blob['attachmentMimes'] = mimes;
+}
+
+/// True when [bytes] hash (sha256, hex) to [hash] — i.e. the on-disk `.bin` is
+/// the content its content-addressed name claims. A false result means a corrupt
+/// blob that must not be embedded (see [embedBackupAttachments]).
+bool attachmentBytesMatchHash(String hash, List<int> bytes) =>
+    sha256.convert(bytes).toString() == hash;
+
+/// The referenced attachment hashes that did NOT make it into [blob]'s embedded
+/// `attachments` map — their `.bin` was missing/unreadable, so
+/// [embedBackupAttachments] silently skipped them. Empty = every referenced image
+/// is captured (complete backup). The factory-reset safety gate (audit round 18)
+/// uses this so a wipe never SILENTLY drops images the safety backup couldn't
+/// include; it is deliberately NOT a hard abort (a blob may only exist on another
+/// synced device, which must never trap the user), just a way to make the loss
+/// explicit at the final confirm.
+Set<String> missingBackupAttachmentHashes(Map<String, dynamic> blob) {
+  final referenced = collectBackupAttachmentHashes(blob);
+  if (referenced.isEmpty) return const <String>{};
+  final embedded = <String>{
+    for (final k in ((blob['attachments'] as Map?)?.keys ?? const [])) '$k',
+  };
+  return referenced.difference(embedded);
 }
 
 /// Build the export blob. Only the categories in [include] are written;
@@ -1372,6 +1440,13 @@ Map<String, dynamic> buildExportBlob(
   }
   if (include.contains(_catCharacters)) {
     blob['characters'] = s.characters.map((c) => c.toJson()).toList();
+    // Audit round 18 (Codex): in-progress manual character DRAFTS are persisted
+    // separately by AppStore and were dropped from the backup — a factory reset
+    // lost the draft AND its images silently (the wipe-safety detector couldn't
+    // even see them). Round-trip them so restore brings them back and the
+    // detector counts their attachments.
+    blob['characterDrafts'] =
+        s.characterDrafts.map((c) => c.toJson()).toList();
   }
   if (include.contains(_catPersonas)) {
     blob['personas'] = s.personas.map((p) => p.toJson()).toList();
@@ -1481,12 +1556,18 @@ Future<void> reconcileImportedProviderKeys(
 Future<void> restoreBackupAttachments(Map<String, dynamic> raw) async {
   final attachments = raw['attachments'];
   if (attachments is! Map) return;
+  // Audit round 18: the per-hash mime sidecar (absent in pre-fix backups → the
+  // map is empty → store is called without a mime, exactly as before).
+  final mimesRaw = raw['attachmentMimes'];
+  final mimes = mimesRaw is Map ? mimesRaw : const {};
   for (final entry in attachments.entries) {
     final b64 = entry.value;
     if (b64 is! String || b64.isEmpty) continue;
     try {
       final bytes = base64Decode(b64);
-      await AttachmentStore.store(Uint8List.fromList(bytes));
+      final mime = mimes[entry.key];
+      await AttachmentStore.store(Uint8List.fromList(bytes),
+          mime: mime is String && mime.isNotEmpty ? mime : null);
     } catch (e) {
       debugPrint('[BackupRestore] could not restore attachment '
           '${entry.key}: $e');

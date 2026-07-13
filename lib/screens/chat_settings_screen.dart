@@ -41,6 +41,11 @@ class ChatSettingsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
         children: [
+          // Wave: task-based grouping (design study round 1). The 9 entries
+          // are the same, now grouped so "memory" / "how the model responds" /
+          // "how the chat looks" read as distinct intents instead of one flat
+          // list. Section labels only — no new screens, no hidden accordions.
+          _sectionLabel('Chat experience'),
           _HubCard(rows: [
             _HubRow(
               icon: Icons.palette_outlined,
@@ -54,6 +59,10 @@ class ChatSettingsScreen extends StatelessWidget {
               subtitle: 'Delete, new-chat persona, and streaming.',
               builder: (_) => const ChatBehaviorsScreen(),
             ),
+          ]),
+          const SizedBox(height: 18),
+          _sectionLabel('Replies & prompting'),
+          _HubCard(rows: [
             _HubRow(
               icon: Icons.settings_suggest_outlined,
               title: 'Presets',
@@ -66,6 +75,10 @@ class ChatSettingsScreen extends StatelessWidget {
               subtitle: 'Rewrite chat text on the fly (non-destructive).',
               builder: (_) => const RegexRulesScreen(),
             ),
+          ]),
+          const SizedBox(height: 18),
+          _sectionLabel('Story continuity'),
+          _HubCard(rows: [
             _HubRow(
               icon: Icons.psychology,
               title: 'Checkpoints',
@@ -84,6 +97,10 @@ class ChatSettingsScreen extends StatelessWidget {
               subtitle: 'Plant plot beats the story builds toward.',
               builder: (_) => const ScriptSettingsScreen(),
             ),
+          ]),
+          const SizedBox(height: 18),
+          _sectionLabel('One-shot tools'),
+          _HubCard(rows: [
             _HubRow(
               icon: Icons.explore_outlined,
               title: 'Guide',
@@ -104,6 +121,22 @@ class ChatSettingsScreen extends StatelessWidget {
     );
   }
 }
+
+/// A small uppercase section label above each hub group (design study round 1
+/// — task-based grouping). Kept minimal per the "density with hierarchy, not
+/// miniaturization" principle: one modest label per group, not a legend.
+Widget _sectionLabel(String text) => Padding(
+      padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+      child: Text(
+        text.toUpperCase(),
+        style: TextStyle(
+          color: EmberColors.textDim,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.6,
+        ),
+      ),
+    );
 
 /// A single Card holding the hub rows, divided like the More screen's
 /// `_MoreCard`.

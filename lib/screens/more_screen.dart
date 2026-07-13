@@ -97,7 +97,7 @@ class MoreScreen extends StatelessWidget {
             // old read-only base-prompt viewers). One creator-config
             // entry now, not two.
             _MoreRow(
-              label: 'Character Creator',
+              label: 'Creator settings',
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(
                     builder: (_) => const CharacterCreatorScreen()),

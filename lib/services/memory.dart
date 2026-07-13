@@ -40,7 +40,14 @@ import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
 import '../models/models.dart';
 import 'chat_api.dart';
+import 'chat_fingerprint.dart';
 import 'llm_debug_log.dart';
+
+// The branch/content fingerprints live in chat_fingerprint.dart (shared with
+// Live Sheet). Re-export so existing `import 'memory.dart' show computePathHash`
+// call sites keep working unchanged.
+export 'chat_fingerprint.dart'
+    show computePathHash, computeContentHash, computeContentHashesAtAnchors;
 
 /// Per-chat in-flight lock for the checkpoint-generation pipeline.
 ///
@@ -171,31 +178,9 @@ const String _kRecapContinuePrompt =
     'Do not repeat anything, no preamble, and keep summarising — '
     'do not start writing new story.';
 
-/// Deterministic branch fingerprint over the messages from index 0 up
-/// to and including [upToIdx]. The fingerprint encodes the SEQUENCE of
-/// variant choices that landed us on this branch — two branches share
-/// a prefix iff they share the same path through the variant tree up
-/// to that point.
-String computePathHash(List<Message> messages, int upToIdx) {
-  // Wave CY.18.24: hard-guard against the empty-messages collision
-  // with the legacy "no-path" sentinel. An empty chat or an upToIdx
-  // < 0 used to return `""` — indistinguishable from the migration
-  // sentinel applied to pre-Wave-CY.18 chats where every checkpoint
-  // had `pathHash = ""` (always-valid). Callers can't tell those
-  // apart. Return a deterministic non-empty value for the empty
-  // case so the sentinel meaning stays unique.
-  if (upToIdx < 0 || messages.isEmpty) return '__empty__';
-  final last = upToIdx.clamp(0, messages.length - 1);
-  final buf = StringBuffer();
-  for (var i = 0; i <= last; i++) {
-    final m = messages[i];
-    buf.write(m.id);
-    buf.write(':');
-    buf.write(m.selectedVariant);
-    buf.write('|');
-  }
-  return buf.toString();
-}
+// computePathHash + computeContentHash moved to services/chat_fingerprint.dart
+// (shared with Live Sheet, round-12/14 context-loss fix) and are re-exported
+// from this file's import block so existing call sites keep working.
 
 /// Returns the checkpoints valid for the chat's CURRENT branch, sorted
 /// by anchor index ascending. A checkpoint is valid iff:
@@ -204,17 +189,35 @@ String computePathHash(List<Message> messages, int upToIdx) {
 ///     OR its pathHash is the empty-string legacy sentinel.
 List<MemoryCheckpoint> findValidCheckpoints(Chat chat) {
   if (chat.memoryCheckpoints.isEmpty) return const [];
+  // Round-12/14 content-loss fix: content hashes for every in-range anchor whose
+  // checkpoint carries a contentHash, computed in ONE pass (never re-hash
+  // 0..anchor per checkpoint — Codex's O(N×K) concern).
+  final contentAnchors = <int>{
+    for (final c in chat.memoryCheckpoints)
+      if (c.contentHash.isNotEmpty &&
+          c.anchorMessageIdx < chat.messages.length)
+        c.anchorMessageIdx,
+  };
+  final contentHashes = contentAnchors.isEmpty
+      ? const <int, String>{}
+      : computeContentHashesAtAnchors(chat.messages, contentAnchors);
   final valid = <MemoryCheckpoint>[];
   for (final c in chat.memoryCheckpoints) {
     if (c.anchorMessageIdx >= chat.messages.length) continue;
-    if (c.pathHash.isEmpty) {
-      // Legacy migrated checkpoint — treat as always valid.
-      valid.add(c);
+    // Branch check — an empty pathHash is the legacy always-valid sentinel.
+    if (c.pathHash.isNotEmpty &&
+        c.pathHash != computePathHash(chat.messages, c.anchorMessageIdx)) {
       continue;
     }
-    final branchPrefix =
-        computePathHash(chat.messages, c.anchorMessageIdx);
-    if (c.pathHash == branchPrefix) valid.add(c);
+    // Content check (round-12/14) — an empty contentHash is the back-compat
+    // sentinel (never invalidate a pre-fix checkpoint on upgrade). A stored
+    // contentHash that no longer matches the covered content means a covered
+    // message was edited / Continue'd → the recap is stale → drop it.
+    if (c.contentHash.isNotEmpty &&
+        c.contentHash != contentHashes[c.anchorMessageIdx]) {
+      continue;
+    }
+    valid.add(c);
   }
   valid.sort((a, b) => a.anchorMessageIdx.compareTo(b.anchorMessageIdx));
   return valid;
@@ -680,6 +683,10 @@ Future<MemoryCheckpoint?> _generateCheckpointBody({
   // 10-30s LLM call would produce a pathHash that described a different
   // branch than the body the model actually summarised.
   final snapshotPathHash = computePathHash(chat.messages, cutoff);
+  // Round-12/14: content fingerprint captured from the SAME pre-await state as
+  // pathHash/cutoff, so an edit / Continue of a covered message during the LLM
+  // call self-invalidates this checkpoint at validation (exactly like pathHash).
+  final snapshotContentHash = computeContentHash(chat.messages, cutoff);
   if (cutoff <= lastAnchor) {
     // SILENT export-only breadcrumb (Wave CY.18.214 channel). This early
     // return otherwise records NOTHING — making a stuck "nothing to cover"
@@ -782,6 +789,7 @@ Future<MemoryCheckpoint?> _generateCheckpointBody({
       summary: summary,
       anchorMessageIdx: cutoff,
       pathHash: snapshotPathHash,
+      contentHash: snapshotContentHash,
     );
   } catch (e) {
     MemoryErrors.record('generateCheckpoint', e);
@@ -848,6 +856,7 @@ Future<MemoryCheckpoint?> _regenerateCheckpointBody({
   // stored hash pointing at a branch that no longer matches the current
   // message sequence up to `cutoff`.
   final snapshotPathHash = computePathHash(chat.messages, cutoff);
+  final snapshotContentHash = computeContentHash(chat.messages, cutoff);
 
   final body = _buildSummariserBody(
     chat: chat,
@@ -888,6 +897,7 @@ Future<MemoryCheckpoint?> _regenerateCheckpointBody({
       summary: summary,
       anchorMessageIdx: target.anchorMessageIdx,
       pathHash: snapshotPathHash,
+      contentHash: snapshotContentHash,
       createdAt: DateTime.now().millisecondsSinceEpoch,
     );
   } catch (e) {

@@ -20,7 +20,7 @@ class CharacterCreatorHelpScreen extends StatelessWidget {
           _p('Quick reference for while you\'re building. For a full '
               'explanation of how the Creator works — the build, the '
               'building modes, the settings — open '
-              'More → Character Creator → "How the Character Creator '
+              'More → Creator settings → "How the Character Creator '
               'works".'),
 
           _h2('Attach button'),
@@ -92,7 +92,7 @@ class CharacterCreatorHelpScreen extends StatelessWidget {
               'tunes).'),
           _bullet('Generating takes forever — long card outputs can hit '
               '4-8k tokens. Increase Max Response Tokens in '
-              'More → Character Creator → Generation settings.'),
+              'More → Creator settings → Generation settings.'),
           const SizedBox(height: 32),
         ],
       ),

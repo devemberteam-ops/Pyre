@@ -114,7 +114,7 @@ class _CharacterCreatorScreenState extends State<CharacterCreatorScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Character Creator'),
+        title: const Text('Creator settings'),
         actions: [
           if (hasAdditions)
             Padding(
@@ -754,7 +754,7 @@ class _HowItWorksCard extends StatelessWidget {
         // 0. Entry-point overview — what the Creator is.
         HowItWorksSection('What the Character Creator is', [
           HowItWorksBlock.paragraph(
-              'Open Characters tab → tap +. Three ways to build:\n'
+              'Open Library tab → tap +. Three ways to build:\n'
               '  • Build with AI assistant — what this section covers\n'
               '  • Create from scratch — manual editor, full control\n'
               '  • Import — PNG / JSON / URL\n\n'

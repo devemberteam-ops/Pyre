@@ -152,6 +152,51 @@ void main() {
       // Shared hash appears exactly once.
       expect(attachments.keys.where((k) => k == hash).length, 1);
     });
+
+    test('export + restore preserve the mime sidecar (round 18)', () async {
+      final bytes = Uint8List.fromList(
+          List<int>.generate(300, (i) => (i * 9 + 5) % 256));
+      // A non-default mime so a lost sidecar would be detectable.
+      final ref = await AttachmentStore.store(bytes, mime: 'image/webp');
+      final hash = ref!.substring(AttachmentStore.urlPrefix.length);
+      expect(await AttachmentStore.mimeFor(ref), 'image/webp');
+
+      final blob = <String, dynamic>{
+        'characters': [
+          Character(id: 'cm', name: 'MimeOwner', avatar: ref).toJson(),
+        ],
+      };
+      await embedBackupAttachments(blob);
+      // The mime rides in a separate, back-compat map.
+      final mimes = blob['attachmentMimes'];
+      expect(mimes, isA<Map>());
+      expect((mimes as Map)[hash], 'image/webp');
+
+      // Fresh device: serialise → wipe → restore.
+      final wire = jsonDecode(jsonEncode(blob)) as Map<String, dynamic>;
+      await wipeAttachmentDir();
+      await restoreBackupAttachments(wire);
+
+      // The mime sidecar is back (not lost → not served as octet-stream).
+      expect(await AttachmentStore.mimeFor(ref), 'image/webp');
+    });
+
+    test('a pre-fix backup (no attachmentMimes) still restores the bytes',
+        () async {
+      final bytes =
+          Uint8List.fromList(List<int>.generate(40, (i) => (i * 3) % 256));
+      final ref = await AttachmentStore.store(bytes, mime: 'image/png');
+      final blob = <String, dynamic>{
+        'characters': [Character(id: 'c', name: 'X', avatar: ref).toJson()],
+      };
+      await embedBackupAttachments(blob);
+      // Simulate an OLD backup: bytes present but NO attachmentMimes map.
+      final wire = jsonDecode(jsonEncode(blob)) as Map<String, dynamic>;
+      wire.remove('attachmentMimes');
+      await wipeAttachmentDir();
+      await restoreBackupAttachments(wire); // no throw
+      expect(await AttachmentStore.readBytes(ref!), bytes);
+    });
   });
 
   group('B-2 card import externalizes inline avatar', () {

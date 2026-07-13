@@ -51,7 +51,7 @@ class ChatsScreen extends StatelessWidget {
           icon: Icons.chat_bubble_outline,
           title: 'No chats yet',
           subtitle: 'Start one here — solo or a whole group — or tap a '
-              'character in the Characters tab.',
+              'character in the Library tab.',
           ctaLabel: 'New chat',
           ctaIcon: Icons.add,
           onCta: () => startNewChatFlow(context),
