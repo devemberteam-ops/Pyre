@@ -379,6 +379,13 @@ class _ChatScreenState extends State<ChatScreen> {
   /// this drain the global `_anyRefs` would stay > 0 forever and the
   /// SyncEngine would skip every push until app restart.
   int _keepAliveHeld = 0;
+
+  /// Cached at the moment an error snackbar is shown, so `dispose()` can clear
+  /// it when the user leaves the chat (owner-reported 2026-07-13: the error
+  /// banner lingered after backing out). `ScaffoldMessenger.of(context)` is
+  /// unsafe in dispose (deactivated element), so we keep the state ref.
+  ScaffoldMessengerState? _messengerRef;
+
   Future<void> _keepAliveStart() {
     _keepAliveHeld++;
     return GenerationKeepAlive.start();
@@ -602,6 +609,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    // Clear any lingering error snackbar so it doesn't outlive the chat
+    // (owner-reported 2026-07-13: the error banner stayed after backing out).
+    // Cached ref — ScaffoldMessenger.of(context) is unsafe during dispose.
+    _messengerRef?.clearSnackBars();
     // H-1: release any keepalive refs this screen still holds. Cancelling
     // the subscription below never fires onDone/onError (the only places
     // _keepAliveStop runs), so drain the counter here to keep the global
@@ -2360,12 +2371,21 @@ class _ChatScreenState extends State<ChatScreen> {
       _streamMessageId = null;
     });
     context.read<AppStore>().flushPersist();
-    ScaffoldMessenger.of(context).showSnackBar(
+    // Only ONE error at a time: a fallback chain that fails across several
+    // providers (or a backgrounded app that dropped mid-stream) would otherwise
+    // QUEUE one snackbar per attempt — 8s each, which reads as "the error never
+    // goes away" (owner-reported 2026-07-13). Clear the queue before showing.
+    final messenger = ScaffoldMessenger.of(context);
+    _messengerRef = messenger; // so dispose() can clear it on chat exit
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
       SnackBar(
         content: Text(
           friendly,
-          style: const TextStyle(fontSize: 13),
-          maxLines: 4,
+          // White on the dark-red background — the default body text color was
+          // near-black, leaving the error unreadable (owner-reported 2026-07-13).
+          style: const TextStyle(fontSize: 13, color: Colors.white),
+          maxLines: 5,
           overflow: TextOverflow.ellipsis,
         ),
         backgroundColor: const Color(0xFF3a1d1d),
@@ -2392,6 +2412,19 @@ class _ChatScreenState extends State<ChatScreen> {
   /// _formatApiError (OpenAI / OpenRouter / DeepSeek / Anthropic /
   /// FastAPI). Returns the raw string when nothing parses.
   String _friendlyApiError(String raw) {
+    // Connection dropped mid-reply (very common when Android backgrounds the
+    // app and suspends the socket). The raw `ClientException: Connection
+    // closed while receiving data, uri=https://…` is unreadable AND leaks the
+    // provider host onto the screen — replace it with a short, actionable line.
+    final lower = raw.toLowerCase();
+    if (raw.contains('ClientException') ||
+        lower.contains('connection closed') ||
+        lower.contains('connection reset') ||
+        lower.contains('connection abort') ||
+        raw.contains('SocketException')) {
+      return 'The connection dropped mid-reply — often because the app was '
+          'sent to the background. Tap Retry to continue.';
+    }
     final apiMatch =
         RegExp(r'ChatApiError\((\d+)\):\s*(.*)$', dotAll: true)
             .firstMatch(raw);
