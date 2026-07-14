@@ -14,7 +14,9 @@ import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/models/models.dart';
+import 'package:pyre/services/chat_prompt_builder.dart';
 import 'package:pyre/services/lorebook_inject.dart';
+import 'package:pyre/services/regex_rules.dart';
 
 LoreEntry _entry(
   String id, {
@@ -265,6 +267,58 @@ void main() {
           ['open']);
       // Older callers that pass no scene names must not lose entries.
       expect(scanLorebookHits(books, [_msg('hi')]).hits.length, 2);
+    });
+
+    test('prompt-stage regex governs what the scan sees (integration)', () {
+      // 2026-07-14 (owner-approved solo completion of fix #3): a prompt-stage
+      // rule rewrites "wyrm"→"dragon" for the model; the entry keyed "dragon"
+      // must fire WITH the rule and must NOT without it — the scan now sees
+      // the post-regex text, exactly like the assembled history.
+      final book = Lorebook(id: 'b', name: 'B', entries: [
+        LoreEntry(id: 'e', keys: ['dragon'], content: 'DRAGONLORE'),
+      ]);
+      final char = Character(
+          id: 'c', name: 'Sera', description: 'd', createdAt: 0, updatedAt: 0);
+      Chat mkChat() => Chat(
+            id: 'ch',
+            characterIds: ['c'],
+            characterSnapshots: {'c': char},
+            attachedLorebookIds: ['b'],
+            messages: [
+              Message(
+                  id: 'm',
+                  kind: MessageKind.user,
+                  variants: ['a wyrm approaches'])
+            ],
+            createdAt: 0,
+            updatedAt: 0,
+          );
+      final rule = RegexRule(
+        name: 'wyrm→dragon',
+        pattern: 'wyrm',
+        flags: 'g',
+        replacement: 'dragon',
+        streams: [RegexStream.userInput],
+        affectsDisplay: false,
+        affectsPrompt: true,
+      );
+      String promptText(List<RegexRule> rules) => buildChatPrompt(
+            ChatPromptInputs(
+              chat: mkChat(),
+              character: char,
+              persona: null,
+              preset: null,
+              responderId: char.id,
+              beatsCap: 0,
+              lookupCharacter: (id) => id == char.id ? char : null,
+              lookupBook: (id) => id == 'b' ? book : null,
+              regexRules: rules,
+            ),
+          ).turns.map((t) => t.content).join('\n\n');
+      expect(promptText([rule]), contains('DRAGONLORE'),
+          reason: 'the rewritten text the model sees contains the key');
+      expect(promptText(const []), isNot(contains('DRAGONLORE')),
+          reason: 'without the rule the raw text has no matching key');
     });
 
     test('filter fields round-trip JSON and omit at defaults', () {

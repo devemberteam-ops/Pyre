@@ -536,15 +536,34 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
       charName: character?.name,
       personaName: personaUserName,
     ),
-    // Lore fix #3 (2026-07-13, minimal slice): the scan sees the SAME view
-    // of a message the prompt does — the in-flight stream slot and greetings
-    // hidden behind another variant are excluded, and char turns are scanned
-    // reasoning-stripped, so keys can no longer fire on `<think>` text or
-    // hidden-branch content that never reaches the model.
+    // Lore fix #3 (2026-07-13): the scan sees the SAME view of a message the
+    // prompt does — the in-flight stream slot and greetings hidden behind
+    // another variant are excluded; char turns are scanned reasoning-stripped
+    // AND both user/char turns run the SAME prompt-stage regex rules the
+    // history assembly applies (2026-07-14, owner-approved solo completion:
+    // a rule that rewrites text for the model now also governs what fires).
+    // Keys can no longer fire on `<think>` text, hidden-branch content, or
+    // pre-regex text the model never sees.
+    //
+    // DELIBERATELY unchanged (design choices, not bugs — documented after
+    // the audit's divergence list): the fixed last-6 window (recency IS the
+    // relevance signal; scanning the whole replay span would make every key
+    // fire forever on long chats) and the [OOC]/[SCENE] history wrappers
+    // (matching targets message CONTENT; prefixes aren't keyword material).
     effectiveTextOf: (m) {
       if (m.id == inputs.inFlightMessageId) return null;
       if (hiddenByGreetingVariant(chat.messages, m)) return null;
-      return m.kind == MessageKind.char ? stripStreamArtifacts(m.text) : m.text;
+      switch (m.kind) {
+        case MessageKind.user:
+          return applyRegexRules(m.text, inputs.regexRules,
+              stream: RegexStream.userInput, stage: RegexStage.prompt);
+        case MessageKind.char:
+          return applyRegexRules(stripStreamArtifacts(m.text),
+              inputs.regexRules,
+              stream: RegexStream.aiOutput, stage: RegexStage.prompt);
+        default:
+          return m.text;
+      }
     },
     // Lore fix #5 (2026-07-13, community request): per-entry character
     // filter gates on every character IN the scene — party mode passes the
