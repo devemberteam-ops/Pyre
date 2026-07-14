@@ -232,12 +232,43 @@ class LorebookList extends StatelessWidget {
   }
 }
 
+/// 2026-07-13 (owner design pass): tiny section label for the long kebab
+/// menus (≥7 items) — see the twin `_menuSectionLabel` in
+/// characters_screen.dart for the pattern's provenance (chat_settings
+/// `_sectionLabel` text style + export-sheet header placement).
+Widget _menuSectionLabel(String text) => Padding(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          text.toUpperCase(),
+          style: TextStyle(
+            color: EmberColors.textDim,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.6,
+          ),
+        ),
+      ),
+    );
+
 Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
   final store = context.read<AppStore>();
   final messenger = ScaffoldMessenger.of(context);
+  // 2026-07-13 (owner design pass): folder membership resolved up front so
+  // "Add to folder…" only shows a subtitle when it carries live state
+  // ("In: …") — the empty-state explainer line is gone.
+  final folderNames = store.folders
+      .where((f) => f.lorebookIds.contains(l.id))
+      .map((f) => f.name)
+      .toList();
+  // 2026-07-13 (owner design pass): the 8 flat items grouped under section
+  // labels (EDIT / EXPORT / LIBRARY), and Delete moved behind a divider like
+  // every other kebab. Same actions, same handlers, same order.
   await showMenuSheet<void>(
     context,
     itemsBuilder: (sheet) => [
+          _menuSectionLabel('Edit'),
           ListTile(
             leading: const Icon(Icons.edit_outlined),
             title: const Text('Edit entries'),
@@ -301,6 +332,7 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
               );
             },
           ),
+          _menuSectionLabel('Export'),
           ListTile(
             leading: const Icon(Icons.file_download_outlined),
             title: const Text('Export JSON'),
@@ -322,31 +354,22 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
               await _embedIntoCard(context, store, l, messenger);
             },
           ),
+          _menuSectionLabel('Library'),
           // 2026-07-13 (community request): lorebooks file into folders too —
           // the same sub-sheet as the character/persona kebabs, over
           // folder.lorebookIds.
           ListTile(
             leading: const Icon(Icons.folder_open_outlined),
             title: const Text('Add to folder…'),
-            subtitle: Builder(builder: (_) {
-              final memberOf = store.folders
-                  .where((f) => f.lorebookIds.contains(l.id))
-                  .map((f) => f.name)
-                  .toList();
-              if (memberOf.isEmpty) {
-                return Text(
-                  'Group this book with others.',
-                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-                );
-              }
-              return Text(
-                'In: ${memberOf.join(", ")}',
-                style: TextStyle(
-                    color: EmberColors.textMid, fontSize: 12),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              );
-            }),
+            subtitle: folderNames.isEmpty
+                ? null
+                : Text(
+                    'In: ${folderNames.join(", ")}',
+                    style: TextStyle(
+                        color: EmberColors.textMid, fontSize: 12),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
             onTap: () async {
               Navigator.pop(sheet);
               await showAddToFolderSheet(
@@ -361,6 +384,7 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
               );
             },
           ),
+          Divider(color: EmberColors.stroke),
           ListTile(
             leading: Icon(Icons.delete_outline,
                 color: EmberColors.danger),

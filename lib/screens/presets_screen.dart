@@ -433,12 +433,37 @@ class _Pill extends StatelessWidget {
   }
 }
 
+/// 2026-07-13 (owner design pass): tiny section label for the long kebab
+/// menus (≥7 items) — see the twin `_menuSectionLabel` in
+/// characters_screen.dart for the pattern's provenance (chat_settings
+/// `_sectionLabel` text style + export-sheet header placement).
+Widget _menuSectionLabel(String text) => Padding(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          text.toUpperCase(),
+          style: TextStyle(
+            color: EmberColors.textDim,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.6,
+          ),
+        ),
+      ),
+    );
+
 Future<void> _openPresetKebab(BuildContext context, Preset p) async {
   final store = context.read<AppStore>();
   final messenger = ScaffoldMessenger.of(context);
+  // 2026-07-13 (owner design pass): items grouped under section labels
+  // (USE / EDIT / EXPORT); Edit joins the EDIT section next to Copy, and
+  // Delete moves behind a divider like every other kebab. Same actions,
+  // same handlers. This menu had no didactic subtitles to cut.
   await showMenuSheet<void>(
     context,
     itemsBuilder: (sheet) => [
+          _menuSectionLabel('Use'),
           ListTile(
             leading: Icon(Icons.check_circle_outline,
                 color: EmberColors.primary),
@@ -463,6 +488,7 @@ Future<void> _openPresetKebab(BuildContext context, Preset p) async {
               store.notifyAndPersist();
             },
           ),
+          _menuSectionLabel('Edit'),
           // Wave CY.18.10: View / Copy / Export are now available for
           // ALL presets including the Pyre Default. The pre-Play-Store
           // "sealed" treatment is gone — the contents are visible (in
@@ -525,6 +551,19 @@ Future<void> _openPresetKebab(BuildContext context, Preset p) async {
               );
             },
           ),
+          // Edit and Delete remain hidden for the locked preset so
+          // there's always a known-good fallback the user can copy
+          // from. To "edit" the default, copy it and edit the clone.
+          if (!p.locked)
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Edit'),
+              onTap: () {
+                Navigator.pop(sheet);
+                _editPreset(context, p);
+              },
+            ),
+          _menuSectionLabel('Export'),
           ListTile(
             leading: const Icon(Icons.file_download_outlined),
             title: const Text('Export JSON'),
@@ -538,18 +577,7 @@ Future<void> _openPresetKebab(BuildContext context, Preset p) async {
               );
             },
           ),
-          // Edit and Delete remain hidden for the locked preset so
-          // there's always a known-good fallback the user can copy
-          // from. To "edit" the default, copy it and edit the clone.
-          if (!p.locked)
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Edit'),
-              onTap: () {
-                Navigator.pop(sheet);
-                _editPreset(context, p);
-              },
-            ),
+          if (!p.locked) Divider(color: EmberColors.stroke),
           if (!p.locked)
             ListTile(
               leading: Icon(Icons.delete_outline,

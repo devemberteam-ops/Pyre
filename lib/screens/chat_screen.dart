@@ -3275,19 +3275,16 @@ class _ChatScreenState extends State<ChatScreen> {
     await showMenuSheet<void>(
       context,
       itemsBuilder: (sheet) => [
+            // 2026-07-13 (owner design pass): the didactic subtitles here
+            // (Continue-as-user explainer, guided-re-roll explainer, Select
+            // text explainer) are gone — the titles carry it. The cascade
+            // note on Delete stays: it's live state (tells the user the
+            // following messages go too).
             if (isLast && (isChar || isUser))
               ListTile(
                 leading: Icon(Icons.play_arrow_rounded,
                     color: EmberColors.primary),
                 title: const Text('Continue (extend this message)'),
-                subtitle: isUser
-                    ? Text(
-                        'Have the model extend your own message in '
-                        'your persona\'s voice.',
-                        style: TextStyle(
-                            color: EmberColors.textMid, fontSize: 12),
-                      )
-                    : null,
                 onTap: () {
                   Navigator.pop(sheet);
                   _continueLast();
@@ -3312,11 +3309,6 @@ class _ChatScreenState extends State<ChatScreen> {
                 leading: Icon(Icons.auto_fix_high_outlined,
                     color: EmberColors.primary),
                 title: const Text('Regenerate with a guide'),
-                subtitle: Text(
-                  'Re-roll this reply with a one-shot instruction.',
-                  style: TextStyle(
-                      color: EmberColors.textMid, fontSize: 12),
-                ),
                 onTap: () {
                   Navigator.pop(sheet);
                   _regenerateWithGuide(chat, m);
@@ -3341,11 +3333,6 @@ class _ChatScreenState extends State<ChatScreen> {
             ListTile(
               leading: const Icon(Icons.text_fields_outlined),
               title: const Text('Select text'),
-              subtitle: Text(
-                'Drag-select a snippet directly on the bubble.',
-                style: TextStyle(
-                    color: EmberColors.textMid, fontSize: 12),
-              ),
               onTap: () {
                 Navigator.pop(sheet);
                 _enterSelectMode(m);

@@ -457,16 +457,15 @@ Persona _personaFromImportedCard(Character c) {
 }
 
 Future<void> _showImportSourceSheet(BuildContext context) async {
+  // 2026-07-13 (owner design pass): chooser decluttered — the explainer
+  // subtitles are gone (the titles carry the choice); the create-vs-import
+  // divider stays. No section labels: four rows don't need them.
   await showMenuSheet<void>(
     context,
     itemsBuilder: (sheet) => [
       ListTile(
         leading: Icon(Icons.auto_awesome, color: EmberColors.primary),
         title: const Text('Build with AI assistant'),
-        subtitle: Text(
-          'Chat with an AI that helps you flesh out a character, then writes the card for you.',
-          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-        ),
         onTap: () {
           Navigator.pop(sheet);
           Navigator.of(context).push(MaterialPageRoute(
@@ -483,10 +482,6 @@ Future<void> _showImportSourceSheet(BuildContext context) async {
       ListTile(
         leading: Icon(Icons.edit_note, color: EmberColors.primary),
         title: const Text('Create from scratch'),
-        subtitle: Text(
-          'Build a new chara_card_v2 card from blank in the in-app editor.',
-          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-        ),
         onTap: () async {
           Navigator.pop(sheet);
           await _createBlankCharacter(context);
@@ -496,10 +491,6 @@ Future<void> _showImportSourceSheet(BuildContext context) async {
       ListTile(
         leading: const Icon(Icons.link),
         title: const Text('From URL'),
-        subtitle: Text(
-          'Paste a direct PNG link from botbooru or chub.',
-          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-        ),
         onTap: () {
           Navigator.pop(sheet);
           _showImportCharacterDialog(context);
@@ -508,10 +499,6 @@ Future<void> _showImportSourceSheet(BuildContext context) async {
       ListTile(
         leading: const Icon(Icons.file_upload_outlined),
         title: const Text('From file'),
-        subtitle: Text(
-          'Pick a Tavern Card PNG (or .json) from your device.',
-          style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-        ),
         onTap: () async {
           Navigator.pop(sheet);
           await _pickAndImportCard(context);
@@ -2569,6 +2556,29 @@ class _PersonaCard extends StatelessWidget {
   }
 }
 
+/// 2026-07-13 (owner design pass): tiny section label for the long kebab
+/// menus (≥7 items) — the declutter pass groups their ListTiles by task.
+/// NOT a new style: the text reuses chat_settings_screen.dart's
+/// `_sectionLabel` (uppercase, textDim, 12/w600/0.6), left-aligned the way
+/// chat_screen.dart's `_showExportChatSheet` header sits above its tiles.
+/// File-local twins live in lorebooks_screen.dart / presets_screen.dart
+/// (their kebabs got the same treatment).
+Widget _menuSectionLabel(String text) => Padding(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          text.toUpperCase(),
+          style: TextStyle(
+            color: EmberColors.textDim,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.6,
+          ),
+        ),
+      ),
+    );
+
 void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
   // Most recent chat with this character as the primary — drives Continue.
   final existingChat = () {
@@ -2579,9 +2589,22 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
     return mine.isEmpty ? null : mine.first;
   }();
 
+  // 2026-07-13 (owner design pass): folder membership resolved up front so
+  // "Add to folder…" only shows a subtitle when it carries live state
+  // ("In: …") — the empty-state explainer line is gone.
+  final folderNames = store.folders
+      .where((f) => f.characterIds.contains(c.id))
+      .map((f) => f.name)
+      .toList();
+
+  // 2026-07-13 (owner design pass): menu decluttered — items grouped under
+  // small section labels (CHAT / CARD / EXPORT / LIBRARY) and the didactic
+  // subtitles dropped. Only live-state subtitles survive (Continue chat's
+  // resume line, the folder membership). Same actions, same handlers.
   showMenuSheet<void>(
     context,
     itemsBuilder: (sheet) => [
+          _menuSectionLabel('Chat'),
           ListTile(
             leading: Icon(Icons.add_comment_outlined,
                 color: EmberColors.primary),
@@ -2599,10 +2622,6 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
               leading:
                   Icon(Icons.groups_outlined, color: EmberColors.primary),
               title: const Text('Start group chat'),
-              subtitle: Text(
-                'Pick the whole cast up front — ${c.name} is already in.',
-                style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-              ),
               onTap: () {
                 Navigator.pop(sheet);
                 startNewGroupChat(context, c);
@@ -2625,6 +2644,7 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
                 ));
               },
             ),
+          _menuSectionLabel('Card'),
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('View details'),
@@ -2633,13 +2653,24 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
               showCharacterDetailsSheet(context, characterId: c.id);
             },
           ),
+          // In-app Duplicate — mirrors the lorebook "Copy as new" / preset
+          // "Copy (editable)" convention. Non-destructive, so no confirm
+          // dialog; a fresh "<name> (copy)" appears right after the original.
+          ListTile(
+            leading: const Icon(Icons.copy_outlined),
+            title: const Text('Duplicate'),
+            onTap: () {
+              Navigator.pop(sheet);
+              final clone = store.duplicateCharacter(c.id);
+              if (clone == null) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Duplicated as "${clone.name}".')),
+              );
+            },
+          ),
           ListTile(
             leading: const Icon(Icons.face_outlined),
             title: const Text('Add as persona'),
-            subtitle: Text(
-              "Creates a persona with this character's name + avatar.",
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
             onTap: () {
               Navigator.pop(sheet);
               final p = store.convertCharacterToPersona(c);
@@ -2648,13 +2679,10 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
               );
             },
           ),
+          _menuSectionLabel('Export'),
           ListTile(
             leading: const Icon(Icons.download_outlined),
             title: const Text('Export as PNG card'),
-            subtitle: Text(
-              'chara_card_v2 PNG, ready to upload to botbooru / chub / share.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
             onTap: () async {
               Navigator.pop(sheet);
               await _exportCharacterAsPng(context, c);
@@ -2665,58 +2693,26 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
           ListTile(
             leading: const Icon(Icons.download_outlined),
             title: const Text('Export as JSON card'),
-            subtitle: Text(
-              'chara_card_v2 JSON, no avatar required.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
             onTap: () async {
               Navigator.pop(sheet);
               await _exportCharacterAsJson(context, c);
             },
           ),
-          // In-app Duplicate — mirrors the lorebook "Copy as new" / preset
-          // "Copy (editable)" convention. Non-destructive, so no confirm
-          // dialog; a fresh "<name> (copy)" appears right after the original.
-          ListTile(
-            leading: const Icon(Icons.copy_outlined),
-            title: const Text('Duplicate'),
-            subtitle: Text(
-              'Make an editable copy of this character.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () {
-              Navigator.pop(sheet);
-              final clone = store.duplicateCharacter(c.id);
-              if (clone == null) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Duplicated as "${clone.name}".')),
-              );
-            },
-          ),
+          _menuSectionLabel('Library'),
           // Wave CY.18.38: "Add to folder" via a sub-sheet listing the
           // user's folders + a "create new" option.
           ListTile(
             leading: const Icon(Icons.folder_open_outlined),
             title: const Text('Add to folder…'),
-            subtitle: Builder(builder: (_) {
-              final memberOf = store.folders
-                  .where((f) => f.characterIds.contains(c.id))
-                  .map((f) => f.name)
-                  .toList();
-              if (memberOf.isEmpty) {
-                return Text(
-                  'Group this card with others.',
-                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-                );
-              }
-              return Text(
-                'In: ${memberOf.join(", ")}',
-                style: TextStyle(
-                    color: EmberColors.textMid, fontSize: 12),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              );
-            }),
+            subtitle: folderNames.isEmpty
+                ? null
+                : Text(
+                    'In: ${folderNames.join(", ")}',
+                    style: TextStyle(
+                        color: EmberColors.textMid, fontSize: 12),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
             onTap: () async {
               Navigator.pop(sheet);
               // 2026-07-13 (community request): the sheet is shared with
@@ -2758,9 +2754,20 @@ void _showCharacterMenu(BuildContext context, AppStore store, Character c) {
 
 void _showPersonaMenu(BuildContext context, AppStore store, Persona p) {
   final isActive = p.id == store.activePersonaId;
+  // 2026-07-13 (owner design pass): folder membership resolved up front so
+  // "Add to folder…" only shows a subtitle when it carries live state
+  // ("In: …") — the empty-state explainer line is gone.
+  final folderNames = store.folders
+      .where((f) => f.personaIds.contains(p.id))
+      .map((f) => f.name)
+      .toList();
+  // 2026-07-13 (owner design pass): same declutter as the character kebab —
+  // section labels (PERSONA / EXPORT / LIBRARY), didactic subtitles dropped,
+  // only the live folder membership survives. Same actions, same handlers.
   showMenuSheet<void>(
     context,
     itemsBuilder: (sheet) => [
+          _menuSectionLabel('Persona'),
           // Wave CY.18.138: mirror the character kebab — lead with
           // "View details" (the persona details sheet, where the Edit
           // button offers "Edit with AI" / "Edit manually") instead of
@@ -2783,16 +2790,26 @@ void _showPersonaMenu(BuildContext context, AppStore store, Persona p) {
                 store.setActivePersona(p.id);
               },
             ),
+          // In-app Duplicate — same convention as the character menu.
+          ListTile(
+            leading: const Icon(Icons.copy_outlined),
+            title: const Text('Duplicate'),
+            onTap: () {
+              Navigator.pop(sheet);
+              final clone = store.duplicatePersona(p.id);
+              if (clone == null) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Duplicated as "${clone.name}".')),
+              );
+            },
+          ),
+          _menuSectionLabel('Export'),
           // Wave CY.18.250: export a persona as a chara_card_v2 PNG (mirrors
           // the character "Export as PNG card"). Builds a card from the
           // persona's shareable fields + its gallery.
           ListTile(
             leading: const Icon(Icons.download_outlined),
             title: const Text('Export as PNG'),
-            subtitle: Text(
-              'chara_card_v2 PNG (+ gallery), ready to share or re-import.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
             onTap: () async {
               Navigator.pop(sheet);
               await _exportPersonaAsPng(context, p);
@@ -2803,56 +2820,26 @@ void _showPersonaMenu(BuildContext context, AppStore store, Persona p) {
           ListTile(
             leading: const Icon(Icons.download_outlined),
             title: const Text('Export as JSON card'),
-            subtitle: Text(
-              'chara_card_v2 JSON, no avatar required.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
             onTap: () async {
               Navigator.pop(sheet);
               await _exportPersonaAsJson(context, p);
             },
           ),
-          // In-app Duplicate — same convention as the character menu.
-          ListTile(
-            leading: const Icon(Icons.copy_outlined),
-            title: const Text('Duplicate'),
-            subtitle: Text(
-              'Make an editable copy of this persona.',
-              style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-            ),
-            onTap: () {
-              Navigator.pop(sheet);
-              final clone = store.duplicatePersona(p.id);
-              if (clone == null) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Duplicated as "${clone.name}".')),
-              );
-            },
-          ),
+          _menuSectionLabel('Library'),
           // 2026-07-13 (community request): personas file into folders too —
           // the same sub-sheet as the character kebab, over folder.personaIds.
           ListTile(
             leading: const Icon(Icons.folder_open_outlined),
             title: const Text('Add to folder…'),
-            subtitle: Builder(builder: (_) {
-              final memberOf = store.folders
-                  .where((f) => f.personaIds.contains(p.id))
-                  .map((f) => f.name)
-                  .toList();
-              if (memberOf.isEmpty) {
-                return Text(
-                  'Group this persona with others.',
-                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-                );
-              }
-              return Text(
-                'In: ${memberOf.join(", ")}',
-                style: TextStyle(
-                    color: EmberColors.textMid, fontSize: 12),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              );
-            }),
+            subtitle: folderNames.isEmpty
+                ? null
+                : Text(
+                    'In: ${folderNames.join(", ")}',
+                    style: TextStyle(
+                        color: EmberColors.textMid, fontSize: 12),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
             onTap: () async {
               Navigator.pop(sheet);
               await showAddToFolderSheet(

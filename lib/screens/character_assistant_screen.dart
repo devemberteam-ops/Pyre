@@ -2715,6 +2715,9 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
     final hasChars = store.characters.any((c) => !c.deleted);
     final hasPersonas = store.personas.any((p) => !p.deleted);
     final hasLorebooks = store.lorebooks.any((b) => !b.deleted);
+    // 2026-07-13 (owner design pass): chooser decluttered — the explainer
+    // subtitles are gone (the titles carry the choice). No section labels:
+    // four rows don't need them.
     final source = await showMenuSheet<String>(
       context,
       itemsBuilder: (sheet) => [
@@ -2723,10 +2726,6 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
                 leading: Icon(Icons.badge_outlined,
                     color: EmberColors.primary),
                 title: const Text('Character from library'),
-                subtitle: Text(
-                  'Use one of your characters as a reference.',
-                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-                ),
                 onTap: () => Navigator.pop(sheet, 'char'),
               ),
             if (hasPersonas)
@@ -2734,10 +2733,6 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
                 leading: Icon(Icons.person_outline,
                     color: EmberColors.primary),
                 title: const Text('Persona from library'),
-                subtitle: Text(
-                  'Hand the Creator one of your personas.',
-                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-                ),
                 onTap: () => Navigator.pop(sheet, 'persona'),
               ),
             if (hasLorebooks)
@@ -2745,20 +2740,12 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
                 leading: Icon(Icons.menu_book_outlined,
                     color: EmberColors.primary),
                 title: const Text('Lorebook from library'),
-                subtitle: Text(
-                  'Ground the build in one of your worlds.',
-                  style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-                ),
                 onTap: () => Navigator.pop(sheet, 'lorebook'),
               ),
             ListTile(
               leading:
                   Icon(Icons.folder_open_outlined, color: EmberColors.primary),
               title: const Text('Browse device'),
-              subtitle: Text(
-                'Import a .png or .json chara_card_v2 file.',
-                style: TextStyle(color: EmberColors.textMid, fontSize: 12),
-              ),
               onTap: () => Navigator.pop(sheet, 'device'),
             ),
           ],
