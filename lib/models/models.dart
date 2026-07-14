@@ -1770,7 +1770,18 @@ class LoreEntry {
   String content;
   bool constant; // always-on if true
   bool enabled;
-  int order; // higher = more important
+  /// Injection placement priority. 2026-07-13 (lore fix #1, ST semantics):
+  /// higher order = LATER in the assembled lore block = closer to the chat
+  /// history = more model attention.
+  int order;
+
+  /// 2026-07-13 (community request, ST parity): restrict this entry to
+  /// specific CHARACTERS, matched by name (case-insensitive — names survive
+  /// import/export where ids don't). Empty (default) = fires for everyone.
+  /// With [characterFilterExclude] true the list inverts: fires for everyone
+  /// EXCEPT these. Mirrors SillyTavern's world-info characterFilter.
+  List<String> characterFilterNames;
+  bool characterFilterExclude;
 
   /// Wave 1.1 (F3): optional secondary/qualifier keywords. When empty (the
   /// default), the entry triggers on [keys] alone — identical to pre-1.1
@@ -1812,8 +1823,11 @@ class LoreEntry {
     this.matchWholeWords,
     this.probability = 100,
     this.useProbability = false,
+    List<String>? characterFilterNames,
+    this.characterFilterExclude = false,
   })  : keys = keys ?? [],
-        secondaryKeys = secondaryKeys ?? [];
+        secondaryKeys = secondaryKeys ?? [],
+        characterFilterNames = characterFilterNames ?? [];
 
   factory LoreEntry.fromJson(Map<String, dynamic> j) => LoreEntry(
         id: j['id'] as String,
@@ -1828,6 +1842,9 @@ class LoreEntry {
         matchWholeWords: j['matchWholeWords'] as bool?,
         probability: _jInt(j['probability']) ?? 100,
         useProbability: (j['useProbability'] as bool?) ?? false,
+        characterFilterNames: _jStringList(j['characterFilterNames']),
+        characterFilterExclude:
+            (j['characterFilterExclude'] as bool?) ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -1847,6 +1864,10 @@ class LoreEntry {
         if (matchWholeWords != null) 'matchWholeWords': matchWholeWords,
         if (probability != 100) 'probability': probability,
         if (useProbability) 'useProbability': useProbability,
+        if (characterFilterNames.isNotEmpty)
+          'characterFilterNames': characterFilterNames,
+        if (characterFilterExclude)
+          'characterFilterExclude': characterFilterExclude,
       };
 }
 

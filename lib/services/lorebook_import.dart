@@ -217,6 +217,19 @@ Lorebook lorebookFromCharacterBook(
         : (ext?['useProbability'] is bool
             ? ext!['useProbability'] as bool
             : false);
+    // 2026-07-13 (community request, ST parity): read ST's per-entry
+    // characterFilter — `{ isExclude: bool, names: [...], tags: [...] }`,
+    // top-level (standalone World Info) or under extensions (embedded
+    // character_book). These keys were previously never accessed, so a
+    // card's "only for character X" restriction silently fell away on
+    // import. ST `tags` have no Pyre equivalent and are ignored (names only).
+    final cfRaw = m['characterFilter'] ?? ext?['characterFilter'];
+    var characterFilterNames = const <String>[];
+    var characterFilterExclude = false;
+    if (cfRaw is Map) {
+      characterFilterNames = _readKeyList(cfRaw['names']) ?? <String>[];
+      characterFilterExclude = _lBoolOpt(cfRaw['isExclude']) ?? false;
+    }
     entries.add(LoreEntry(
       id: 'lore_${DateTime.now().millisecondsSinceEpoch}_$i',
       keys: keys,
@@ -230,6 +243,8 @@ Lorebook lorebookFromCharacterBook(
       matchWholeWords: matchWholeWords,
       probability: probability,
       useProbability: useProbability,
+      characterFilterNames: characterFilterNames,
+      characterFilterExclude: characterFilterExclude,
     ));
   }
   // Wave CY.18.44: empty-entries diagnostic. Pre-Wave a malformed book

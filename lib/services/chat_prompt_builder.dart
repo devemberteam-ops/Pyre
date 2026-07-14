@@ -536,6 +536,23 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
       charName: character?.name,
       personaName: personaUserName,
     ),
+    // Lore fix #3 (2026-07-13, minimal slice): the scan sees the SAME view
+    // of a message the prompt does — the in-flight stream slot and greetings
+    // hidden behind another variant are excluded, and char turns are scanned
+    // reasoning-stripped, so keys can no longer fire on `<think>` text or
+    // hidden-branch content that never reaches the model.
+    effectiveTextOf: (m) {
+      if (m.id == inputs.inFlightMessageId) return null;
+      if (hiddenByGreetingVariant(chat.messages, m)) return null;
+      return m.kind == MessageKind.char ? stripStreamArtifacts(m.text) : m.text;
+    },
+    // Lore fix #5 (2026-07-13, community request): per-entry character
+    // filter gates on every character IN the scene — party mode passes the
+    // whole cast, a solo chat its single character.
+    sceneCharacterNames: [
+      for (final id in chat.characterIds)
+        (chat.characterSnapshots[id] ?? inputs.lookupCharacter(id))?.name ?? '',
+    ],
   );
   final loreText = StringBuffer();
   for (final h in scan.hits) {

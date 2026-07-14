@@ -323,6 +323,8 @@ Future<void> _openLorebookKebab(BuildContext context, Lorebook l) async {
                           matchWholeWords: e.matchWholeWords,
                           probability: e.probability,
                           useProbability: e.useProbability,
+                          characterFilterNames: [...e.characterFilterNames],
+                          characterFilterExclude: e.characterFilterExclude,
                         ))
                     .toList(),
               );
@@ -845,6 +847,10 @@ Future<void> _editEntry(
   bool? matchWholeWords = entry.matchWholeWords;
   bool useProbability = entry.useProbability;
   int probability = entry.probability;
+  // 2026-07-13 (community request): per-entry character filter (ST parity).
+  final charFilterCtl =
+      TextEditingController(text: entry.characterFilterNames.join(', '));
+  bool characterFilterExclude = entry.characterFilterExclude;
 
   // Tri-state (Default / On / Off) value helpers for the override toggles.
   String triLabel(bool? v) => v == null ? 'Default' : (v ? 'On' : 'Off');
@@ -1005,6 +1011,31 @@ Future<void> _editEntry(
                       ),
                     ],
                   ),
+                const SizedBox(height: 12),
+                // 2026-07-13 (community request): restrict the entry to
+                // specific characters (ST characterFilter parity). Empty =
+                // fires for everyone; the exclude toggle inverts the list.
+                TextField(
+                  controller: charFilterCtl,
+                  minLines: 1,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'Only for characters (optional)',
+                    helperText:
+                        'Comma-separated names. Empty = every character.',
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                if (charFilterCtl.text.trim().isNotEmpty)
+                  SwitchListTile(
+                    title: const Text('Exclude these instead'),
+                    value: characterFilterExclude,
+                    activeThumbColor: EmberColors.primary,
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    onChanged: (v) =>
+                        setState(() => characterFilterExclude = v),
+                  ),
               ],
             ),
           ),
@@ -1034,7 +1065,18 @@ Future<void> _editEntry(
                 ..caseSensitive = caseSensitive
                 ..matchWholeWords = matchWholeWords
                 ..useProbability = useProbability
-                ..probability = probability.clamp(0, 100);
+                ..probability = probability.clamp(0, 100)
+                ..characterFilterNames = charFilterCtl.text
+                    .split(',')
+                    .map((s) => s.trim())
+                    .where((s) => s.isNotEmpty)
+                    .toList()
+                // An empty name list means "everyone" — a dangling exclude
+                // flag would then be meaningless; reset it so the JSON stays
+                // clean (both fields omit-at-default).
+                ..characterFilterExclude = charFilterCtl.text.trim().isEmpty
+                    ? false
+                    : characterFilterExclude;
               if (isNew) {
                 lore.entries.add(entry);
               }
@@ -1052,4 +1094,5 @@ Future<void> _editEntry(
   keysCtl.dispose();
   secondaryCtl.dispose();
   contentCtl.dispose();
+  charFilterCtl.dispose();
 }

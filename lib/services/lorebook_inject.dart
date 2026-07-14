@@ -179,16 +179,32 @@ LorebookScanResult scanLorebookHits(
   int window = 6,
   Random? rng,
   String Function(String)? fillMacros,
+  String? Function(Message m)? effectiveTextOf,
+  List<String> sceneCharacterNames = const [],
 }) {
   // Wave 1.1 (F3): keep the RAW (un-lowercased) window text. Case folding
   // now happens INSIDE the per-key match so a per-entry `caseSensitive`
   // override can opt out of it. Default behaviour (caseSensitive == null →
   // false) still folds case, identical to pre-1.1.
+  //
+  // Lore fix #3 (2026-07-13, minimal slice): [effectiveTextOf] lets the
+  // caller give the scan the SAME view of a message the prompt gets — null
+  // = message excluded entirely (the in-flight stream slot, a greeting
+  // hidden behind another variant), otherwise its effective text (e.g. char
+  // turns with `<think>` reasoning stripped). Without it the scan fired on
+  // chain-of-thought and hidden-branch text that never reaches the model.
+  // Null callback = raw scan (older callers byte-identical).
   final rawWindow = messages.reversed
+      .map((m) => effectiveTextOf == null ? m.text : effectiveTextOf(m))
+      .where((t) => t != null)
       .take(window)
-      .map((m) => m.text)
+      .map((t) => t!)
       .join(' ');
   final windowText = fillMacros == null ? rawWindow : fillMacros(rawWindow);
+  // Lore fix #5 (2026-07-13, community request — ST characterFilter parity):
+  // pre-fold the scene's character names once for the per-entry gate below.
+  final sceneNamesFolded =
+      sceneCharacterNames.map((n) => n.trim().toLowerCase()).toSet();
   final roller = rng ?? Random();
   final hits = <LoreEntry>[];
   final trace = <String>[];
@@ -200,6 +216,23 @@ LorebookScanResult scanLorebookHits(
       if (!e.enabled) {
         skippedDisabled++;
         continue;
+      }
+      // Lore fix #5: per-entry character filter — applies to constant and
+      // keyword entries alike (ST semantics). Matched by NAME,
+      // case-insensitive. When the caller supplies no scene names (older
+      // callers), a filtered entry stays fail-OPEN so nothing silently
+      // vanishes from surfaces that haven't been wired yet.
+      if (e.characterFilterNames.isNotEmpty && sceneNamesFolded.isNotEmpty) {
+        final filterFolded = e.characterFilterNames
+            .map((n) => n.trim().toLowerCase())
+            .toSet();
+        final overlaps = filterFolded.intersection(sceneNamesFolded).isNotEmpty;
+        final allowed = e.characterFilterExclude ? !overlaps : overlaps;
+        // NOTE: no trace line here — `trace` is strictly index-aligned with
+        // `hits` (the final sort reorders both in lockstep), so only FIRING
+        // entries may append to it. A filtered-out entry skips silently,
+        // exactly like `skippedDisabled` and failed keyword matches do.
+        if (!allowed) continue;
       }
       if (e.constant) {
         // Fix #2 (2026-07-13): constant entries honour their OWN probability

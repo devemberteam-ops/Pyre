@@ -175,4 +175,107 @@ void main() {
       expect(scan.hits.map((e) => e.id), ['e']);
     });
   });
+
+  group('fix #3 (minimal) — the scan sees the prompt\'s view of a message', () {
+    test('effectiveTextOf null excludes the message from the window', () {
+      final books = [
+        _book([
+          _entry('e', keys: ['secret'])
+        ])
+      ];
+      final hidden = _msg('the secret word');
+      final scan = scanLorebookHits(
+        books,
+        [hidden, _msg('plain talk')],
+        effectiveTextOf: (m) => m.id == hidden.id ? null : m.text,
+      );
+      expect(scan.hits, isEmpty,
+          reason: 'an excluded message (in-flight slot / hidden greeting) '
+              'must not feed the keyword window');
+    });
+
+    test('effectiveTextOf can strip reasoning so <think> text never fires',
+        () {
+      final books = [
+        _book([
+          _entry('e', keys: ['dragon'])
+        ])
+      ];
+      final scan = scanLorebookHits(
+        books,
+        [_msg('<think>maybe a dragon?</think>Just a shadow.')],
+        effectiveTextOf: (m) =>
+            m.text.replaceAll(RegExp(r'<think>.*?</think>'), ''),
+      );
+      expect(scan.hits, isEmpty,
+          reason: 'chain-of-thought is never sent to the model — keys must '
+              'not fire on it');
+    });
+  });
+
+  group('fix #5 — per-entry character filter (ST parity)', () {
+    LoreEntry filtered(String id,
+            {List<String>? names, bool exclude = false}) =>
+        LoreEntry(
+          id: id,
+          keys: const [],
+          content: 'c',
+          constant: true,
+          characterFilterNames: names ?? const [],
+          characterFilterExclude: exclude,
+        );
+
+    test('inclusive filter fires only when the character is in the scene', () {
+      final books = [
+        _book([filtered('only-sera', names: ['Sera'])])
+      ];
+      final withSera = scanLorebookHits(books, [_msg('hi')],
+          sceneCharacterNames: ['Sera', 'Ren']);
+      expect(withSera.hits.map((e) => e.id), ['only-sera']);
+      final withoutSera = scanLorebookHits(books, [_msg('hi')],
+          sceneCharacterNames: ['Ren']);
+      expect(withoutSera.hits, isEmpty);
+    });
+
+    test('exclude inverts; matching is case-insensitive', () {
+      final books = [
+        _book([filtered('not-sera', names: ['sera'], exclude: true)])
+      ];
+      expect(
+          scanLorebookHits(books, [_msg('hi')],
+              sceneCharacterNames: ['SERA']).hits,
+          isEmpty,
+          reason: 'excluded name present (case-folded) → suppressed');
+      expect(
+          scanLorebookHits(books, [_msg('hi')],
+              sceneCharacterNames: ['Ren']).hits.length,
+          1);
+    });
+
+    test('empty filter fires for everyone; no scene names = fail-open', () {
+      final books = [
+        _book([
+          filtered('open'),
+          filtered('gated', names: ['Sera']),
+        ])
+      ];
+      expect(
+          scanLorebookHits(books, [_msg('hi')],
+              sceneCharacterNames: ['Ren']).hits.map((e) => e.id),
+          ['open']);
+      // Older callers that pass no scene names must not lose entries.
+      expect(scanLorebookHits(books, [_msg('hi')]).hits.length, 2);
+    });
+
+    test('filter fields round-trip JSON and omit at defaults', () {
+      final e = filtered('e', names: ['Sera'], exclude: true);
+      final back = LoreEntry.fromJson(e.toJson());
+      expect(back.characterFilterNames, ['Sera']);
+      expect(back.characterFilterExclude, isTrue);
+      final plainJson = filtered('p').toJson();
+      expect(plainJson.containsKey('characterFilterNames'), isFalse);
+      expect(plainJson.containsKey('characterFilterExclude'), isFalse,
+          reason: 'existing books round-trip byte-identical');
+    });
+  });
 }
