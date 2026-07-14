@@ -116,8 +116,9 @@ List<Lorebook> collectBoundLorebooks({
 /// used by the in-chat diagnostic badge so the user can SEE which
 /// lorebook entries influenced a turn without inspecting prompts.
 class LorebookScanResult {
-  /// Entries that should be injected into the prompt, sorted by
-  /// descending `order` (higher = more important = appears first).
+  /// Entries that should be injected into the prompt, sorted by ASCENDING
+  /// `order` (2026-07-13 fix #1 — ST semantics: higher order = later in the
+  /// block = closer to the history = more model attention).
   final List<LoreEntry> hits;
 
   /// Diagnostic lines for the UI / debug log, one per fired entry.
@@ -149,27 +150,45 @@ class LorebookScanResult {
 ///
 /// Matching rules:
 ///   - `entry.enabled == false` → skipped (counted in skippedDisabled)
-///   - `entry.constant == true` → ALWAYS fires, no keyword scan
+///   - `entry.constant == true` → fires WITHOUT a keyword scan, but (lore
+///     family fix #2, 2026-07-13) still subject to its own probability when
+///     `useProbability` is set — SillyTavern semantics: an author who wrote
+///     "constant, 30%" asked for a 30% ambient entry, not an always-on one.
+///     Constant entries WITHOUT useProbability never consult the roller, so
+///     seeded roll sequences (golden fixtures) are unchanged.
 ///   - otherwise: delegated to [evaluateLoreEntryTrigger] (primary
 ///     case-insensitive WORD-BOUNDARY match by default, plus optional
 ///     secondary-key selective logic + probability, all opt-in per entry)
 ///
-/// Final order: hits sorted by `order` descending (chara_card_v2
-/// convention: higher order = higher injection priority).
+/// [fillMacros], when provided, is applied to BOTH the scanned window text
+/// and each key before matching (lore family fix #4, 2026-07-13): a key
+/// written as `{{user}}` matched only the literal characters, and the raw
+/// window still contained unresolved macros — so name-based keys silently
+/// never fired. The caller supplies the same {{user}}/{{char}} filler the
+/// prompt itself uses. Null = raw matching (older callers unchanged).
+///
+/// Final order (lore family fix #1, 2026-07-13): hits sorted by `order`
+/// ASCENDING — higher order = LATER in the block = closer to the chat
+/// history = more model attention. This is SillyTavern's insertion-order
+/// semantics, which imported cards are authored against; the previous
+/// descending sort put the author's most important entry FARTHEST from the
+/// history, inverting the intent. Equal orders keep stable scan order.
 LorebookScanResult scanLorebookHits(
   List<Lorebook> books,
   List<Message> messages, {
   int window = 6,
   Random? rng,
+  String Function(String)? fillMacros,
 }) {
   // Wave 1.1 (F3): keep the RAW (un-lowercased) window text. Case folding
   // now happens INSIDE the per-key match so a per-entry `caseSensitive`
   // override can opt out of it. Default behaviour (caseSensitive == null →
   // false) still folds case, identical to pre-1.1.
-  final windowText = messages.reversed
+  final rawWindow = messages.reversed
       .take(window)
       .map((m) => m.text)
       .join(' ');
+  final windowText = fillMacros == null ? rawWindow : fillMacros(rawWindow);
   final roller = rng ?? Random();
   final hits = <LoreEntry>[];
   final trace = <String>[];
@@ -183,6 +202,27 @@ LorebookScanResult scanLorebookHits(
         continue;
       }
       if (e.constant) {
+        // Fix #2 (2026-07-13): constant entries honour their OWN probability
+        // — same gate semantics as evaluateLoreEntryTrigger (<=0 never,
+        // <100 roll, >=100 always). The roller is consulted ONLY when
+        // useProbability is on, so existing constant entries (and seeded
+        // golden fixtures) behave byte-identically.
+        if (e.useProbability) {
+          final p = e.probability;
+          if (p <= 0) {
+            continue;
+          }
+          if (p < 100) {
+            final value = roller.nextInt(100); // 0..99
+            if (value >= p) {
+              continue;
+            }
+            hits.add(e);
+            trace.add(
+                '${book.name} • constant entry (probability roll $value < $p%)');
+            continue;
+          }
+        }
         hits.add(e);
         trace.add('${book.name} • constant entry');
         continue;
@@ -191,6 +231,7 @@ LorebookScanResult scanLorebookHits(
         windowText,
         e,
         roll: (max) => roller.nextInt(max),
+        fillMacros: fillMacros,
       );
       if (decision.triggered) {
         hits.add(e);
@@ -201,22 +242,21 @@ LorebookScanResult scanLorebookHits(
   // Wave 1.1 fix (H-9): DETERMINISTIC, STABLE injection order. Dart's
   // `List.sort` is NOT a stable sort, so for the overwhelmingly common
   // all-`order:0` case (every hand-made entry — `order` is import-only) the
-  // build-to-build sequence was implementation-defined: it could reshuffle
-  // equal-order entries between runs, which (a) reads non-deterministically
-  // and (b) busts provider prompt caching by changing the assembled prompt
-  // bytes. We sort an INDEX list (the insertion order = scan order = book
-  // order then entry order) by `order` DESCENDING, tie-breaking on the
-  // original index ASCENDING. Equal-order entries therefore inject in a
-  // fixed, documented sequence (scan order) every time; an explicit higher
-  // `order` still wins. We reorder `trace` in lockstep so the diagnostic
-  // trace stays aligned with the reordered hits.
+  // build-to-build sequence was implementation-defined. We sort an INDEX
+  // list by `order`, tie-breaking on the original index ASCENDING, so
+  // equal-order entries inject in a fixed, documented sequence (scan order)
+  // every time. `trace` is reordered in lockstep.
   //
-  // (Optional future affordance — intentionally NOT built here to respect the
-  // app's minimalism: a drag-to-reorder editor for `order`. Today `order` is
-  // only set on import; this fix makes the equal-`order` default stable.)
+  // Lore family fix #1 (2026-07-13, Codex-confirmed audit finding): the sort
+  // is now ASCENDING — higher `order` = LATER in the assembled block =
+  // closest to the chat history = most model attention. The previous
+  // DESCENDING sort ("higher = appears first") inverted SillyTavern's
+  // insertion-order semantics, so imported cards' most important entries
+  // landed farthest from the history. All-equal-order books (every
+  // hand-made entry) are byte-identical either way.
   final idx = List<int>.generate(hits.length, (i) => i);
   idx.sort((a, b) {
-    final byOrder = hits[b].order.compareTo(hits[a].order); // desc
+    final byOrder = hits[a].order.compareTo(hits[b].order); // asc
     if (byOrder != 0) return byOrder;
     return a.compareTo(b); // stable tie-break: original scan order
   });
@@ -263,14 +303,20 @@ LoreTriggerDecision evaluateLoreEntryTrigger(
   String text,
   LoreEntry entry, {
   int Function(int max)? roll,
+  String Function(String)? fillMacros,
 }) {
   final caseSensitive = entry.caseSensitive ?? false;
   final wholeWords = entry.matchWholeWords ?? true;
+  // Lore family fix #4 (2026-07-13): expand {{user}}/{{char}} in the KEY
+  // before matching — a key authored as `{{user}}` used to match only the
+  // literal braces, never the persona's name. The expanded key is what feeds
+  // the compile cache, so a persona change naturally re-keys the cache.
+  String expandKey(String k) => fillMacros == null ? k : fillMacros(k);
 
   String? matchedKey;
   for (final k in entry.keys) {
     if (k.isEmpty) continue;
-    if (_keyMatches(text, k,
+    if (_keyMatches(text, expandKey(k),
         caseSensitive: caseSensitive, wholeWords: wholeWords)) {
       matchedKey = k;
       break;
@@ -288,7 +334,7 @@ LoreTriggerDecision evaluateLoreEntryTrigger(
     final present = <String>[];
     final absent = <String>[];
     for (final s in secondaries) {
-      if (_keyMatches(text, s,
+      if (_keyMatches(text, expandKey(s),
           caseSensitive: caseSensitive, wholeWords: wholeWords)) {
         present.add(s);
       } else {

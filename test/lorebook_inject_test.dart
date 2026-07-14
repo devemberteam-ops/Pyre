@@ -343,21 +343,25 @@ void main() {
       }
     });
 
-    test('explicit higher order still wins over scan order', () {
+    test('explicit order still beats scan order (ascending since fix #1)', () {
       final book = Lorebook(id: 'b', name: 'b', entries: [
         LoreEntry(id: 'low', content: 'low', constant: true, order: 1),
         LoreEntry(id: 'high', content: 'high', constant: true, order: 5),
         LoreEntry(id: 'mid', content: 'mid', constant: true, order: 3),
       ]);
       final res = scanLorebookHits([book], [msg('anything')]);
-      // Descending by order: high(5), mid(3), low(1).
-      expect(res.hits.map((e) => e.id).toList(), ['high', 'mid', 'low']);
+      // Lore family fix #1 (2026-07-13): ASCENDING — higher order = later =
+      // nearer the chat history (ST semantics): low(1), mid(3), high(5).
+      expect(res.hits.map((e) => e.id).toList(), ['low', 'mid', 'high']);
     });
 
     test('equal-order ties tie-break on scan order, not on the unstable sort',
         () {
-      // Two order:2 entries bracketing an order:5: high must lead, then the
-      // two order:2 entries IN SCAN ORDER (t1 before t2).
+      // Two order:2 entries bracketing an order:5. Lore family fix #1
+      // (2026-07-13): the sort is now ASCENDING (ST semantics — higher order
+      // = later = nearer history), so the order:2 pair leads IN SCAN ORDER
+      // (t1 before t2) and `high` lands last. The determinism invariant this
+      // test exists for (stable equal-order tie-break) is unchanged.
       final book = Lorebook(id: 'b', name: 'b', entries: [
         LoreEntry(id: 't1', content: 't1', constant: true, order: 2),
         LoreEntry(id: 'high', content: 'high', constant: true, order: 5),
@@ -365,7 +369,7 @@ void main() {
       ]);
       for (var i = 0; i < 25; i++) {
         final res = scanLorebookHits([book], [msg('x $i')]);
-        expect(res.hits.map((e) => e.id).toList(), ['high', 't1', 't2']);
+        expect(res.hits.map((e) => e.id).toList(), ['t1', 't2', 'high']);
       }
     });
 

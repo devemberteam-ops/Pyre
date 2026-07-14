@@ -4302,8 +4302,18 @@ class _ChatScreenState extends State<ChatScreen> {
                         lookupCharacter: store.characterById,
                         responderId: responderId,
                       );
-                      final loreScan =
-                          scanLorebookHits(attached, chat.messages);
+                      final loreScan = scanLorebookHits(
+                        attached,
+                        chat.messages,
+                        // Lore fix #4 (2026-07-13): same macro fill as the
+                        // real turn scan — {{user}}/{{char}} keys and window
+                        // text resolve to the names this opener will use.
+                        fillMacros: (s) => fillNamePlaceholders(
+                          s,
+                          charName: responder?.name,
+                          personaName: userName,
+                        ),
+                      );
                       final activePreset = store.activePreset;
                       final presetMain = activePreset == null
                           ? ''

@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../services/chat_persona.dart';
+import '../services/chat_prompt_builder.dart' show fillNamePlaceholders;
 import '../services/live_sheet.dart' as lsheet;
 import '../services/lorebook_inject.dart';
 import '../services/memory.dart' as ltm;
@@ -670,7 +671,18 @@ _ChatBreakdown _buildBreakdown(AppStore store, Chat chat) {
   // broken. Seeding by message count keeps the display stable while
   // viewing and naturally re-rolls when a new turn lands.
   final loreScan = scanLorebookHits(attachedBooks, chat.messages,
-      rng: Random(chat.messages.length));
+      rng: Random(chat.messages.length),
+      // Lore fix #4 (2026-07-13): mirror the send-path macro fill so this
+      // diagnostic count matches what actually fires at send time. Primary
+      // character + the (possibly joined party) persona name — the same
+      // values the real scan resolves.
+      fillMacros: (s) => fillNamePlaceholders(
+            s,
+            charName: charNames.isNotEmpty ? charNames.first : null,
+            personaName: partyPersonas.length > 1
+                ? partyPersonas.map((p) => p.name).join(', ')
+                : (persona?.name ?? 'You'),
+          ));
   final loreFired = loreScan.hits.length;
   final loreTotal = loreScan.totalScanned - loreScan.skippedDisabled;
 

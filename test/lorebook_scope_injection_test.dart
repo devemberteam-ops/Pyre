@@ -343,9 +343,13 @@ void main() {
               'created must still activate (live binding beats stale snapshot)');
     });
 
-    test('probability does NOT suppress a CONSTANT always-active entry', () {
-      // A constant entry with useProbability + probability 0 must STILL fire:
-      // constant short-circuits the probability gate.
+    test('probability DOES govern a CONSTANT entry that opts into it', () {
+      // Lore family fix #2 (2026-07-13): this test previously pinned the
+      // AUDIT-CONFIRMED BUG — constant short-circuiting the probability gate.
+      // ST semantics: an author who writes "constant, 30%" asked for an
+      // ambient 30% entry. probability 0 now means NEVER fires, even for a
+      // constant. (A constant WITHOUT useProbability still always fires and
+      // consumes no roll — pinned in lore_fixes_test.dart.)
       final book = bookWith(LoreEntry(
         id: 'e-prob',
         content: 'CODE PROBCONST',
@@ -360,7 +364,6 @@ void main() {
         characterSnapshots: {char.id: char},
         messages: [userMsg('m1', 'hello')],
       );
-      // Seed the roll deterministically; it must be IGNORED for a constant.
       final result = buildChatPrompt(ChatPromptInputs(
         chat: chat,
         character: char,
@@ -373,7 +376,9 @@ void main() {
         loreSeed: 12345,
       ));
       final text = result.turns.map((t) => t.content).join('\n\n');
-      expect(text, contains('PROBCONST'));
+      expect(text, isNot(contains('PROBCONST')),
+          reason: 'probability 0 never fires — constant no longer bypasses '
+              'the author\'s own gate');
     });
   });
 }

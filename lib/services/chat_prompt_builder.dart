@@ -499,6 +499,20 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
           asm.afterTurns.any((t) => summaryMacroRegex.hasMatch(t.content)) ||
           asm.depthTurns.any((t) => summaryMacroRegex.hasMatch(t.content)));
 
+  // Persona party (2026-07): the user's side is a GROUP. When active,
+  // `{{user}}` resolves to the joined names. Both derived values equal the
+  // single-persona values when NOT a party, so every existing prompt stays
+  // byte-identical. Declared HERE (2026-07-13, lore fix #4) because the lore
+  // scan below now macro-fills its window/keys with the same names the
+  // prompt itself uses.
+  final isPersonaParty = inputs.personaParty.length > 1;
+  final personaUserName = isPersonaParty
+      ? inputs.personaParty
+          .map((p) => p.name)
+          .where((n) => n.trim().isNotEmpty)
+          .join(', ')
+      : (persona?.name ?? 'You');
+
   // Wave CB: lorebook gathering + scanning is a pair of pure functions in
   // `services/lorebook_inject.dart`.
   final attached = collectBoundLorebooks(
@@ -513,6 +527,15 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
     attached,
     chat.messages,
     rng: inputs.loreSeed == null ? null : Random(inputs.loreSeed),
+    // Lore fix #4 (2026-07-13): scan window + keys see the SAME
+    // {{user}}/{{char}} resolution the prompt uses — a key written as
+    // `{{user}}` (or a message that only names the persona via macro) now
+    // matches. Same filler as the final name-only pass.
+    fillMacros: (s) => fillNamePlaceholders(
+      s,
+      charName: character?.name,
+      personaName: personaUserName,
+    ),
   );
   final loreText = StringBuffer();
   for (final h in scan.hits) {
@@ -560,20 +583,12 @@ ChatPromptResult buildChatPrompt(ChatPromptInputs inputs) {
   // `{{description}}` et al.) and the marker-less `injectCardFallback` path
   // need it.
   final isPartyScene = inputs.partyMode && chat.characterIds.length > 1;
-  // Persona party (2026-07): the user's side is a GROUP. When active, the
-  // persona card becomes the joint block and `{{user}}` resolves to the joined
-  // names. Both derived values equal the single-persona values when NOT a
-  // party, so every existing prompt stays byte-identical.
-  final isPersonaParty = inputs.personaParty.length > 1;
+  // Persona party (2026-07): when active, the persona card becomes the joint
+  // block. (`isPersonaParty` + `personaUserName` are declared ABOVE the lore
+  // scan since lore fix #4 — same values, earlier binding.)
   final personaBlockText = isPersonaParty
       ? buildJointPersonaBlock(inputs.personaParty)
       : (persona == null ? '' : buildSinglePersonaBlock(persona));
-  final personaUserName = isPersonaParty
-      ? inputs.personaParty
-          .map((p) => p.name)
-          .where((n) => n.trim().isNotEmpty)
-          .join(', ')
-      : (persona?.name ?? 'You');
 
   // Party mode: every member's card, clearly delimited, followed by the
   // OWNER-TUNABLE joint-scene instruction — see the top-level

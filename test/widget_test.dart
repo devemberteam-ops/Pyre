@@ -618,7 +618,12 @@ void main() {
       expect(scan.hits.length, 3);
     });
 
-    test('hits sorted by descending order', () {
+    test('hits sorted by ASCENDING order (higher = nearer history)', () {
+      // Lore family fix #1 (2026-07-13): this test previously pinned the
+      // DESCENDING sort — the audit-confirmed inversion of ST's insertion-
+      // order semantics. Higher `order` now lands LAST (closest to the chat
+      // history, most model attention), matching what imported cards were
+      // authored against.
       final lore = book('lb-ord', 'Ordered', [
         entry(id: 'low', keys: ['cat'], content: 'low', order: 1),
         entry(id: 'high', keys: ['cat'], content: 'high', order: 10),
@@ -639,7 +644,7 @@ void main() {
       );
       final scan = scanLorebookHits(attached, chat.messages);
       expect(scan.hits.map((e) => e.content).toList(),
-          ['high', 'mid', 'low']);
+          ['low', 'mid', 'high']);
     });
 
     test(
