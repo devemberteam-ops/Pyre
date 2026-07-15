@@ -284,6 +284,21 @@ String? creatorModeLabel({
 /// case-insensitive and tolerates surrounding whitespace/newlines.
 const String kBuildSheetMarker = '[[BUILD_SHEET]]';
 
+/// 2026-07-14 (owner-reported "edits once, then only confirms"): the runtime
+/// injects build-STATUS lines into the session as assistant messages tagged
+/// `freeformWarning` — "✓ Card's ready. Open the Sheet tab…", "Building…",
+/// "⚠ The last build failed…". They render in the chat UI (with a distinct
+/// style) but are RUNTIME FEEDBACK, not the architect's own dialogue. When
+/// replayed verbatim into the architect turns, the model IMITATES them —
+/// producing a fake "✓ Card updated… Open the Sheet tab" confirmation with NO
+/// `[[BUILD_SHEET]]` marker, so no build fires. Excluding them from the
+/// architect replay (they stay in the visible chat) removes that template.
+///
+/// `freeformCue` (the synthetic user cue that drives a freeform BUILD cascade)
+/// is deliberately NOT excluded here — this filter guards the CONVERSATIONAL
+/// architect replay only, and a user-role cue is never imitated as output.
+bool isRuntimeStatusCreatorMessage(String? kind) => kind == 'freeformWarning';
+
 /// Matches the build-sheet marker anywhere in an assistant message,
 /// case-insensitive, with any surrounding whitespace/newlines absorbed so the
 /// stripped text reads cleanly. The `[[` / `]]` brackets are escaped for the

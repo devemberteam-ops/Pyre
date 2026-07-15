@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pyre/models/models.dart';
 import 'package:pyre/services/creator_cascade.dart';
 
 // Wave CY.18.231 (Creator Structured Build): the old `<<SHEET>>`-marker
@@ -193,6 +194,35 @@ void main() {
     test('empty / whitespace-only name becomes "(copy)"', () {
       expect(withCopyNameSuffix(''), '(copy)');
       expect(withCopyNameSuffix('   '), '(copy)');
+    });
+  });
+
+  group('isRuntimeStatusCreatorMessage (2026-07-14 fake-confirm fix)', () {
+    test('the runtime build-status kind is excluded from architect replay', () {
+      // These are the "✓ Card\'s ready…", "Building…", "⚠ failed…" lines the
+      // runtime injects. The model imitated them into fake, marker-less
+      // confirmations — so they must be filtered from the architect turns.
+      expect(isRuntimeStatusCreatorMessage('freeformWarning'), isTrue);
+    });
+
+    test('genuine dialogue and the freeform cue are NOT excluded', () {
+      expect(isRuntimeStatusCreatorMessage(null), isFalse,
+          reason: 'a normal user/assistant turn');
+      expect(isRuntimeStatusCreatorMessage('freeformCue'), isFalse,
+          reason: 'the synthetic USER cue drives the freeform cascade and is '
+              'never imitated as output');
+    });
+
+    test('appliedMarker round-trips and omits at default', () {
+      final fired = CreatorMessage(
+          role: 'assistant',
+          content: 'Done.',
+          appliedMarker: '[[BUILD_SHEET: description]]');
+      final back = CreatorMessage.fromJson(fired.toJson());
+      expect(back.appliedMarker, '[[BUILD_SHEET: description]]');
+      final plain = CreatorMessage(role: 'assistant', content: 'hi');
+      expect(plain.toJson().containsKey('appliedMarker'), isFalse,
+          reason: 'a turn that fired no build stays byte-identical');
     });
   });
 }

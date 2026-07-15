@@ -2284,7 +2284,22 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
             canvas: _sessionCanvas(store),
             conversation: [
               for (final m in messages.sublist(0, messages.length - 1))
-                CreatorTurn(m.role, _composeTurnContent(m)),
+                // 2026-07-14: skip the runtime's build-status lines
+                // (`freeformWarning`) — replaying "✓ Card's ready…" as the
+                // architect's own turn made the model IMITATE it and confirm
+                // edits WITHOUT the [[BUILD_SHEET]] marker (owner-reported
+                // "edits once, then only confirms"). They stay in the chat UI.
+                if (!isRuntimeStatusCreatorMessage(m.kind))
+                  CreatorTurn(
+                    m.role,
+                    // 2026-07-14: re-attach the marker a turn actually fired
+                    // (stripped for display) so the model's own history models
+                    // "apply ⇒ emit marker" consistently, not marker-less
+                    // confirmations it would then imitate.
+                    m.appliedMarker == null
+                        ? _composeTurnContent(m)
+                        : '${_composeTurnContent(m)}\n\n${m.appliedMarker}',
+                  ),
             ],
             mode: sessionMode,
             characterPrompt: preset?.characterPrompt,
@@ -2554,6 +2569,14 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
                     'provider, then type /build to run it again.',
                   );
                 } else {
+                  // 2026-07-14: record the marker this turn actually fired so
+                  // the architect replay shows the model a consistent
+                  // "apply ⇒ emit marker" pattern (stripped from display; see
+                  // CreatorMessage.appliedMarker). Re-persist the mutation.
+                  reply.appliedMarker = (marker?.scopedKeys == null)
+                      ? kBuildSheetMarker
+                      : '[[BUILD_SHEET: ${marker!.scopedKeys!.join(', ')}]]';
+                  _persistMessages(store, messages);
                   // Granular edit (2026-07-04, Gui): a scoped marker narrows
                   // the build to the named top-level fields — validated (and
                   // ignored outside edit sessions) inside the flow itself.

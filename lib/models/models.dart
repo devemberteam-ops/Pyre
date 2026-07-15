@@ -3276,12 +3276,26 @@ class CreatorMessage {
   ///     when the freeform build cascade engages, warning the user
   ///     about expected duration. Rendered with a distinct style.
   String? kind;
+
+  /// 2026-07-14 (owner-reported "edits once, then only confirms"): the
+  /// `[[BUILD_SHEET]]` marker that this assistant turn actually FIRED, if any
+  /// (bare or scoped, e.g. `[[BUILD_SHEET: description]]`). The marker is
+  /// stripped from [content] for display, so without recording it the
+  /// architect's replayed history showed only marker-less confirmations —
+  /// teaching the model to "confirm" WITHOUT the marker (so nothing builds).
+  /// Re-appended to the turn ONLY in the architect replay (never displayed),
+  /// giving the model a consistent "apply ⇒ emit marker" pattern. Null
+  /// (default, omitted from JSON) for every turn that didn't fire a build —
+  /// so existing sessions round-trip byte-identical.
+  String? appliedMarker;
+
   CreatorMessage({
     required this.role,
     required this.content,
     List<CreatorAttachment>? attachments,
     this.canvasSnapshot,
     this.kind,
+    this.appliedMarker,
   }) : attachments = attachments ?? <CreatorAttachment>[];
 
   factory CreatorMessage.fromJson(Map<String, dynamic> j) => CreatorMessage(
@@ -3294,6 +3308,7 @@ class CreatorMessage {
         canvasSnapshot: (j['canvasSnapshot'] as Map?)
             ?.cast<String, dynamic>(),
         kind: j['kind'] as String?,
+        appliedMarker: j['appliedMarker'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -3303,6 +3318,7 @@ class CreatorMessage {
           'attachments': attachments.map((a) => a.toJson()).toList(),
         if (canvasSnapshot != null) 'canvasSnapshot': canvasSnapshot,
         if (kind != null) 'kind': kind,
+        if (appliedMarker != null) 'appliedMarker': appliedMarker,
       };
 }
 
