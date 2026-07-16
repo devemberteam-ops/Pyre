@@ -93,6 +93,19 @@ void main() {
       expect(next.backgroundFit, ChatBackgroundFit.contain);
     });
 
+    test(
+        'bare copyWith() carries systemNoteEnabled — the field the '
+        'Customize Chat draft used to drop (customization audit 2026-07-15)',
+        () {
+      // The appearance screen's manual 15-field draft omitted the 16th field
+      // (systemNoteEnabled), and updateChatSettings full-replaces — so nudging
+      // ANY appearance slider silently reset the System note toggle. The
+      // screen now drafts via copyWith(); this pins that copyWith itself
+      // carries the field.
+      final on = ChatSettings(systemNoteEnabled: true).copyWith();
+      expect(on.systemNoteEnabled, isTrue);
+    });
+
     test('copyWith preserves a non-null nullable field when omitted', () {
       final src = fullyCustom();
       // Omitting a nullable arg must keep the current (non-null) value — this

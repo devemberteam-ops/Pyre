@@ -37,25 +37,13 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
   @override
   void initState() {
     super.initState();
-    final src = context.read<AppStore>().chatSettings;
-    _draft = ChatSettings(
-      deleteBehavior: src.deleteBehavior,
-      hideReasoning: src.hideReasoning,
-      bubbleAlpha: src.bubbleAlpha,
-      backgroundSource: src.backgroundSource,
-      customBackgroundDataUrl: src.customBackgroundDataUrl,
-      backgroundOpacity: src.backgroundOpacity,
-      backgroundFit: src.backgroundFit,
-      askPersonaOnNewChat: src.askPersonaOnNewChat,
-      // F2 bubble customization — carry the existing values into the draft.
-      userBubbleColor: src.userBubbleColor,
-      aiBubbleColor: src.aiBubbleColor,
-      bubbleCornerRadius: src.bubbleCornerRadius,
-      bubbleBorderWidth: src.bubbleBorderWidth,
-      bubbleBorderColor: src.bubbleBorderColor,
-      bubbleBlurSigma: src.bubbleBlurSigma,
-      bubbleTextScale: src.bubbleTextScale,
-    );
+    // Customization audit 2026-07-15 (same class the Behaviors screen fixed):
+    // the old manual field-by-field draft copied 15 of ChatSettings' 16
+    // fields — it omitted `systemNoteEnabled`, and `updateChatSettings` does
+    // a FULL replace, so nudging ANY slider here silently reset the System
+    // note toggle to its constructor default (false). copyWith() carries
+    // every field, including ones added later — this bug can't regrow.
+    _draft = context.read<AppStore>().chatSettings.copyWith();
   }
 
   /// F2: a small curated palette for the bubble-color swatches. A few
@@ -168,10 +156,14 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                     'small model pass to classify the new location and swap '
                     'the backdrop to match. It uses your configured model, '
                     'so it adds a little latency on a scene change.'),
+                // Customization audit 2026-07-15: the chat-menu item this
+                // pointed at is labeled "Chat background" — the old
+                // "Customize chat" name no longer exists there (written-paths
+                // debt, the design-study class).
                 HowItWorksBlock.paragraph(
                     'To trigger a scene-aware update by hand — or to correct '
-                    'the location — open a chat\'s menu → **Customize chat** '
-                    'and use **Detect location from chat**.'),
+                    'the location — open a chat\'s ⋮ menu → **Chat '
+                    'background** and use **Detect location from chat**.'),
               ]),
               HowItWorksSection('Reasoning', [
                 HowItWorksBlock.bullet(
@@ -391,7 +383,19 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                     },
                     child: Column(
                       children: [
-                        for (final source in ChatBackgroundSource.values)
+                        // Customization audit 2026-07-15: explicit order
+                        // matching the per-chat sheet (customize_chat_sheet)
+                        // — iterating enum .values put None BEFORE
+                        // Scene-aware here while the per-chat picker users
+                        // cross-reference lists it after, a small
+                        // consistency hit between the two screens.
+                        for (final source in const <ChatBackgroundSource>[
+                          ChatBackgroundSource.characterAvatar,
+                          ChatBackgroundSource.personaAvatar,
+                          ChatBackgroundSource.custom,
+                          ChatBackgroundSource.dynamic,
+                          ChatBackgroundSource.none,
+                        ])
                           ListTile(
                             contentPadding: EdgeInsets.zero,
                             dense: true,
