@@ -10,8 +10,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../services/chat_api.dart' show stripStreamArtifacts;
 import '../services/chat_persona.dart';
 import '../services/chat_prompt_builder.dart' show fillNamePlaceholders;
+import '../services/regex_rules.dart';
 import '../services/live_sheet.dart' as lsheet;
 import '../services/lorebook_inject.dart';
 import '../services/memory.dart' as ltm;
@@ -144,11 +146,13 @@ class _ChatInfoSheetState extends State<ChatInfoSheet> {
                 ),
               ),
               // Wave CY.18.100: context-window usage. Auto-detected from
-              // the active provider's /models (manual override wins), with
-              // a fill bar that warms toward red as you approach the cap.
+              // the provider's /models (manual override wins), with a fill
+              // bar that warms toward red as you approach the cap.
+              // Codex review 2026-07-15: per-chat preferred provider — the
+              // bar must size against the backend THIS chat actually uses.
               const SizedBox(height: 10),
               FutureBuilder<int?>(
-                future: _contextWindowFuture(store.activeProvider),
+                future: _contextWindowFuture(store.chatPrimaryProvider(chat)),
                 builder: (ctx, snap) => _ContextWindowRow(
                   loading: snap.connectionState == ConnectionState.waiting,
                   window: snap.data,
@@ -657,12 +661,12 @@ _ChatBreakdown _buildBreakdown(AppStore store, Chat chat) {
 
   // Wave 1.2.1: which entries are actually FIRING, and why. Display-only —
   // this is a separate scan from the one the turn builder runs at send
-  // time, so it never affects the real prompt. Entries gated by
-  // useProbability can (rarely) show a different fired/not-fired result
-  // here than the actual turn; every other entry (the overwhelming
-  // majority) is stable. `loreScan.totalScanned - loreScan.skippedDisabled`
-  // is every ENABLED entry across the attached books — the "M" in the
-  // "N of M" summary.
+  // time, so it never affects the real prompt. Only probability-gated
+  // entries can (rarely) show a different fired/not-fired result here than
+  // the actual turn — every other input now mirrors the send path (macro
+  // fill, character filter, effective text; Codex review 2026-07-15).
+  // `loreScan.totalScanned - loreScan.skippedDisabled` is every ENABLED
+  // entry across the attached books — the "M" in the "N of M" summary.
   //
   // Audit fix: SEED the probability roll. _buildBreakdown reruns on every
   // rebuild (store notify, expand/collapse taps), and an unseeded Random
@@ -682,7 +686,25 @@ _ChatBreakdown _buildBreakdown(AppStore store, Chat chat) {
             personaName: partyPersonas.length > 1
                 ? partyPersonas.map((p) => p.name).join(', ')
                 : (persona?.name ?? 'You'),
-          ));
+          ),
+      // Codex review 2026-07-15: without these the diagnostic could claim a
+      // character-filtered / hidden-greeting / regex-removed entry "fired"
+      // while the real prompt excluded it.
+      sceneCharacterNames: charNames,
+      effectiveTextOf: (m) {
+        if (hiddenByGreetingVariant(chat.messages, m)) return null;
+        switch (m.kind) {
+          case MessageKind.user:
+            return applyRegexRules(m.text, store.regexRules,
+                stream: RegexStream.userInput, stage: RegexStage.prompt);
+          case MessageKind.char:
+            return applyRegexRules(
+                stripStreamArtifacts(m.text), store.regexRules,
+                stream: RegexStream.aiOutput, stage: RegexStage.prompt);
+          default:
+            return m.text;
+        }
+      });
   final loreFired = loreScan.hits.length;
   final loreTotal = loreScan.totalScanned - loreScan.skippedDisabled;
 

@@ -3284,6 +3284,10 @@ class AppStore extends ChangeNotifier {
     chats.removeWhere((c) => c.id == id);
     // Wave CY.18.256: log a tombstone so the deletion propagates over sync.
     recordTombstone('chat', id);
+    // Codex review 2026-07-15: drop the chat's per-chat provider preference —
+    // the field's own doc promises cleanup on delete; leaving it violates the
+    // invariant and accumulates durable local garbage.
+    chatProviderOverrides.remove(id);
     _bump();
   }
 

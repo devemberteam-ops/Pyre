@@ -4313,6 +4313,39 @@ class _ChatScreenState extends State<ChatScreen> {
                           charName: responder?.name,
                           personaName: userName,
                         ),
+                        // Codex review 2026-07-15: this call was missing the
+                        // slice-B params — without sceneCharacterNames the
+                        // per-entry character filter fails OPEN here, so an
+                        // "only for Alice" entry leaked into Bob's opener; and
+                        // without effectiveTextOf the opener scan saw hidden
+                        // greetings / <think> text the turn scan excludes.
+                        sceneCharacterNames: [
+                          for (final id in chat.characterIds)
+                            (chat.characterSnapshots[id] ??
+                                        store.characterById(id))
+                                    ?.name ??
+                                '',
+                        ],
+                        effectiveTextOf: (m) {
+                          if (hiddenByGreetingVariant(chat.messages, m)) {
+                            return null;
+                          }
+                          switch (m.kind) {
+                            case MessageKind.user:
+                              return applyRegexRules(
+                                  m.text, store.regexRules,
+                                  stream: RegexStream.userInput,
+                                  stage: RegexStage.prompt);
+                            case MessageKind.char:
+                              return applyRegexRules(
+                                  stripStreamArtifacts(m.text),
+                                  store.regexRules,
+                                  stream: RegexStream.aiOutput,
+                                  stage: RegexStage.prompt);
+                            default:
+                              return m.text;
+                          }
+                        },
                       );
                       final activePreset = store.activePreset;
                       final presetMain = activePreset == null

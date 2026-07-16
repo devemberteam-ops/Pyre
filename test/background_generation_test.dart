@@ -1,14 +1,14 @@
 @TestOn('vm')
 library;
 
-// Background generation (2026-07-13, owner: "find another way to keep the app
-// alive in background"). Chat replies are LIGHT keepalive calls, which were
-// deliberate no-ops for the foreground service (Wave CY.18.35) — so Android
-// killed them off-focus. `promoteAllToHeavy` (driven by
-// UiPrefs.backgroundGeneration, default ON) promotes light calls to the
-// service. These pin the refcount bookkeeping: promotion, symmetric drain,
-// and toggle-mid-stream balance. (The plugin itself never runs in VM tests —
-// the platform gate bails — so the refcounts ARE the observable behaviour.)
+// Background generation (2026-07-13, owner request; REDESIGNED 2026-07-15
+// after Codex review). The service state is DERIVED — desired ⟺ heavyRefs>0
+// OR (backgroundGeneration && lightRefs>0) — instead of a promoted-refs
+// ledger, which mismatched under mixed cohorts (a light started before the
+// toggle and one after: the unpromoted stop drained the promoted ref and
+// killed the service mid-stream). These pin the derived semantics, including
+// Codex's exact interleaving. (The plugin never runs in VM tests — the
+// platform gate bails — so `serviceDesiredForTest` is the observable.)
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pyre/models/models.dart';
@@ -19,44 +19,76 @@ void main() {
   setUp(GenerationKeepAlive.resetForTest);
   tearDown(GenerationKeepAlive.resetForTest);
 
-  test('promotion OFF: light start/stop never touch the heavy count', () async {
+  test('setting OFF: light streams never want the service', () async {
     await GenerationKeepAlive.start(); // light
-    expect(GenerationKeepAlive.heavyRefsForTest, 0);
+    expect(GenerationKeepAlive.serviceDesiredForTest, isFalse);
     await GenerationKeepAlive.stop();
-    expect(GenerationKeepAlive.heavyRefsForTest, 0);
+    expect(GenerationKeepAlive.serviceDesiredForTest, isFalse);
   });
 
-  test('promotion ON: light calls ride the service and drain symmetrically',
+  test('heavy streams want the service regardless of the setting', () async {
+    await GenerationKeepAlive.start(heavy: true);
+    expect(GenerationKeepAlive.serviceDesiredForTest, isTrue);
+    await GenerationKeepAlive.stop(heavy: true);
+    expect(GenerationKeepAlive.serviceDesiredForTest, isFalse);
+  });
+
+  test('setting ON: light streams hold the service; symmetric release',
       () async {
     GenerationKeepAlive.promoteAllToHeavy = true;
-    await GenerationKeepAlive.start(); // promoted chat reply
-    expect(GenerationKeepAlive.heavyRefsForTest, 1);
+    await GenerationKeepAlive.start(); // chat reply
+    expect(GenerationKeepAlive.serviceDesiredForTest, isTrue);
     await GenerationKeepAlive.start(heavy: true); // creator cascade
-    expect(GenerationKeepAlive.heavyRefsForTest, 2);
-    await GenerationKeepAlive.stop(); // light stop drains the promoted ref
-    expect(GenerationKeepAlive.heavyRefsForTest, 1);
+    await GenerationKeepAlive.stop(); // chat reply done
+    expect(GenerationKeepAlive.serviceDesiredForTest, isTrue,
+        reason: 'the heavy cascade still holds it');
     await GenerationKeepAlive.stop(heavy: true);
-    expect(GenerationKeepAlive.heavyRefsForTest, 0);
+    expect(GenerationKeepAlive.serviceDesiredForTest, isFalse);
   });
 
-  test('toggling OFF mid-stream still balances back to zero', () async {
-    GenerationKeepAlive.promoteAllToHeavy = true;
-    await GenerationKeepAlive.start(); // promoted
-    GenerationKeepAlive.promoteAllToHeavy = false; // user flips it mid-reply
-    await GenerationKeepAlive.stop(); // drains the outstanding promoted ref
-    expect(GenerationKeepAlive.heavyRefsForTest, 0);
-    // And a light pair AFTER the flip is a plain no-op again.
+  test('Codex interleaving: mixed cohorts cannot kill a protected stream',
+      () async {
+    // 1. Light A starts with the toggle OFF (not protected).
     await GenerationKeepAlive.start();
-    expect(GenerationKeepAlive.heavyRefsForTest, 0);
+    // 2. Toggle ON. 3. Light B starts (protected).
+    GenerationKeepAlive.promoteAllToHeavy = true;
+    await GenerationKeepAlive.start();
+    expect(GenerationKeepAlive.serviceDesiredForTest, isTrue);
+    // 4. A finishes FIRST. Old ledger design: A's stop drained B's promoted
+    // ref and stopped the service while B was still generating.
     await GenerationKeepAlive.stop();
-    expect(GenerationKeepAlive.heavyRefsForTest, 0);
+    expect(GenerationKeepAlive.serviceDesiredForTest, isTrue,
+        reason: 'B is still in flight and the setting is ON — the service '
+            'must survive A\'s stop');
+    await GenerationKeepAlive.stop();
+    expect(GenerationKeepAlive.serviceDesiredForTest, isFalse);
   });
 
-  test('toggling ON mid-stream cannot underflow the heavy count', () async {
-    await GenerationKeepAlive.start(); // light, NOT promoted
-    GenerationKeepAlive.promoteAllToHeavy = true; // flipped mid-reply
-    await GenerationKeepAlive.stop(); // no promoted ref outstanding → no-op
-    expect(GenerationKeepAlive.heavyRefsForTest, 0);
+  test('toggling mid-stream takes effect on the CURRENT generation', () async {
+    GenerationKeepAlive.promoteAllToHeavy = true;
+    await GenerationKeepAlive.start(); // protected light
+    expect(GenerationKeepAlive.serviceDesiredForTest, isTrue);
+    // User turns the setting OFF mid-reply: the protection drops NOW —
+    // coherent with what they just asked for (documented behaviour).
+    GenerationKeepAlive.promoteAllToHeavy = false;
+    expect(GenerationKeepAlive.serviceDesiredForTest, isFalse);
+    // And back ON: the in-flight reply regains it.
+    GenerationKeepAlive.promoteAllToHeavy = true;
+    expect(GenerationKeepAlive.serviceDesiredForTest, isTrue);
+    await GenerationKeepAlive.stop();
+    expect(GenerationKeepAlive.serviceDesiredForTest, isFalse);
+  });
+
+  test('double-stop cannot underflow into a stuck state', () async {
+    GenerationKeepAlive.promoteAllToHeavy = true;
+    await GenerationKeepAlive.start();
+    await GenerationKeepAlive.stop();
+    await GenerationKeepAlive.stop(); // buggy extra stop — guarded
+    await GenerationKeepAlive.start();
+    expect(GenerationKeepAlive.serviceDesiredForTest, isTrue,
+        reason: 'refs must not have gone negative');
+    await GenerationKeepAlive.stop();
+    expect(GenerationKeepAlive.serviceDesiredForTest, isFalse);
   });
 
   test('UiPrefs.backgroundGeneration defaults ON and round-trips', () {

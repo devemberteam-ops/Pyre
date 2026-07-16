@@ -63,36 +63,55 @@ class GenerationKeepAlive {
   /// foreground service.
   static int _heavyRefs = 0;
 
+  /// Count of LIGHT streams currently in flight (chat replies, canvas
+  /// updates). Codex review 2026-07-15: the previous design PROMOTED lights
+  /// into the heavy count at start time and drained "first come" at stop —
+  /// which mismatched under mixed cohorts (light started before the toggle +
+  /// light started after it: the unpromoted one's stop could drain the
+  /// promoted one's ref and kill the service mid-stream). The service state
+  /// is now DERIVED, not counted: see [_serviceDesired].
+  static int _lightRefs = 0;
+
   /// 2026-07-13 (owner: "find another way to keep the app alive in
   /// background" — after generation-dies + error-banner + checkpoint-lock-hang
   /// all traced to Android suspending the app off-focus): when true, LIGHT
-  /// calls (regular chat replies) are PROMOTED to heavy, so the foreground
-  /// service keeps chat streams alive in background too — exactly the "future
-  /// change (a user setting to promote all calls to heavy)" the CY.18.35
-  /// comment anticipated. Driven by `UiPrefs.backgroundGeneration` (AppStore
-  /// mirrors it here on load + toggle). The notification cost that motivated
-  /// the light/heavy split is neutralised separately: the channel is now
-  /// IMPORTANCE_MIN (no status-bar icon, no sound — visible only when the
-  /// user expands the notification shade).
-  static bool promoteAllToHeavy = false;
+  /// calls (regular chat replies) also hold the foreground service alive —
+  /// exactly the "future change (a user setting to promote all calls to
+  /// heavy)" the CY.18.35 comment anticipated. Driven by
+  /// `UiPrefs.backgroundGeneration` (AppStore mirrors it here on load +
+  /// toggle). The notification cost that motivated the light/heavy split is
+  /// neutralised separately: the channel is IMPORTANCE_MIN (no status-bar
+  /// icon, no sound). The setter re-syncs the service immediately, so
+  /// toggling mid-stream takes effect on the CURRENT generation (off = the
+  /// protection drops now; on = the in-flight reply gains it) — coherent
+  /// with what the user just asked for, and impossible to desync.
+  static bool _promoteAllToHeavy = false;
+  static bool get promoteAllToHeavy => _promoteAllToHeavy;
+  static set promoteAllToHeavy(bool v) {
+    if (_promoteAllToHeavy == v) return;
+    _promoteAllToHeavy = v;
+    unawaited(_syncServiceState());
+  }
 
-  /// Count of LIGHT starts that were promoted while [promoteAllToHeavy] was
-  /// on. Light stops drain this first, so start/stop bookkeeping stays
-  /// symmetric even if the setting is toggled mid-stream (the net effect on
-  /// [_heavyRefs] always balances back to zero).
-  static int _promotedRefs = 0;
+  /// Whether the foreground service SHOULD be running right now — derived
+  /// from live state instead of a promoted-refs ledger, so it can never
+  /// drift from reality regardless of start/stop/toggle interleaving.
+  static bool get _serviceDesired =>
+      _heavyRefs > 0 || (_promoteAllToHeavy && _lightRefs > 0);
 
   /// TEST SEAMS — the plugin never runs in VM tests (platform gate), so the
-  /// refcounts are the observable behaviour.
+  /// derived desired-state is the observable behaviour.
   @visibleForTesting
-  static int get heavyRefsForTest => _heavyRefs;
+  static bool get serviceDesiredForTest => _serviceDesired;
   @visibleForTesting
   static void resetForTest() {
     _heavyRefs = 0;
-    _promotedRefs = 0;
+    _lightRefs = 0;
     _anyRefs = 0;
     _anyStartedAt = null;
-    promoteAllToHeavy = false;
+    _promoteAllToHeavy = false;
+    _syncRunning = false;
+    _syncDirty = false;
   }
 
   /// Wave CY.18.56: ANY-stream refcount (light OR heavy). Used purely
@@ -208,30 +227,68 @@ class GenerationKeepAlive {
       _anyStartedAt = DateTime.now();
     }
 
-    if (!heavy) {
-      // Wave CY.18.35: light calls are no-ops for the foreground service —
-      // UNLESS the user's background-generation setting promotes them
-      // (2026-07-13; this is the exact "future change" this comment always
-      // anticipated). A promoted light call is tracked in _promotedRefs so
-      // its matching light stop() drains the same accounting.
-      if (!promoteAllToHeavy) return;
-      _promotedRefs++;
+    if (heavy) {
+      _heavyRefs++;
+    } else {
+      _lightRefs++;
     }
-    _heavyRefs++;
-    debugPrint('[GenerationKeepAlive] start(heavy) refs=$_heavyRefs');
-    if (_heavyRefs > 1) return; // already running
-    await _ensureInit();
-    // Wave CY.18.46: bail on platforms without the plugin's native side.
+    await _syncServiceState();
+  }
+
+  /// Serialised reconciler: brings the actual foreground service in line
+  /// with [_serviceDesired]. Coalesced with a plain flag pair instead of a
+  /// shared future chain — a static future created inside one widget-test's
+  /// fake-async zone never completes for the NEXT test (dead zone), which
+  /// deadlocked every later `await start()`. With flags the worst cross-zone
+  /// case degrades to a skipped no-op sync, never a hang. The desired state
+  /// is RE-CHECKED after every await, which also closes the old dispose race
+  /// (screen disposed while _ensureInit was pending → the pending start used
+  /// to bring the service up with zero owners).
+  static bool _syncRunning = false;
+  static bool _syncDirty = false;
+  static Future<void> _syncServiceState() async {
+    // Pure no-op off Android/iOS — BEFORE any future is created, so VM tests
+    // and desktop never even allocate async state here.
     if (!_platformSupportsForegroundService) return;
+    if (_syncRunning) {
+      // A reconcile is in flight — mark it dirty so it re-checks the desired
+      // state once more before finishing (coalesces bursts of start/stop).
+      _syncDirty = true;
+      return;
+    }
+    _syncRunning = true;
     try {
-      if (await FlutterForegroundTask.isRunningService) {
-        debugPrint('[GenerationKeepAlive] service already running, skip start');
-        return;
+      do {
+        _syncDirty = false;
+        await _applyServiceState();
+      } while (_syncDirty);
+    } finally {
+      _syncRunning = false;
+    }
+  }
+
+  static Future<void> _applyServiceState() async {
+    if (!_serviceDesired) {
+      try {
+        if (await FlutterForegroundTask.isRunningService) {
+          if (_serviceDesired) return; // re-check after await
+          final result = await FlutterForegroundTask.stopService();
+          debugPrint('[GenerationKeepAlive] stopService → $result');
+        }
+      } catch (e) {
+        debugPrint('[GenerationKeepAlive] stop failed: $e');
       }
+      return;
+    }
+    await _ensureInit();
+    if (!_serviceDesired) return; // re-check after await
+    try {
+      if (await FlutterForegroundTask.isRunningService) return;
+      if (!_serviceDesired) return; // re-check after await
       final result = await FlutterForegroundTask.startService(
         serviceId: 4242, // unique per-app
-        // Neutral copy — this now covers chat replies (promoted lights), not
-        // just Creator cascades.
+        // Neutral copy — covers chat replies (light holders), not just
+        // Creator cascades.
         notificationTitle: 'Pyre is generating…',
         notificationText:
             'Keeping the connection alive so the response finishes even '
@@ -268,29 +325,15 @@ class GenerationKeepAlive {
       }
     }
 
-    if (!heavy) {
-      // Symmetric to start(): a light stop drains a promoted light start if
-      // any is outstanding; otherwise it stays a no-op. Draining "first come"
-      // (not per-call identity) is fine — the NET heavy count still balances
-      // to zero even if the setting was toggled mid-stream.
-      if (_promotedRefs == 0) return;
-      _promotedRefs--;
+    // Codex review 2026-07-15: symmetric per-KIND decrement (guarded so a
+    // buggy double-stop can't go negative), then reconcile the derived
+    // service state. No promoted-refs ledger to mismatch.
+    if (heavy) {
+      if (_heavyRefs > 0) _heavyRefs--;
+    } else {
+      if (_lightRefs > 0) _lightRefs--;
     }
-    if (_heavyRefs > 0) _heavyRefs--;
-    debugPrint('[GenerationKeepAlive] stop(heavy) refs=$_heavyRefs');
-    if (_heavyRefs > 0) return;
-    // Wave CY.18.46: same plugin-availability gate as `start`.
-    if (!_platformSupportsForegroundService) return;
-    try {
-      if (await FlutterForegroundTask.isRunningService) {
-        final result = await FlutterForegroundTask.stopService();
-        debugPrint('[GenerationKeepAlive] stopService → $result');
-      } else {
-        debugPrint('[GenerationKeepAlive] service was already stopped');
-      }
-    } catch (e) {
-      debugPrint('[GenerationKeepAlive] stop failed: $e');
-    }
+    await _syncServiceState();
   }
 
   /// Convenience: wrap an async action with start/stop. Use this when

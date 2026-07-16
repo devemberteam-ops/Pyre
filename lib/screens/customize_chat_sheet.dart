@@ -220,7 +220,9 @@ class _ChatBackgroundSectionState extends State<_ChatBackgroundSection> {
   /// poisons the auto-pipeline dedup key.
   Future<void> _classifyAndPick(
       AppStore store, Chat chat, String narrationText) async {
-    final provider = store.activeProvider;
+    // Codex review 2026-07-15: per-chat preferred provider — the automatic
+    // scene classification (chat screen) already honours it.
+    final provider = store.chatPrimaryProvider(chat);
     if (provider == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('No active provider — set one in API Connections first.'),

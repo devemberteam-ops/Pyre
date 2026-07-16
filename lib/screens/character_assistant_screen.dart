@@ -2376,9 +2376,19 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
   }
 
   List<CreatorMessage> _lorebookArchitectMessages(
-    List<CreatorMessage> messages, {
+    List<CreatorMessage> raw, {
     required bool embedded,
   }) {
+    // Codex review 2026-07-15: same fake-confirm class as the card architect —
+    // the runtime's status lines ("Building lorebook entries…", "✓ …") must
+    // NOT be replayed as the architect's own turns or the model imitates them
+    // and "confirms" without the build marker. Filter here so BOTH callers
+    // (standalone lorebook session + embedded drafting) are covered; the
+    // lines stay visible in the chat UI.
+    final messages = [
+      for (final m in raw)
+        if (!isRuntimeStatusCreatorMessage(m.kind)) m,
+    ];
     if (!embedded) return messages;
     final start = messages.lastIndexWhere(
       (m) =>

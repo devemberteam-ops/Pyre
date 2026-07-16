@@ -57,7 +57,11 @@ class _MemoryScreenState extends State<MemoryScreen> {
     final store = context.read<AppStore>();
     final chat = _liveChat(store);
     if (chat == null) return;
-    final provider = store.activeProvider;
+    // Codex review 2026-07-15: honour the per-chat preferred provider — the
+    // manual "Summarise now" used the GLOBAL one while auto-summarise (chat
+    // screen) already used the chat's, silently sending this chat's history
+    // to a different backend.
+    final provider = store.chatPrimaryProvider(chat);
     if (provider == null) {
       _toast('No active API provider — set one up in More → API.');
       return;
@@ -106,7 +110,8 @@ class _MemoryScreenState extends State<MemoryScreen> {
     final store = context.read<AppStore>();
     final chat = _liveChat(store);
     if (chat == null) return false;
-    final provider = store.activeProvider;
+    // Codex review 2026-07-15: per-chat provider (same as _runManualSummarise).
+    final provider = store.chatPrimaryProvider(chat);
     if (provider == null) {
       _toast('No active API provider — set one up in More → API.');
       return false;

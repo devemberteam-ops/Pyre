@@ -151,7 +151,9 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
   // ─── LLM actions ──────────────────────────────────────────────────────────
 
   Future<void> _runUpdate(AppStore store, Chat chat) async {
-    final provider = store.activeProvider;
+    // Codex review 2026-07-15: per-chat preferred provider — the auto Live
+    // Sheet path already honours it; the manual update must match.
+    final provider = store.chatPrimaryProvider(chat);
     if (provider == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -273,7 +275,8 @@ class _LiveSheetScreenState extends State<LiveSheetScreen> {
 
   Future<void> _seedEntity(
       AppStore store, Chat chat, LiveSheetEntity entity) async {
-    final provider = store.activeProvider;
+    // Codex review 2026-07-15: per-chat preferred provider (see _runUpdate).
+    final provider = store.chatPrimaryProvider(chat);
     if (provider == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
