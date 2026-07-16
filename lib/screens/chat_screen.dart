@@ -5987,8 +5987,13 @@ class _MessageBubbleState extends State<_MessageBubble> {
     // radius 12, no extra border, no blur) — see ChatSettings docs.
     // ---------------------------------------------------------------------
     // OOC and Scene are user-authored, so they use the user bubble colour.
-    final int? roleColorArgb =
-        isUserSide ? chatSettings.userBubbleColor : chatSettings.aiBubbleColor;
+    // Customization audit follow-up (2026-07-15): a character's own bubble
+    // tint wins over the global AI colour — in group chats each speaker gets
+    // their colour at a glance. Narrator/party messages (character == null)
+    // and characters without a tint keep the global value.
+    final int? roleColorArgb = isUserSide
+        ? chatSettings.userBubbleColor
+        : (widget.character?.bubbleColor ?? chatSettings.aiBubbleColor);
     final Color bubbleBase =
         roleColorArgb != null ? Color(roleColorArgb) : EmberColors.bgPanel;
     final Color bubbleColor = showsStaticPlaceholder
@@ -6039,6 +6044,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
           border: bubbleBorder,
           blurSigma: bubbleBlur,
           textScale: bubbleTextScale,
+          fontFamily: chatSettings.bubbleFontFamily,
           constraints: BoxConstraints(
             maxWidth: MediaQuery.of(context).size.width * 0.92,
             // When the variant is blank (e.g. a freshly-branched user line
@@ -6600,6 +6606,7 @@ class _BubbleSurface extends StatelessWidget {
   final Border? border;
   final double blurSigma;
   final double textScale;
+  final String? fontFamily;
   final BoxConstraints constraints;
   final Widget child;
 
@@ -6609,6 +6616,7 @@ class _BubbleSurface extends StatelessWidget {
     required this.border,
     required this.blurSigma,
     required this.textScale,
+    this.fontFamily,
     required this.constraints,
     required this.child,
   });
@@ -6628,6 +6636,24 @@ class _BubbleSurface extends StatelessWidget {
           textScaler: _ComposedTextScaler(mq.textScaler, textScale),
         ),
         child: content,
+      );
+    }
+    // Customization audit follow-up (2026-07-15): bubble font family. null =
+    // no wrapper at all (byte-identical render). The Theme override reaches
+    // MarkdownBody (its stylesheet derives from Theme.of), and the
+    // DefaultTextStyle.merge covers plain Texts that inherit the default
+    // style rather than a named theme style.
+    final family = fontFamily;
+    if (family != null) {
+      final theme = Theme.of(context);
+      content = Theme(
+        data: theme.copyWith(
+          textTheme: theme.textTheme.apply(fontFamily: family),
+        ),
+        child: DefaultTextStyle.merge(
+          style: TextStyle(fontFamily: family),
+          child: content,
+        ),
       );
     }
 

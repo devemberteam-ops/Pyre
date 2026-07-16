@@ -11,6 +11,7 @@ import '../services/token_estimate.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/avatar.dart';
+import '../widgets/bubble_color_row.dart';
 import '../widgets/gallery_editor_section.dart';
 import '../widgets/lorebook_binding_section.dart';
 import 'avatar_crop_screen.dart';
@@ -74,6 +75,9 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
   /// from the source character, set on the FIRST recrop (to the pre-crop
   /// `_avatar`), and flushed into the Character on _save → _composeFromForm.
   String? _avatarOriginal;
+
+  /// Per-character chat-bubble tint (null = the global AI bubble color).
+  int? _bubbleColor;
   /// Wave CC: bound lorebook ids (a mutable copy of the source
   /// character's list). Edited inline via the LorebookBindingSection
   /// chip UI; flushed back into the Character on _save.
@@ -129,6 +133,8 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
     // Non-destructive Recrop: carry the preserved original (null = never
     // cropped, `_avatar` is the full image).
     _avatarOriginal = c.avatarOriginal;
+    // Customization audit follow-up (2026-07-15): per-character bubble tint.
+    _bubbleColor = c.bubbleColor;
     // Wave CC: local copy of bound lorebook ids, mutated by the
     // LorebookBindingSection's onChanged and flushed back into the
     // character on _save → _composeFromForm.
@@ -259,7 +265,9 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
       // the source's avatarOriginal, but picking a NEW avatar / "Use as
       // avatar" resets the crop relationship, so we always re-assert the
       // tracked value (which those paths clear → null).
-      ..avatarOriginal = _avatarOriginal;
+      ..avatarOriginal = _avatarOriginal
+      // Per-character bubble tint (2026-07-15).
+      ..bubbleColor = _bubbleColor;
     // Wave CC: flush the locally-edited binding list — EXCEPT in "this chat
     // only" override mode. 1.2.1 audit fix #1: the injection engine reads
     // lorebook BINDINGS live-first from the library character
@@ -521,6 +529,19 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
                       child: const Text('Recrop'),
                     ),
                   ],
+                ),
+                const SizedBox(height: 8),
+                // Customization audit follow-up (2026-07-15, owner-approved):
+                // this character's chat-bubble tint — group chats tell
+                // speakers apart at a glance. Default = the global AI bubble
+                // color from Customize Chat. Same palette/row as there.
+                Text('Chat bubble color',
+                    style:
+                        TextStyle(color: EmberColors.textMid, fontSize: 13)),
+                const SizedBox(height: 6),
+                BubbleColorRow(
+                  selected: _bubbleColor,
+                  onPick: (argb) => setState(() => _bubbleColor = argb),
                 ),
                 const SizedBox(height: 8),
                 // Wave CM: live total of how heavy this card will be

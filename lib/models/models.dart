@@ -370,6 +370,11 @@ class Character {
   /// folder/tag/sort filters (they appear within whatever set the
   /// filters produced). Persisted across sessions and backups.
   bool favorite;
+  /// Customization audit follow-up (2026-07-15, owner-approved): per-character
+  /// chat-bubble tint (ARGB int). null = use the global aiBubbleColor — so a
+  /// group chat can tell speakers apart at a glance. Omit-at-default keeps
+  /// existing cards byte-identical; synced like every other card field.
+  int? bubbleColor;
   /// Wave CY.18.62: LAN sync metadata. `mtime` = millis-since-epoch
   /// of the last write that materially changed this record (set by
   /// the StoreBackend layer in Wave 63 — for now it just rides along
@@ -408,6 +413,7 @@ class Character {
     int? createdAt,
     int? updatedAt,
     this.createdInPyre = false,
+    this.bubbleColor,
     this.favorite = false,
     this.mtime = 0,
     this.deleted = false,
@@ -454,6 +460,7 @@ class Character {
         // imported, and false is the conservative answer for the
         // "Cards created" stat.
         createdInPyre: (j['createdInPyre'] as bool?) ?? false,
+        bubbleColor: _jInt(j['bubbleColor']),
         // Wave CY.18.38: legacy chars default to not-favorited.
         favorite: (j['favorite'] as bool?) ?? false,
         // Wave CY.18.62: legacy chars default mtime=0 (migration stamps now()).
@@ -490,6 +497,7 @@ class Character {
         'createdAt': createdAt,
         'updatedAt': updatedAt,
         if (createdInPyre) 'createdInPyre': true,
+        if (bubbleColor != null) 'bubbleColor': bubbleColor,
         if (favorite) 'favorite': true,
         // Wave CY.18.62: sync metadata. mtime always serialised so
         // pre-migration files get progressively stamped on each save.
@@ -2741,6 +2749,13 @@ class ChatSettings {
   /// menu stays uncluttered; opt in via Chat Settings → System note.
   bool systemNoteEnabled;
 
+  /// Customization audit follow-up (2026-07-15, owner-approved): the bubble
+  /// TEXT font family. null = the app default; 'serif' / 'monospace' map to
+  /// the platform's generic families (no bundled assets, no new deps).
+  /// Applied to the whole bubble body (plain text + markdown) via a Theme
+  /// textTheme.apply in _BubbleSurface.
+  String? bubbleFontFamily;
+
   ChatSettings({
     this.deleteBehavior = DeleteBehavior.onlyThis,
     this.hideReasoning = true,
@@ -2758,6 +2773,7 @@ class ChatSettings {
     this.bubbleBlurSigma = 0.0,
     this.bubbleTextScale = 1.0,
     this.systemNoteEnabled = false,
+    this.bubbleFontFamily,
   });
 
   bool get cascadeDelete => deleteBehavior == DeleteBehavior.thisAndAfter;
@@ -2787,6 +2803,7 @@ class ChatSettings {
     double? bubbleBlurSigma,
     double? bubbleTextScale,
     bool? systemNoteEnabled,
+    String? bubbleFontFamily,
   }) {
     return ChatSettings(
       deleteBehavior: deleteBehavior ?? this.deleteBehavior,
@@ -2806,6 +2823,7 @@ class ChatSettings {
       bubbleBlurSigma: bubbleBlurSigma ?? this.bubbleBlurSigma,
       bubbleTextScale: bubbleTextScale ?? this.bubbleTextScale,
       systemNoteEnabled: systemNoteEnabled ?? this.systemNoteEnabled,
+      bubbleFontFamily: bubbleFontFamily ?? this.bubbleFontFamily,
     );
   }
 
@@ -2844,6 +2862,7 @@ class ChatSettings {
       bubbleBlurSigma: (j['bubbleBlurSigma'] as num?)?.toDouble() ?? 0.0,
       bubbleTextScale: (j['bubbleTextScale'] as num?)?.toDouble() ?? 1.0,
       systemNoteEnabled: (j['systemNoteEnabled'] as bool?) ?? false,
+      bubbleFontFamily: j['bubbleFontFamily'] as String?,
     );
   }
 
@@ -2902,6 +2921,7 @@ class ChatSettings {
         'bubbleBlurSigma': bubbleBlurSigma,
         'bubbleTextScale': bubbleTextScale,
         'systemNoteEnabled': systemNoteEnabled,
+        if (bubbleFontFamily != null) 'bubbleFontFamily': bubbleFontFamily,
       };
 }
 

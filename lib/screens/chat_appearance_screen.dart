@@ -22,6 +22,7 @@ import '../services/image_pick.dart';
 import '../state/app_store.dart';
 import '../theme.dart';
 import '../widgets/how_it_works_card.dart';
+import '../widgets/bubble_color_row.dart';
 import '../widgets/lightbox.dart';
 
 class ChatAppearanceScreen extends StatefulWidget {
@@ -46,22 +47,8 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
     _draft = context.read<AppStore>().chatSettings.copyWith();
   }
 
-  /// F2: a small curated palette for the bubble-color swatches. A few
-  /// Ember-warm tones plus dark neutrals — enough to differentiate the
-  /// user vs AI bubble without a full color-picker dependency. A leading
-  /// `null` entry is the "Default" chip (clears the override → bgPanel).
-  static const List<int?> _bubblePalette = <int?>[
-    null, // Default (EmberColors.bgPanel)
-    0xFF14141B, // bgPanel (the legacy base, explicit)
-    0xFF1B1B24, // bgElevated (slightly lighter neutral)
-    0xFF2A1D17, // warm umber
-    0xFF3A2018, // ember brown
-    0xFF1A2230, // cool slate blue
-    0xFF152619, // deep green
-    0xFF241526, // muted plum
-    0xFF2C2233, // dusk violet
-    0xFF332016, // burnt sienna
-  ];
+  // Bubble palette + swatch row extracted to widgets/bubble_color_row.dart
+  // (2026-07-15) so the character editor's per-character tint shares them.
 
   /// Wave CK: pick an image from device storage and stash as base64
   /// data URL on the draft. Same pattern as character avatar uploads.
@@ -254,9 +241,9 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                   const Text('Your bubble color',
                       style: TextStyle(fontSize: 13)),
                   const SizedBox(height: 6),
-                  _BubbleColorRow(
+                  BubbleColorRow(
                     selected: _draft.userBubbleColor,
-                    palette: _bubblePalette,
+                    palette: kBubbleColorPalette,
                     onPick: (argb) {
                       setState(() => _draft.userBubbleColor = argb);
                       _commit();
@@ -267,9 +254,9 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                   const Text('Character bubble color',
                       style: TextStyle(fontSize: 13)),
                   const SizedBox(height: 6),
-                  _BubbleColorRow(
+                  BubbleColorRow(
                     selected: _draft.aiBubbleColor,
-                    palette: _bubblePalette,
+                    palette: kBubbleColorPalette,
                     onPick: (argb) {
                       setState(() => _draft.aiBubbleColor = argb);
                       _commit();
@@ -308,9 +295,9 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                     const Text('Border color',
                         style: TextStyle(fontSize: 13)),
                     const SizedBox(height: 6),
-                    _BubbleColorRow(
+                    BubbleColorRow(
                       selected: _draft.bubbleBorderColor,
-                      palette: _bubblePalette,
+                      palette: kBubbleColorPalette,
                       onPick: (argb) {
                         setState(() => _draft.bubbleBorderColor = argb);
                         _commit();
@@ -331,6 +318,37 @@ class _ChatAppearanceScreenState extends State<ChatAppearanceScreen> {
                         setState(() => _draft.bubbleTextScale = v),
                     onChangeEnd: () => _commit(),
                   ),
+                  // Bubble font (customization audit 2026-07-15, owner-
+                  // approved): platform generic families only — no bundled
+                  // assets, no new deps. Chip labels render IN their family
+                  // so the row previews itself.
+                  const SizedBox(height: 8),
+                  Text('Bubble font',
+                      style: TextStyle(
+                          color: EmberColors.textMid, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final opt in const <(String, String?)>[
+                        ('Default', null),
+                        ('Serif', 'serif'),
+                        ('Mono', 'monospace'),
+                      ])
+                        ChoiceChip(
+                          label: Text(opt.$1,
+                              style: TextStyle(fontFamily: opt.$2)),
+                          selected: _draft.bubbleFontFamily == opt.$2,
+                          selectedColor:
+                              EmberColors.primary.withValues(alpha: 0.25),
+                          onSelected: (_) {
+                            setState(() => _draft.bubbleFontFamily = opt.$2);
+                            _commit();
+                          },
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
                   // Background blur (frosted glass behind the bubble)
                   _SliderRow(
                     label: 'Background blur',
@@ -597,81 +615,6 @@ class _BgFitPicker extends StatelessWidget {
   }
 }
 
-/// Pyre 1.1 — F2: a row of tappable color swatches plus a leading "Default"
-/// chip. The palette's first entry is `null` (= Default → clears the
-/// override). Tapping a swatch reports its ARGB int; tapping Default reports
-/// `null`. The currently-selected entry gets a ring. No heavyweight
-/// color-picker dependency — a small curated palette is enough.
-class _BubbleColorRow extends StatelessWidget {
-  final int? selected;
-  final List<int?> palette;
-  final ValueChanged<int?> onPick;
-  const _BubbleColorRow({
-    required this.selected,
-    required this.palette,
-    required this.onPick,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        for (final argb in palette)
-          if (argb == null)
-            // "Default" chip — clears the override.
-            ChoiceChip(
-              label: const Text('Default'),
-              selected: selected == null,
-              selectedColor: EmberColors.primary.withValues(alpha: 0.25),
-              onSelected: (_) => onPick(null),
-            )
-          else
-            _Swatch(
-              color: Color(argb),
-              selected: selected == argb,
-              onTap: () => onPick(argb),
-            ),
-      ],
-    );
-  }
-}
-
-/// A single circular color swatch with a selection ring.
-class _Swatch extends StatelessWidget {
-  final Color color;
-  final bool selected;
-  final VoidCallback onTap;
-  const _Swatch({
-    required this.color,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          color: color,
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: selected ? EmberColors.primary : EmberColors.stroke,
-            width: selected ? 3 : 1,
-          ),
-        ),
-        child: selected
-            ? Icon(Icons.check, size: 16, color: EmberColors.textHigh)
-            : null,
-      ),
-    );
-  }
-}
 
 /// Pyre 1.1 — F2: a labelled slider row matching the existing "Bubble
 /// opacity" layout (label on the left, live value on the right, thin track).

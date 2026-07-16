@@ -106,6 +106,16 @@ void main() {
       expect(on.systemNoteEnabled, isTrue);
     });
 
+    test('bare copyWith() carries bubbleFontFamily (2026-07-15 feature)', () {
+      final serif = ChatSettings(bubbleFontFamily: 'serif').copyWith();
+      expect(serif.bubbleFontFamily, 'serif');
+      // JSON round-trip + omit-at-default (existing settings byte-identical).
+      final back =
+          ChatSettings.fromJson(ChatSettings(bubbleFontFamily: 'serif').toJson());
+      expect(back.bubbleFontFamily, 'serif');
+      expect(ChatSettings().toJson().containsKey('bubbleFontFamily'), isFalse);
+    });
+
     test('copyWith preserves a non-null nullable field when omitted', () {
       final src = fullyCustom();
       // Omitting a nullable arg must keep the current (non-null) value — this
