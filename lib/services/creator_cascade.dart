@@ -358,6 +358,31 @@ BuildMarkerResult detectAndStripBuildMarker(String raw) {
   );
 }
 
+/// 2026-07-15 (owner: "tinha que ter um meio de fazer direto"): the card/
+/// persona/scenario architect can start the EMBEDDED lorebook drafting flow
+/// straight from the conversation by emitting this marker — previously the
+/// only way in was the Sheet's "Add" button, a surface the user had to leave
+/// the chat to find. Stripped from display like [[BUILD_SHEET]]; the runtime
+/// then runs the exact same `_startEmbeddedLorebookDrafting` path the button
+/// uses.
+const String kStartLorebookMarker = '[[START_LOREBOOK]]';
+
+final RegExp _startLorebookMarkerRe = RegExp(
+  r'\s*\[\[\s*START_LOREBOOK\s*\]\]\s*',
+  caseSensitive: false,
+  multiLine: true,
+);
+
+/// Detect + strip the `[[START_LOREBOOK]]` marker. Pure, mirrors
+/// [detectAndStripBuildMarker]'s shape (minus scopes — this marker has none).
+BuildMarkerResult detectAndStripStartLorebookMarker(String raw) {
+  if (!_startLorebookMarkerRe.hasMatch(raw)) {
+    return BuildMarkerResult(raw.trim(), false);
+  }
+  final stripped = raw.replaceAll(_startLorebookMarkerRe, '\n').trim();
+  return BuildMarkerResult(stripped, true);
+}
+
 /// The special free-text Description scope. `[[BUILD_SHEET: description]]` is
 /// NOT a schema field — it routes to the SURGICAL Description text-edit, which
 /// rewrites the whole Description applying only the requested change and keeps

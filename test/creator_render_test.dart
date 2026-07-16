@@ -747,4 +747,33 @@ void main() {
           reason: 'Sunken Gate did not round-trip — scenario XML mismatch');
     });
   });
+
+  group('tags coercion (2026-07-15 owner report)', () {
+    test('a semicolon-joined tag STRING splits into individual tags', () {
+      // The model emitted "Slice of Life; Fantasy; Cozy" as one string — the
+      // old comma-only split kept it as ONE giant tag.
+      final out = renderCard({
+        'name': 'T',
+        'tags': 'Slice of Life; Fantasy; Cozy\nGreek Mythology, JRPG',
+      }, CreatorMode.character);
+      expect(out['tags'],
+          ['Slice of Life', 'Fantasy', 'Cozy', 'Greek Mythology', 'JRPG']);
+    });
+
+    test('a one-element LIST holding the joined string splits too', () {
+      final out = renderCard({
+        'name': 'T',
+        'tags': ['Sandbox; Adventure; Relaxing'],
+      }, CreatorMode.character);
+      expect(out['tags'], ['Sandbox', 'Adventure', 'Relaxing']);
+    });
+
+    test('a clean list stays byte-identical', () {
+      final out = renderCard({
+        'name': 'T',
+        'tags': ['Fantasy', 'Cozy'],
+      }, CreatorMode.character);
+      expect(out['tags'], ['Fantasy', 'Cozy']);
+    });
+  });
 }

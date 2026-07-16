@@ -225,4 +225,29 @@ void main() {
           reason: 'a turn that fired no build stays byte-identical');
     });
   });
+
+  group('[[START_LOREBOOK]] marker (2026-07-15, conversation-initiated)', () {
+    test('detects + strips, any case/whitespace', () {
+      final r = detectAndStripStartLorebookMarker(
+          'Boa — vamos montar o lorebook agora.\n[[START_LOREBOOK]]');
+      expect(r.found, isTrue);
+      expect(r.text, 'Boa — vamos montar o lorebook agora.');
+      final loose = detectAndStripStartLorebookMarker(
+          'ok\n  [[ start_lorebook ]]  \n');
+      expect(loose.found, isTrue);
+      expect(loose.text, 'ok');
+    });
+
+    test('absent marker returns input trimmed, found=false', () {
+      final r = detectAndStripStartLorebookMarker('  just chatting  ');
+      expect(r.found, isFalse);
+      expect(r.text, 'just chatting');
+    });
+
+    test('marker-only reply strips to empty (runtime shows fallback copy)', () {
+      final r = detectAndStripStartLorebookMarker('[[START_LOREBOOK]]');
+      expect(r.found, isTrue);
+      expect(r.text, isEmpty);
+    });
+  });
 }

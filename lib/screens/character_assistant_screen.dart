@@ -2533,7 +2533,7 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
               // `_sanitiseBlockMarker` already strips it for display), then
               // pass the cleaned visible text through a second confirmation
               // gate so a proposal/question cannot accidentally build.
-              final text = isLorebookMode
+              final rawText = isLorebookMode
                   ? _sanitiseLorebookArchitectText(_streamBuffer)
                   : _sanitiseBlockMarker(_streamBuffer);
               final marker = isLorebookMode
@@ -2542,13 +2542,28 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
               final markerPresent = isLorebookMode
                   ? hasBuildEntryMarker(_streamBuffer)
                   : shouldAutoFireBuildMarker(marker!);
+              // 2026-07-15 (owner: "tinha que ter um meio de fazer direto"):
+              // the card architect can start the embedded lorebook flow from
+              // the CONVERSATION via [[START_LOREBOOK]] — detect it on the raw
+              // buffer, strip it from the visible text (same treatment as
+              // [[BUILD_SHEET]]).
+              final startLore = isLorebookMode
+                  ? null
+                  : detectAndStripStartLorebookMarker(rawText);
+              final startLorebook = !isLorebookMode &&
+                  (startLore?.found ?? false) &&
+                  !markerPresent; // BUILD_SHEET wins if a model emits both
+              final text = startLore?.found == true ? startLore!.text : rawText;
               final markerOnlyLorebookBuild =
                   isLorebookMode && markerPresent && text.trim().isEmpty;
               reply.content = markerOnlyLorebookBuild
                   ? 'Building lorebook entries...'
                   : text.trim().isEmpty
-                  ? '⚠ The model returned an empty response. Try again, or '
-                        'switch the creator provider in More → API Connections.'
+                  ? (startLorebook
+                        ? 'Starting the embedded lorebook.'
+                        : '⚠ The model returned an empty response. Try again, '
+                              'or switch the creator provider in More → API '
+                              'Connections.')
                   : text;
               _persistMessages(store, messages);
               setState(() => _generating = false);
@@ -2593,6 +2608,15 @@ class _CharacterAssistantScreenState extends State<CharacterAssistantScreen> {
                   unawaited(_runStructuredBuildFlow(
                       targetKeys: marker?.scopedKeys));
                 }
+              } else if (startLorebook && !_structuredBuilding) {
+                // 2026-07-15: conversation-initiated embedded lorebook — the
+                // exact same path as the Sheet's "Add" button. Record the
+                // marker for the architect replay (apply ⇒ emit marker), then
+                // flip the session into lorebook drafting; the kickoff
+                // message it appends becomes the next turn's context.
+                reply.appliedMarker = kStartLorebookMarker;
+                _persistMessages(store, messages);
+                _startEmbeddedLorebookDrafting(store);
               }
             },
           );

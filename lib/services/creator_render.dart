@@ -725,20 +725,21 @@ String _asString(dynamic v) {
 
 List<String> _asTags(dynamic v) {
   if (v == null) return const [];
+  // 2026-07-15 (owner report): models emit tag strings with MIXED separators
+  // — "Slice of Life; Fantasy; Cozy" arrived as ONE giant tag because only
+  // commas split. Split on commas, semicolons AND newlines, and re-split
+  // LIST elements too (a one-element list holding the whole joined string
+  // was the same bug wearing a different shape).
+  final sep = RegExp(r'[,;\n]');
+  final Iterable<String> parts;
   if (v is List) {
-    return v
-        .map((e) => _asString(e).trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
+    parts = v.expand((e) => _asString(e).split(sep));
+  } else if (v is String) {
+    parts = v.split(sep);
+  } else {
+    return const [];
   }
-  if (v is String) {
-    return v
-        .split(',')
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
-  }
-  return const [];
+  return parts.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
 }
 
 /// Coerce a [CardFieldKind.greetingsList] value into the chara_card_v2

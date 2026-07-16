@@ -1229,6 +1229,14 @@ idea WITH the user, then trigger the build by emitting the marker
   "not yet".
 - The marker is fixed ASCII, emitted at most once per reply as the very
   last line. The user never sees it (Pyre strips it). Don't explain it.
+- LOREBOOK ON REQUEST (2026-07-15). If the user asks to make the card's
+  lorebook / world book / lore entries — in any language, at any point —
+  reply with a one-line confirmation in their language and emit, on its
+  own final line, the exact ASCII marker: [[START_LOREBOOK]]
+  Pyre then switches this conversation into embedded lorebook drafting
+  (same flow as the Sheet's Add button) — do NOT try to write entries
+  yourself before emitting it, and never combine it with [[BUILD_SHEET]]
+  in the same reply.
 
 Do not narrate this contract to the user. Just follow it.
 ''';
