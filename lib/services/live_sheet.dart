@@ -95,7 +95,13 @@ class LiveSheetDelta {
 final RegExp _lsStripLead = RegExp(r'^[\s>*#`\-•]*');
 final RegExp _lsEntityLine =
     RegExp(r'ENTITY\s*:\s*(.+?)\s*$', caseSensitive: false);
-final RegExp _lsOpLine = RegExp(r'^\s*([+\-~])\s*(.+?)\s*:\s*(.+)\s*$');
+// Audit round 19 (HIGH, 2026-07-15 fix): ONLY `+` (add) and `-` (remove) are
+// defined ops. The old `[+\-~]` also matched `~`, and `sign != '-'` then
+// treated it as an ADD — so an off-spec `~` line silently accumulated a
+// duplicate/junk fact the model trusts as authoritative. A `~` (or any other
+// leading sign) line now fails this regex and is ignored, exactly like any
+// other malformed line.
+final RegExp _lsOpLine = RegExp(r'^\s*([+\-])\s*(.+?)\s*:\s*(.+)\s*$');
 
 LiveSheetDelta parseLiveSheetDelta(String raw) {
   final ops = <LiveSheetDeltaOp>[];

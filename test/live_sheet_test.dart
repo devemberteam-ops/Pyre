@@ -168,6 +168,17 @@ void main() {
     test('lines before any ENTITY are ignored', () {
       expect(parseLiveSheetDelta('+ Clothing: x').ops, isEmpty);
     });
+    test('a ~ op is IGNORED, not treated as an add (audit round 19 HIGH)', () {
+      // Only + / - are defined ops. A `~` line used to slip through and
+      // accumulate a junk authoritative fact; it must now be dropped like any
+      // malformed line — the valid + on the next line still applies.
+      final d = parseLiveSheetDelta(
+          'ENTITY: Ren\n~ Mood: uncertain\n+ Clothing: coat\n');
+      expect(d.ops.length, 1);
+      expect(d.ops.single.section, LiveSheetSection.clothing);
+      expect(d.ops.single.text, 'coat');
+      expect(d.ops.any((o) => o.text == 'uncertain'), isFalse);
+    });
     test('fact text containing a colon is preserved', () {
       final d = parseLiveSheetDelta('ENTITY: Ren\n+ Possessions: key: brass');
       expect(d.ops.single.text, 'key: brass');

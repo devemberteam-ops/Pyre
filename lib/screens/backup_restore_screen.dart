@@ -76,6 +76,21 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
   /// pathological `jsonDecode` runs that would freeze the UI.
   static const int _maxImportBytes = 50 * 1024 * 1024; // 50 MB
 
+  /// Audit round 18 (2026-07-15 fix): export had NO size gate while import
+  /// rejects >[_maxImportBytes] — so a big library (lots of embedded images)
+  /// could produce a backup that Pyre then REFUSES to restore. Warn at export
+  /// time so the user isn't blindsided months later. Returns null when the
+  /// backup is safely restorable. The file is still written either way — it's
+  /// valid, and excluding heavy categories (or a future higher cap) can
+  /// recover it.
+  String? _oversizeWarning(int byteLength) {
+    if (byteLength <= _maxImportBytes) return null;
+    final mb = (byteLength / 1024 / 1024).toStringAsFixed(1);
+    return 'Heads-up: this backup is $mb MB, above the 50 MB restore limit — '
+        'Pyre may refuse to import it later. It\'s usually embedded images; '
+        'exclude the heaviest categories to shrink it.';
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = context.read<AppStore>();
@@ -608,6 +623,11 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
       final filename = 'pyre-backup-$ts.json';
       final file = File('${tmp.path}/$filename');
       await file.writeAsString(json);
+      final warn = _oversizeWarning(utf8.encode(json).length);
+      if (warn != null) {
+        messenger.showSnackBar(SnackBar(
+            content: Text(warn), duration: const Duration(seconds: 8)));
+      }
 
       final subject = _include.contains(_catProviders)
           ? 'Pyre backup (contains API keys — handle with care)'
@@ -652,11 +672,13 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
             .split('.')
             .first;
         final filename = 'emberchat-backup-$ts.json';
-        downloadBytesToBrowser(
-            utf8.encode(json), filename, 'application/json');
-        messenger.showSnackBar(
-          SnackBar(content: Text('Downloading $filename')),
-        );
+        final wbytes = utf8.encode(json);
+        downloadBytesToBrowser(wbytes, filename, 'application/json');
+        final warn = _oversizeWarning(wbytes.length);
+        messenger.showSnackBar(SnackBar(
+          content: Text(warn == null ? 'Downloading $filename' : warn),
+          duration: Duration(seconds: warn == null ? 4 : 8),
+        ));
         return;
       }
       final dir = await getApplicationDocumentsDirectory();
@@ -667,8 +689,12 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
           .first;
       final file = File('${dir.path}/emberchat-backup-$ts.json');
       await file.writeAsString(json);
+      final warn = _oversizeWarning(utf8.encode(json).length);
       messenger.showSnackBar(
-        SnackBar(content: Text('Saved to ${file.path}')),
+        SnackBar(
+          content: Text(warn == null ? 'Saved to ${file.path}' : warn),
+          duration: Duration(seconds: warn == null ? 4 : 8),
+        ),
       );
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Save failed: $e')));
