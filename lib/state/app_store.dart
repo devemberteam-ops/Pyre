@@ -92,6 +92,24 @@ class AppStore extends ChangeNotifier {
   /// (SyncEngine may not have ticked yet); erring toward a LOWER/STALER value
   /// is always safe — it reaps LESS, never resurrects.
   int? syncedPushWatermark;
+
+  /// Codex sync-review 2026-07-15 (monster #2 — "my edit never leaves this
+  /// device"): the highest mtime this device has ever ISSUED to a synced
+  /// record. Every sync stamp goes through [nextSyncMtime], which returns
+  /// `max(now, lastIssuedLocalMtime + 1)` — so an NTP correction that jumps
+  /// the wall clock BACKWARD can never mint an mtime at or below the push
+  /// cursor (which is a past issued value), which would have hidden the edit
+  /// from `mtime > cursor` push snapshots forever. Persisted so monotonicity
+  /// survives a restart. Wire-compatible: it only ever raises mtimes.
+  int lastIssuedLocalMtime = 0;
+
+  /// The monotonic sync timestamp source. See [lastIssuedLocalMtime].
+  int nextSyncMtime() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final next = now > lastIssuedLocalMtime ? now : lastIssuedLocalMtime + 1;
+    lastIssuedLocalMtime = next;
+    return next;
+  }
   /// Optional override: when non-null, the AI character builder uses
   /// this provider instead of [activeProviderId]. Useful when the user
   /// wants (a) an uncensored text model for chatting (DeepSeek, Soji),
@@ -641,6 +659,8 @@ class AppStore extends ChangeNotifier {
       // can't wall-clock-reap an un-pushed tombstone. Absent => null => no
       // sync relationship known yet (SyncEngine re-feeds it on init).
       syncedPushWatermark = (raw['syncedPushWatermark'] as num?)?.toInt();
+      lastIssuedLocalMtime =
+          (raw['lastIssuedLocalMtime'] as num?)?.toInt() ?? 0;
 
       // Hydrate API keys from OS-secure storage. We support a one-time
       // migration: if a provider blob still has a key in plain JSON (from
@@ -1204,41 +1224,30 @@ class AppStore extends ChangeNotifier {
   static const int _tombstoneTtlMs = 30 * 24 * 60 * 60 * 1000;
 
   void _gcTombstones() {
-    final cutoff =
-        DateTime.now().millisecondsSinceEpoch - _tombstoneTtlMs;
-    // Tier-1 H-1 (2026-07-02) — PUSH-BEFORE-REAP. A tombstone is reapable only
-    // once we've CONFIRMED it was pushed, or there's no sync peer to protect.
-    // [syncedPushWatermark] is the last client-clock push cursor SyncEngine
-    // confirmed:
-    //   * null  => no sync relationship => reap purely by wall-clock (the old
-    //     behavior — a single-device user has no peer that could resurrect);
-    //   * N     => sync active, everything with `mtime <= N` is on the hub =>
-    //     reap only what's been pushed, so a device that deleted then went
-    //     offline 30+ days can't wall-clock-reap its OWN un-pushed tombstone
-    //     (which would let a peer LWW-apply the live record BACK on reconnect).
-    // Erring toward a lower/staler watermark is always safe: it reaps LESS.
-    final w = syncedPushWatermark;
-    bool pushed(int mtime) => w == null || mtime <= w;
-    characters.removeWhere(
-        (c) => c.deleted && c.mtime > 0 && c.mtime < cutoff && pushed(c.mtime));
-    personas.removeWhere(
-        (p) => p.deleted && p.mtime > 0 && p.mtime < cutoff && pushed(p.mtime));
-    chats.removeWhere(
-        (c) => c.deleted && c.mtime > 0 && c.mtime < cutoff && pushed(c.mtime));
-    presets.removeWhere((p) =>
-        p.deleted &&
-        !p.locked &&
-        p.mtime > 0 &&
-        p.mtime < cutoff &&
-        pushed(p.mtime));
-    lorebooks.removeWhere(
-        (l) => l.deleted && l.mtime > 0 && l.mtime < cutoff && pushed(l.mtime));
-    // Wave CY.18.256: prune the synced tombstone LOG to the SAME 30-day
-    // window. After 30 days a device that's been offline that long can't
-    // sync cleanly anyway, so dropping the deletion record is safe and
-    // keeps the map from growing unbounded across deletes. H-1: same
-    // push-before-reap gate — an un-pushed deletion record must survive.
-    tombstones.removeWhere((_, mtime) => mtime < cutoff && pushed(mtime));
+    // Codex sync-review 2026-07-15 (monster #4 — "my delete came back"): the
+    // old push-before-reap gate proved only that THIS device pushed the
+    // tombstone to the hub, NOT that every peer RECEIVED it. A peer offline
+    // past the 30-day TTL finds the tombstone already reaped on the hub +
+    // here, then re-pushes its still-live copy on reconnect → resurrection.
+    //
+    // Until a per-device ACK-based GC exists (the dedicated sync release), the
+    // safe rule is: NEVER reap tombstones or soft-deleted records while a sync
+    // relationship exists. Unbounded growth of a deletion log is cheap next to
+    // silently resurrecting deleted data. [syncedPushWatermark] non-null is the
+    // "sync is/was configured" signal the engine already tracks.
+    if (syncedPushWatermark != null) return;
+
+    // Single-device, NEVER synced: no peer can resurrect anything, so reap by
+    // wall-clock exactly as before (keeps a solo user's blob from growing).
+    final cutoff = DateTime.now().millisecondsSinceEpoch - _tombstoneTtlMs;
+    characters
+        .removeWhere((c) => c.deleted && c.mtime > 0 && c.mtime < cutoff);
+    personas.removeWhere((p) => p.deleted && p.mtime > 0 && p.mtime < cutoff);
+    chats.removeWhere((c) => c.deleted && c.mtime > 0 && c.mtime < cutoff);
+    presets.removeWhere(
+        (p) => p.deleted && !p.locked && p.mtime > 0 && p.mtime < cutoff);
+    lorebooks.removeWhere((l) => l.deleted && l.mtime > 0 && l.mtime < cutoff);
+    tombstones.removeWhere((_, mtime) => mtime < cutoff);
   }
 
   /// Wave CY.18.256: record a deletion in the synced tombstone log. Called
@@ -1247,7 +1256,7 @@ class AppStore extends ChangeNotifier {
   /// `persona`, `chat`, `lorebook`, `preset`, `regexRule`, `provider`,
   /// `folder`, `creatorPreset`.
   void recordTombstone(String kind, String id) {
-    tombstones['$kind:$id'] = DateTime.now().millisecondsSinceEpoch;
+    tombstones['$kind:$id'] = nextSyncMtime();
   }
 
   /// Wave CY.18.256: true iff a tombstone for `<kind>:<id>` exists whose
@@ -1414,6 +1423,8 @@ class AppStore extends ChangeNotifier {
       // Tier-1 H-1: push-before-reap watermark (omit when null = no sync).
       if (syncedPushWatermark != null)
         'syncedPushWatermark': syncedPushWatermark,
+      if (lastIssuedLocalMtime > 0)
+        'lastIssuedLocalMtime': lastIssuedLocalMtime,
       'characters': characters.map((c) => c.toJson()).toList(),
       'personas': personas.map((p) => p.toJson()).toList(),
       'activePersonaId': activePersonaId,
@@ -1903,7 +1914,7 @@ class AppStore extends ChangeNotifier {
     // personas). Without it a provider stays at mtime=0 forever, and the
     // LAN key-sync diff (`mtime > since`) would NEVER include it — the
     // opt-in key sync silently did nothing for every provider.
-    p.mtime = DateTime.now().millisecondsSinceEpoch;
+    p.mtime = nextSyncMtime();
     providers.add(p);
     activeProviderId ??= p.id;
     // Push the API key to OS-secure storage; the JSON blob never sees it.
@@ -1922,7 +1933,7 @@ class AppStore extends ChangeNotifier {
     // Wave CY.18.268: bump mtime on every edit so the change is sync-eligible
     // (LAN key-sync only ships records whose `mtime > since`). Mirrors the
     // character / persona save paths.
-    provider.mtime = DateTime.now().millisecondsSinceEpoch;
+    provider.mtime = nextSyncMtime();
     providers[i] = provider;
     // Sync the secure store with whatever the editor saved. Empty key
     // deletes the slot rather than writing an empty sentinel.
@@ -1984,7 +1995,7 @@ class AppStore extends ChangeNotifier {
       ..id = newId('prov')
       ..name = '${original.name} (copy)'
       ..apiKey = original.apiKey
-      ..mtime = DateTime.now().millisecondsSinceEpoch;
+      ..mtime = nextSyncMtime();
     if (clone.apiKey.isNotEmpty) {
       // Mirror addProvider — the key never lives in the JSON blob.
       SecureKeys.write(clone.id, clone.apiKey);
@@ -2083,7 +2094,7 @@ class AppStore extends ChangeNotifier {
   Character addCharacter(Character c) {
     // Wave CY.18.70: stamp mtime so the SyncEngine push picks up this
     // new record on the next tick. mirrors updatedAt for consistency.
-    c.mtime = DateTime.now().millisecondsSinceEpoch;
+    c.mtime = nextSyncMtime();
     c.updatedAt = c.mtime;
     characters.add(c);
     _bump();
@@ -2094,7 +2105,7 @@ class AppStore extends ChangeNotifier {
     final i = characters.indexWhere((x) => x.id == c.id);
     if (i < 0) return;
     c.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    c.mtime = c.updatedAt; // Wave CY.18.70: sync metadata
+    c.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     characters[i] = c;
     _bump();
   }
@@ -2121,7 +2132,7 @@ class AppStore extends ChangeNotifier {
       ..name = '${original.name} (copy)'
       ..createdAt = DateTime.now().millisecondsSinceEpoch
       ..updatedAt = DateTime.now().millisecondsSinceEpoch
-      ..mtime = DateTime.now().millisecondsSinceEpoch;
+      ..mtime = nextSyncMtime();
     characters.insert(i + 1, clone);
     _bump();
     return clone;
@@ -2257,7 +2268,7 @@ class AppStore extends ChangeNotifier {
   }
 
   Persona addPersona(Persona p) {
-    p.mtime = DateTime.now().millisecondsSinceEpoch; // Wave CY.18.70
+    p.mtime = nextSyncMtime(); // Wave CY.18.70
     p.updatedAt = p.mtime;
     personas.add(p);
     activePersonaId ??= p.id;
@@ -2269,7 +2280,7 @@ class AppStore extends ChangeNotifier {
     final i = personas.indexWhere((x) => x.id == p.id);
     if (i < 0) return;
     p.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    p.mtime = p.updatedAt; // Wave CY.18.70: sync metadata
+    p.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     personas[i] = p;
     _bump();
   }
@@ -2291,7 +2302,7 @@ class AppStore extends ChangeNotifier {
       ..name = '${original.name} (copy)'
       ..createdAt = DateTime.now().millisecondsSinceEpoch
       ..updatedAt = DateTime.now().millisecondsSinceEpoch
-      ..mtime = DateTime.now().millisecondsSinceEpoch;
+      ..mtime = nextSyncMtime();
     personas.insert(i + 1, clone);
     _bump();
     return clone;
@@ -2418,7 +2429,7 @@ class AppStore extends ChangeNotifier {
     if (i < 0) return;
     characters[i].favorite = !characters[i].favorite;
     characters[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
-    characters[i].mtime = characters[i].updatedAt; // Wave CY.18.70
+    characters[i].mtime = nextSyncMtime(); // Wave CY.18.70
     _bump();
   }
 
@@ -2428,7 +2439,7 @@ class AppStore extends ChangeNotifier {
     if (i < 0) return;
     personas[i].favorite = !personas[i].favorite;
     personas[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
-    personas[i].mtime = personas[i].updatedAt; // Wave CY.18.70
+    personas[i].mtime = nextSyncMtime(); // Wave CY.18.70
     _bump();
   }
 
@@ -2438,7 +2449,7 @@ class AppStore extends ChangeNotifier {
   Folder createFolder(String name) {
     final f = Folder(id: newId('folder'), name: name.trim());
     // Mega-audit 2026-06-05 (F2): stamp mtime so the new folder syncs.
-    f.mtime = DateTime.now().millisecondsSinceEpoch;
+    f.mtime = nextSyncMtime();
     folders = [...folders, f];
     _bump();
     return f;
@@ -2450,7 +2461,7 @@ class AppStore extends ChangeNotifier {
     if (i < 0) return;
     folders[i].name = newName.trim();
     folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
-    folders[i].mtime = folders[i].updatedAt; // F2: sync metadata
+    folders[i].mtime = nextSyncMtime(); // F2: sync metadata
     _bump();
   }
 
@@ -2481,7 +2492,7 @@ class AppStore extends ChangeNotifier {
     if (folders[i].characterIds.contains(characterId)) return;
     folders[i].characterIds = [...folders[i].characterIds, characterId];
     folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
-    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
+    folders[i].mtime = nextSyncMtime(); // F2: sync membership change
     _bump();
   }
 
@@ -2493,7 +2504,7 @@ class AppStore extends ChangeNotifier {
     folders[i].characterIds =
         folders[i].characterIds.where((id) => id != characterId).toList();
     folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
-    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
+    folders[i].mtime = nextSyncMtime(); // F2: sync membership change
     _bump();
   }
 
@@ -2506,7 +2517,7 @@ class AppStore extends ChangeNotifier {
     if (folders[i].personaIds.contains(personaId)) return;
     folders[i].personaIds = [...folders[i].personaIds, personaId];
     folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
-    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
+    folders[i].mtime = nextSyncMtime(); // F2: sync membership change
     _bump();
   }
 
@@ -2516,7 +2527,7 @@ class AppStore extends ChangeNotifier {
     folders[i].personaIds =
         folders[i].personaIds.where((id) => id != personaId).toList();
     folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
-    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
+    folders[i].mtime = nextSyncMtime(); // F2: sync membership change
     _bump();
   }
 
@@ -2526,7 +2537,7 @@ class AppStore extends ChangeNotifier {
     if (folders[i].lorebookIds.contains(lorebookId)) return;
     folders[i].lorebookIds = [...folders[i].lorebookIds, lorebookId];
     folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
-    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
+    folders[i].mtime = nextSyncMtime(); // F2: sync membership change
     _bump();
   }
 
@@ -2536,7 +2547,7 @@ class AppStore extends ChangeNotifier {
     folders[i].lorebookIds =
         folders[i].lorebookIds.where((id) => id != lorebookId).toList();
     folders[i].updatedAt = DateTime.now().millisecondsSinceEpoch;
-    folders[i].mtime = folders[i].updatedAt; // F2: sync membership change
+    folders[i].mtime = nextSyncMtime(); // F2: sync membership change
     _bump();
   }
 
@@ -2883,7 +2894,7 @@ class AppStore extends ChangeNotifier {
     );
     // Wave CY.18.70: stamp mtime on new chat so the next sync push
     // includes it. Same dance for addLorebook below.
-    chat.mtime = DateTime.now().millisecondsSinceEpoch;
+    chat.mtime = nextSyncMtime();
     chats.add(chat);
     _bump();
     return chat;
@@ -2895,7 +2906,7 @@ class AppStore extends ChangeNotifier {
   /// messages — we just stamp sync metadata and add it. Mirrors the
   /// `chats.add(chat); _bump();` tail of [startChatWith].
   Chat addImportedChat(Chat chat) {
-    chat.mtime = DateTime.now().millisecondsSinceEpoch;
+    chat.mtime = nextSyncMtime();
     chats.add(chat);
     _bump();
     return chat;
@@ -2906,7 +2917,7 @@ class AppStore extends ChangeNotifier {
     if (chat == null) return;
     chat.messages.add(m);
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    chat.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     _bump();
   }
 
@@ -2962,7 +2973,7 @@ class AppStore extends ChangeNotifier {
       msg.variants[idx] = newText;
     }
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    chat.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     if (streamingNotifier != null) {
       // Isolated path: schedule the SAME 600ms persist debounce as always,
       // but skip the perf-cache invalidation (Fix 4 — char/persona/lorebook
@@ -3020,7 +3031,7 @@ class AppStore extends ChangeNotifier {
     msg.variants.add('');
     msg.selectedVariant = msg.variants.length - 1;
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    chat.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     _bump();
     return msg.selectedVariant;
   }
@@ -3096,7 +3107,7 @@ class AppStore extends ChangeNotifier {
     }
 
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    chat.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     _bump();
   }
 
@@ -3142,7 +3153,7 @@ class AppStore extends ChangeNotifier {
       msg.selectedVariant = msg.selectedVariant - 1;
     }
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    chat.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     _bump();
   }
 
@@ -3182,7 +3193,7 @@ class AppStore extends ChangeNotifier {
     }
 
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    chat.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     _bump();
   }
 
@@ -3215,7 +3226,7 @@ class AppStore extends ChangeNotifier {
       chat.messages.removeWhere((m) => m.id == messageId);
     }
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    chat.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     _bump();
   }
 
@@ -3230,7 +3241,7 @@ class AppStore extends ChangeNotifier {
     if (chat == null || chat.messages.isEmpty) return;
     chat.messages.clear();
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // sync metadata, mirrors removeMessage
+    chat.mtime = nextSyncMtime(); // sync metadata, mirrors removeMessage
     _bump();
   }
 
@@ -3247,7 +3258,7 @@ class AppStore extends ChangeNotifier {
     // "discover" them on its own.
     _syncChatLiveSheetEntities(chat);
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    chat.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     _bump();
   }
 
@@ -3276,7 +3287,7 @@ class AppStore extends ChangeNotifier {
     if (chat == null) return;
     chat.characterIds.remove(characterId);
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    chat.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     _bump();
   }
 
@@ -3299,7 +3310,7 @@ class AppStore extends ChangeNotifier {
     final t = title?.trim();
     chat.title = (t != null && t.isNotEmpty) ? t : null;
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    chat.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     _bump();
   }
 
@@ -3312,7 +3323,7 @@ class AppStore extends ChangeNotifier {
     if (chat == null) return;
     chat.partyMode = value;
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // sync metadata
+    chat.mtime = nextSyncMtime(); // sync metadata
     _bump();
   }
 
@@ -3341,7 +3352,7 @@ class AppStore extends ChangeNotifier {
     // tracked entity (existing entities stay — history remains valid).
     _syncChatLiveSheetEntities(chat);
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt; // Wave CY.18.70: sync metadata
+    chat.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     _bump();
   }
 
@@ -3373,7 +3384,7 @@ class AppStore extends ChangeNotifier {
     // tracked entity (the sheet was structurally single-persona before).
     _syncChatLiveSheetEntities(chat);
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt;
+    chat.mtime = nextSyncMtime();
     _bump();
   }
 
@@ -3392,7 +3403,7 @@ class AppStore extends ChangeNotifier {
   /// notifies once — mirroring `addMessage` / `setChatPersona`.
   void touchChat(Chat chat) {
     chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = chat.updatedAt;
+    chat.mtime = nextSyncMtime();
     _bump();
   }
 
@@ -3422,7 +3433,7 @@ class AppStore extends ChangeNotifier {
   }
 
   Lorebook addLorebook(Lorebook l) {
-    l.mtime = DateTime.now().millisecondsSinceEpoch; // Wave CY.18.70
+    l.mtime = nextSyncMtime(); // Wave CY.18.70
     lorebooks.add(l);
     _bump();
     return l;
@@ -3432,7 +3443,7 @@ class AppStore extends ChangeNotifier {
     final i = lorebooks.indexWhere((x) => x.id == l.id);
     if (i < 0) return;
     l.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    l.mtime = l.updatedAt; // Wave CY.18.70: sync metadata
+    l.mtime = nextSyncMtime(); // Wave CY.18.70: sync metadata
     lorebooks[i] = l;
     _bump();
   }
@@ -3478,7 +3489,7 @@ class AppStore extends ChangeNotifier {
       target.disabledInheritedLorebookIds.add(bookId);
       // F1: bump mtime so the per-chat opt-out propagates over sync.
       target.updatedAt = DateTime.now().millisecondsSinceEpoch;
-      target.mtime = target.updatedAt;
+      target.mtime = nextSyncMtime();
       _bump();
     }
   }
@@ -3497,7 +3508,7 @@ class AppStore extends ChangeNotifier {
     if (target.disabledInheritedLorebookIds.remove(bookId)) {
       // F1: bump mtime so the per-chat re-enable propagates over sync.
       target.updatedAt = DateTime.now().millisecondsSinceEpoch;
-      target.mtime = target.updatedAt;
+      target.mtime = nextSyncMtime();
       _bump();
     }
   }
@@ -3519,7 +3530,7 @@ class AppStore extends ChangeNotifier {
   List<Preset> get visiblePresets => presets;
 
   Preset addPreset(Preset p) {
-    p.mtime = DateTime.now().millisecondsSinceEpoch; // Wave CY.18.70
+    p.mtime = nextSyncMtime(); // Wave CY.18.70
     presets.add(p);
     _bump();
     return p;
@@ -3529,7 +3540,7 @@ class AppStore extends ChangeNotifier {
     if (p.locked) return; // never mutate the locked default
     final i = presets.indexWhere((x) => x.id == p.id);
     if (i < 0) return;
-    p.mtime = DateTime.now().millisecondsSinceEpoch; // Wave CY.18.70
+    p.mtime = nextSyncMtime(); // Wave CY.18.70
     presets[i] = p;
     _bump();
   }
@@ -3565,7 +3576,7 @@ class AppStore extends ChangeNotifier {
   }
 
   CreatorPreset addCreatorPreset(CreatorPreset p) {
-    p.mtime = DateTime.now().millisecondsSinceEpoch; // F2: sync metadata
+    p.mtime = nextSyncMtime(); // F2: sync metadata
     creatorPresets.add(p);
     _bump();
     return p;
@@ -3575,7 +3586,7 @@ class AppStore extends ChangeNotifier {
     if (p.locked) return; // never mutate the locked default
     final i = creatorPresets.indexWhere((x) => x.id == p.id);
     if (i < 0) return;
-    p.mtime = DateTime.now().millisecondsSinceEpoch; // F2: sync metadata
+    p.mtime = nextSyncMtime(); // F2: sync metadata
     creatorPresets[i] = p;
     _bump();
   }
@@ -3603,7 +3614,7 @@ class AppStore extends ChangeNotifier {
   // Regex rules (Pyre 1.1 — F4). Mirrors the Lorebook CRUD + tombstone path.
 
   RegexRule addRegexRule(RegexRule r) {
-    r.mtime = DateTime.now().millisecondsSinceEpoch;
+    r.mtime = nextSyncMtime();
     // 2026-07-03: a new/imported rule lands at the END of the run order.
     // (Restore/sync bypass this method, so explicit orders survive intact.)
     var maxOrder = -1;
@@ -3622,7 +3633,6 @@ class AppStore extends ChangeNotifier {
   /// assigns positions and stamps mtime on the rules that moved; the
   /// existing per-record LWW sync carries the rest.
   void reorderRegexRules(List<String> orderedIds) {
-    final now = DateTime.now().millisecondsSinceEpoch;
     final byId = {for (final r in regexRules) r.id: r};
     var changed = false;
     for (var i = 0; i < orderedIds.length; i++) {
@@ -3630,7 +3640,7 @@ class AppStore extends ChangeNotifier {
       if (r == null) continue;
       if (r.sortOrder != i) {
         r.sortOrder = i;
-        r.mtime = now;
+        r.mtime = nextSyncMtime(); // Codex 2026-07-15: monotonic sync stamp
         changed = true;
       }
     }
@@ -3654,7 +3664,7 @@ class AppStore extends ChangeNotifier {
   void updateRegexRule(RegexRule r) {
     final i = regexRules.indexWhere((x) => x.id == r.id);
     if (i < 0) return;
-    r.mtime = DateTime.now().millisecondsSinceEpoch; // sync metadata
+    r.mtime = nextSyncMtime(); // sync metadata
     regexRules[i] = r;
     _bump();
   }
@@ -3918,7 +3928,7 @@ class AppStore extends ChangeNotifier {
   /// LiveSheet/Script which sync via the whole-state blob); mirrors the
   /// provider / character save paths. Persists + notifies via [_bump].
   void updateGuideSettings(GuideSettings gs) {
-    gs.mtime = DateTime.now().millisecondsSinceEpoch;
+    gs.mtime = nextSyncMtime();
     guideSettings = gs;
     // SYNC W3: also stamp the settings-unit watermark so this rides the LWW
     // settings sync (its own GuideSettings.mtime is separate legacy bookkeeping).
@@ -4108,9 +4118,10 @@ class AppStore extends ChangeNotifier {
     if (uiPrefs.syncProviderKeys == value) return;
     uiPrefs.syncProviderKeys = value;
     if (value) {
-      final now = DateTime.now().millisecondsSinceEpoch;
+      // Codex 2026-07-15: monotonic sync stamps so a backward clock can't
+      // hide the re-keyed providers from the push snapshot.
       for (final p in providers) {
-        p.mtime = now;
+        p.mtime = nextSyncMtime();
       }
     }
     _bump();

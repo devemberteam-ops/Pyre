@@ -79,16 +79,23 @@ void main() {
       );
     });
 
-    test('old soft-delete IS reaped once it has been pushed (mtime <= watermark)',
+    test('a pushed old soft-delete is now RETAINED while synced (Codex #4)',
         () {
+      // 2026-07-15: the old push-before-reap gate proved only that THIS
+      // device pushed to the hub — NOT that every peer RECEIVED the delete.
+      // A peer offline past the 30-day TTL would find the tombstone reaped
+      // and resurrect its live copy. Until per-device ACK GC exists, NOTHING
+      // is reaped while a sync relationship exists — even a pushed, ancient
+      // tombstone. (This test previously asserted the OPPOSITE — it pinned
+      // the confirmed bug as spec.)
       final store = AppStore(storage: _MemoryBackend());
       store.characters.add(_oldGhost('g1', mtime: 1000));
-      store.setSyncedPushWatermark(2000); // 1000 <= 2000 => pushed
+      store.setSyncedPushWatermark(2000); // pushed — but that's no longer enough
 
       store.debugRunTombstoneGc();
 
-      expect(store.characters.any((c) => c.id == 'g1'), isFalse,
-          reason: 'a pushed, 30-day-old tombstone is safe to free');
+      expect(store.characters.any((c) => c.id == 'g1'), isTrue,
+          reason: 'while synced, retention beats resurrection (growth is cheap)');
     });
 
     test('no sync relationship (watermark null) reaps by wall-clock — unchanged',
@@ -103,18 +110,22 @@ void main() {
           reason: 'single-device users keep the old wall-clock GC behavior');
     });
 
-    test('the synced tombstone LOG entry follows the same push-gate', () {
+    test('the synced tombstone LOG entry is retained regardless of push state',
+        () {
+      // 2026-07-15 (Codex #4): the deletion LOG follows the same retain-while-
+      // synced rule as the soft-deleted records — pushed or not, it survives
+      // as long as a sync relationship exists.
       final store = AppStore(storage: _MemoryBackend());
       store.tombstones['character:g1'] = 1000;
 
       store.setSyncedPushWatermark(500); // un-pushed
       store.debugRunTombstoneGc();
-      expect(store.tombstones.containsKey('character:g1'), isTrue,
-          reason: 'the deletion LOG must survive until it is pushed');
+      expect(store.tombstones.containsKey('character:g1'), isTrue);
 
-      store.setSyncedPushWatermark(2000); // pushed
+      store.setSyncedPushWatermark(2000); // "pushed" — still retained now
       store.debugRunTombstoneGc();
-      expect(store.tombstones.containsKey('character:g1'), isFalse);
+      expect(store.tombstones.containsKey('character:g1'), isTrue,
+          reason: 'retained while synced — a peer may still not have received it');
     });
 
     test('a RECENT delete is never reaped regardless of watermark', () {
