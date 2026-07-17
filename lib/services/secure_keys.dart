@@ -71,20 +71,34 @@ class SecureKeys {
   /// completes (so async chains don't break), but the user-visible
   /// state will surface the failure on next Storage-screen open.
   static Future<void> write(String providerId, String key) async {
+    // Fire-and-forget contract (no-throw) preserved for the many callers that
+    // don't need to know; the checked variant does the work.
+    await tryWrite(providerId, key);
+  }
+
+  /// Sync-B blocker 4 (2026-07-17, Codex review): a CHECKED write that reports
+  /// success. [write] deliberately swallows storage failures (returns normally),
+  /// which is wrong for the sync-apply path: it would put a key in RAM, answer
+  /// "accepted", and — because the JSON blob deliberately omits `apiKey` — LOSE
+  /// the key on the next restart while the client already advanced its cursor.
+  /// The sync path uses this and returns `retryable_error` (holding the cursor)
+  /// WITHOUT mutating RAM when it returns false. Failures are still logged.
+  static Future<bool> tryWrite(String providerId, String key) async {
     // 1.1.3: a web build proxies LLM calls through the paired desktop and NEVER
     // uses a locally-stored key, but flutter_secure_storage_web can throw a
-    // null-check writing one — surfacing a scary "API key failed to write"
-    // banner for a key that would never be used. Skip secure storage on web.
-    if (kIsWeb) return;
+    // null-check writing one. Skip secure storage on web — treat as no-op success.
+    if (kIsWeb) return true;
     final slot = 'provider:$providerId';
     try {
       if (key.isEmpty) {
         await _store.delete(key: slot);
-        return;
+      } else {
+        await _store.write(key: slot, value: key);
       }
-      await _store.write(key: slot, value: key);
+      return true;
     } catch (e) {
       _logError('write $slot', e);
+      return false;
     }
   }
 

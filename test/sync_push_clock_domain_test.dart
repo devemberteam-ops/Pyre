@@ -104,23 +104,23 @@ void main() {
   // nextPushCursor — the pure advance/hold logic the fix adds to SyncEngine.
   // -------------------------------------------------------------------------
   group('nextPushCursor advance/hold', () {
-    test('advances to pushClock on a clean push', () {
+    test('advances to pushBoundary on a clean push', () {
       final next = nextPushCursor(
         current: 1000,
-        pushClock: 5000,
+        pushBoundary: 5000,
         pushRan: true,
         hardReject: false,
         conflictAbort: false,
       );
       expect(next, 5000,
-          reason: 'a successful push moves the cursor to the client clock '
-              'captured before the collection snapshot');
+          reason: 'a successful push moves the cursor to the logical boundary '
+              '(lastIssuedLocalMtime) captured before the collection snapshot');
     });
 
     test('HOLDS on a hard reject (so the rejected record re-collects next tick)', () {
       final next = nextPushCursor(
         current: 1000,
-        pushClock: 5000,
+        pushBoundary: 5000,
         pushRan: true,
         hardReject: true,
         conflictAbort: false,
@@ -133,7 +133,7 @@ void main() {
     test('HOLDS on conflict-dialog dismissal (conflictAbort)', () {
       final next = nextPushCursor(
         current: 1000,
-        pushClock: 5000,
+        pushBoundary: 5000,
         pushRan: false,
         hardReject: false,
         conflictAbort: true,
@@ -144,7 +144,7 @@ void main() {
     test('HOLDS when the push did not run (e.g. generation in-flight)', () {
       final next = nextPushCursor(
         current: 1000,
-        pushClock: 5000,
+        pushBoundary: 5000,
         pushRan: false,
         hardReject: false,
         conflictAbort: false,
@@ -157,14 +157,54 @@ void main() {
     test('never moves the cursor backwards', () {
       final next = nextPushCursor(
         current: 9000,
-        pushClock: 5000, // a clock that briefly went backwards
+        pushBoundary: 5000, // a boundary that briefly went backwards
         pushRan: true,
         hardReject: false,
         conflictAbort: false,
       );
       expect(next, 9000,
-          reason: 'monotonic cursor — a backwards clock must not re-open '
+          reason: 'monotonic cursor — a backwards value must not re-open '
               'already-pushed records for an echo storm');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Sync-B stage 2 (2026-07-17, Codex): the cursor is the LOGICAL boundary
+  // (lastIssuedLocalMtime), not a wall clock. This closes the "dirty forever"
+  // gap: under a rolled-back wall clock, a monotonic mtime out-runs `now`, so a
+  // wall-clock cursor never covers it and the record re-pushes on every tick.
+  // -------------------------------------------------------------------------
+  group('nextPushCursor logical boundary (dirty-forever fix)', () {
+    test('logical boundary covers a monotonic mtime that out-ran the wall clock',
+        () {
+      // A backward NTP correction: wall `now` == 5000, but the counter already
+      // issued 5001 (nextSyncMtime = max(now, last+1)). The record ships with
+      // mtime 5001; the boundary IS the counter, so the cursor advances to 5001
+      // and the record is marked clean — not stranded above a 5000 wall cursor.
+      const recordMtime = 5001; // minted monotonic, above the rolled-back clock
+      const wallNow = 5000; // what the OLD pushClock would have been
+      const logicalBoundary = 5001; // store.lastIssuedLocalMtime
+
+      final oldCursor = nextPushCursor(
+        current: 4000,
+        pushBoundary: wallNow, // the OLD wall-clock value, for contrast
+        pushRan: true,
+        hardReject: false,
+        conflictAbort: false,
+      );
+      expect(recordMtime > oldCursor, isTrue,
+          reason: 'wall-clock cursor (5000) leaves the 5001 record dirty '
+              'forever — the bug');
+
+      final newCursor = nextPushCursor(
+        current: 4000,
+        pushBoundary: logicalBoundary,
+        pushRan: true,
+        hardReject: false,
+        conflictAbort: false,
+      );
+      expect(recordMtime > newCursor, isFalse,
+          reason: 'logical boundary (5001) covers the shipped record — clean');
     });
   });
 }

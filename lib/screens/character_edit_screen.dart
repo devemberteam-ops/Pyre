@@ -406,8 +406,11 @@ class _CharacterEditScreenState extends State<CharacterEditScreen> {
         // H-3: this per-chat character-snapshot override rides a chat sync,
         // but chat.mtime (the sync field) was never bumped — only updatedAt
         // (the sort field) — so the edit saved locally but never propagated
-        // to a paired device. Mirrors addCharacterToChat's mtime stamp.
-        chat.mtime = chat.updatedAt;
+        // to a paired device. Sync-B (Codex review): route through the MONOTONIC
+        // counter, not wall-clock — a raw `now` below the logical push cursor
+        // would leave the edit invisible to peers (the same demotion sync-B's
+        // logical clock fixed everywhere else). Mirrors addCharacterToChat.
+        chat.mtime = store.nextSyncMtime();
         store.notifyAndPersist();
       } else {
         store.updateCharacter(updated);

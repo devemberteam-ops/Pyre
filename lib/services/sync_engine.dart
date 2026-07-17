@@ -128,19 +128,62 @@ bool syncWatermarkMustReset(String? currentDeviceId, String? storedDeviceId) {
 ///     the conflict dialog was dismissed ([conflictAbort]) — so the un-pushed /
 ///     rejected local records stay `mtime > cursor` and re-collect next tick
 ///     (no lost update);
-///   - otherwise advance to [pushClock] (the client clock captured BEFORE the
-///     collection snapshot, mirroring the server's stamp-before-select fix),
-///     but NEVER backwards (a briefly-backwards clock must not re-open
-///     already-pushed records for an echo storm).
+///   - otherwise advance to [pushBoundary], but NEVER backwards (a briefly-
+///     backwards clock must not re-open already-pushed records for an echo
+///     storm).
+///
+/// Sync-B (2026-07-17, Codex, stage 2): [pushBoundary] is the LOGICAL cursor
+/// `store.lastIssuedLocalMtime` captured BEFORE the collection snapshot — NOT a
+/// wall clock. Local records are stamped through `nextSyncMtime()`, so every
+/// collected record has `mtime <= pushBoundary`; advancing the cursor to it
+/// marks exactly the shipped records clean. The old wall-clock `pushClock` was
+/// wrong under a backward clock: a monotonic mtime (e.g. 5001, minted above the
+/// rolled-back wall time) sat ABOVE `pushClock` (5000), so the cursor never
+/// covered it and the record re-collected on every tick forever ("dirty
+/// forever"). Anything written after the capture gets `mtime > pushBoundary`
+/// and is caught next tick — same stamp-before-select discipline as before.
 int nextPushCursor({
   required int current,
-  required int pushClock,
+  required int pushBoundary,
   required bool pushRan,
   required bool hardReject,
   required bool conflictAbort,
 }) {
   if (!pushRan || hardReject || conflictAbort) return current;
-  return pushClock > current ? pushClock : current;
+  return pushBoundary > current ? pushBoundary : current;
+}
+
+/// Sync-B stage 3 (2026-07-17, Codex): decide whether a v2 /push `results`
+/// array forces the push cursor to HOLD (re-collect + re-push next tick).
+///
+/// We ADVANCE only on a KNOWN terminal outcome (accepted / superseded /
+/// tombstoned / invalid_record / immutable_record / policy_rejected) — those
+/// can't change on a retry. Everything else HOLDS the cursor (retry):
+///   * `unsupported_collection` — the hub is older and lacks this record type;
+///     retry until it upgrades (loss-safe; a same-build user never hits this).
+///   * `retryable_error` — a transient hub-side apply failure (keystore I/O).
+///   * an UNKNOWN code — blocker 4 (Codex review): advancing over a code we
+///     don't understand is not loss-safe, so we HOLD. (Forward-compat is
+///     handled by adding new benign codes to the known-terminal set on the
+///     client BEFORE a hub emits them.)
+///   * a non-Map entry or a missing/blank `code` — we can't confirm the item
+///     landed, so we retry rather than advance over a possible loss.
+const Set<String> _syncTerminalOutcomes = {
+  'accepted',
+  'superseded',
+  'tombstoned',
+  'invalid_record',
+  'immutable_record',
+  'policy_rejected',
+};
+
+bool syncPushHoldForResults(List<dynamic> results) {
+  return results.any((r) {
+    if (r is! Map) return true; // garbled entry → retry
+    final code = r['code']?.toString();
+    if (code == null || code.isEmpty) return true; // no outcome → retry
+    return !_syncTerminalOutcomes.contains(code); // unknown/hold → retry
+  });
 }
 
 class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
@@ -456,6 +499,21 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
           jsonDecode(pullResp.body) as Map<String, dynamic>;
       final serverTime =
           (pulled['serverTime'] as num?)?.toInt() ?? _lastServerTime;
+      // Sync-B (2026-07-17, Codex, stage 1): raise the LOCAL monotonic counter
+      // to the hub's advertised high-water. Every pulled record has
+      // `mtime <= serverTime`, so this one call guarantees the next locally
+      // minted mtime (via nextSyncMtime) is strictly greater than anything we
+      // just adopted — otherwise a later edit of a freshly pulled record could
+      // mint an mtime BELOW its current value and demote it below what peers
+      // already hold.
+      store.observeSyncMtime(serverTime);
+      // Keep-local bumps below stamp `serverTime + 1` directly on the record
+      // (bypassing nextSyncMtime); observe each so the counter tracks them too.
+      int keptLocalBump(int st) {
+        final v = _keepLocalMtime(st);
+        store.observeSyncMtime(v);
+        return v;
+      }
       // Wave CY.18.72: schema-mismatch flag. Server bumps
       // serverAppVersion when the wire shape changes; if we're
       // older, surface that to the UI so the user knows to update.
@@ -471,6 +529,14 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
       }
       final updates =
           (pulled['updates'] as Map?)?.cast<String, dynamic>() ?? {};
+      // Sync-B (Codex review r6): did this pull RETURN any records/tombstones
+      // (regardless of whether they changed local state)? Used to force a
+      // durable save before the watermark advances — a retry after a failed
+      // persist re-pulls the same records as `superseded`, so `appliedAny` alone
+      // would skip the flush and lose the RAM-only data on a kill.
+      final pullReturnedData =
+          updates.values.any((v) => v is List && v.isNotEmpty) ||
+              ((pulled['tombstones'] as Map?)?.isNotEmpty ?? false);
 
       var appliedAny = false;
       // SYNC W5 (transparency UI): count records that actually changed local
@@ -619,7 +685,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
                 // tick and out-dates the peer's copy. Without this, the kept
                 // local copy is never re-pushed (mtime < watermark) and the
                 // peer's version LWW-overwrites it on the next pull.
-                store.characters[idx].mtime = _keepLocalMtime(serverTime);
+                store.characters[idx].mtime = keptLocalBump(serverTime);
                 appliedAny = true; // mtime changed → persist the bump
                 continue;
               }
@@ -659,7 +725,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             if (idx >= 0) {
               if (force == false) {
                 // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
-                store.personas[idx].mtime = _keepLocalMtime(serverTime);
+                store.personas[idx].mtime = keptLocalBump(serverTime);
                 appliedAny = true;
                 continue;
               }
@@ -703,7 +769,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
               // user-chosen + warned, not silent.
               if (force == false) {
                 // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
-                store.chats[idx].mtime = _keepLocalMtime(serverTime);
+                store.chats[idx].mtime = keptLocalBump(serverTime);
                 appliedAny = true;
                 continue;
               }
@@ -744,7 +810,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
               if (store.presets[idx].locked) continue;
               if (force == false) {
                 // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
-                store.presets[idx].mtime = _keepLocalMtime(serverTime);
+                store.presets[idx].mtime = keptLocalBump(serverTime);
                 appliedAny = true;
                 continue;
               }
@@ -783,7 +849,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             if (idx >= 0) {
               if (force == false) {
                 // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
-                store.lorebooks[idx].mtime = _keepLocalMtime(serverTime);
+                store.lorebooks[idx].mtime = keptLocalBump(serverTime);
                 appliedAny = true;
                 continue;
               }
@@ -821,7 +887,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             if (idx >= 0) {
               if (force == false) {
                 // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
-                store.regexRules[idx].mtime = _keepLocalMtime(serverTime);
+                store.regexRules[idx].mtime = keptLocalBump(serverTime);
                 appliedAny = true;
                 continue;
               }
@@ -860,7 +926,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             if (idx >= 0) {
               if (force == false) {
                 // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
-                store.folders[idx].mtime = _keepLocalMtime(serverTime);
+                store.folders[idx].mtime = keptLocalBump(serverTime);
                 appliedAny = true;
                 continue;
               }
@@ -902,7 +968,7 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
               if (store.creatorPresets[idx].locked) continue;
               if (force == false) {
                 // S-BUG1: bump mtime so the kept-local copy is pushed next tick.
-                store.creatorPresets[idx].mtime = _keepLocalMtime(serverTime);
+                store.creatorPresets[idx].mtime = keptLocalBump(serverTime);
                 appliedAny = true;
                 continue;
               }
@@ -937,13 +1003,23 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
         final list = (updates['providers'] as List?) ?? const [];
         if (list.isEmpty) return;
         final secret = await _keySyncSecret();
-        if (secret == null) return;
+        if (secret == null) {
+          // Blocker 4 MIRROR (Codex review r5): there are provider records to
+          // apply but no pairing secret to decrypt their keys. Silently skipping
+          // + advancing the pull watermark would lose the keys forever. Throw so
+          // the tick's outer catch skips the watermark advance and re-pulls next
+          // tick (when the bearer/secret is available, e.g. after a re-pair).
+          throw _SyncError(
+              'provider key-sync: pairing secret unavailable — holding pull');
+        }
         for (final raw in list) {
           if (raw is! Map) continue;
           final m = raw.cast<String, dynamic>();
           final id = m['id'] as String?;
           if (id == null) continue;
-          // Per-record isolation: a poison record must not abort the tick.
+          // Per-record isolation: a poison record must not abort the tick — BUT
+          // a _SyncError (a hold-worthy key failure) MUST escape so the watermark
+          // is held (Codex r5).
           try {
             // Wave CY.18.256: a local tombstone at/after the incoming version
             // means we deleted this provider — don't resurrect a peer's stale
@@ -952,23 +1028,35 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             if (store.isTombstonedNewer('provider', id, incomingMtime)) {
               continue;
             }
+            final envPresent = m['apiKeyEnc'] is String &&
+                (m['apiKeyEnc'] as String).isNotEmpty;
             final idx = store.providers.indexWhere((p) => p.id == id);
             if (idx >= 0 && store.providers[idx].mtime >= incomingMtime) {
               // Wave CY.18.267: LWW says our config is at least as fresh, so we
-              // won't replace it. BUT if our local copy has NO key (a provider
-              // restored from a keyless backup, or one that pre-dated key-sync)
-              // and the peer is offering a decryptable key, backfill JUST the
-              // key. This never overwrites an existing key and never touches
-              // config — it only fills a missing secret. Without this, the
-              // common "restore a backup, then turn key-sync on" flow leaves
-              // the provider keyless forever (mtime ties → permanent skip).
+              // won't replace it. BUT backfill a MISSING key (restore-then-enable
+              // flow). Blocker 4: the envelope PROMISED a key — a decrypt miss
+              // must HOLD (never advance past a dropped key); the durable write
+              // must land BEFORE the RAM adopt, checked, or a swallowed failure
+              // loses the key on restart.
               if (store.providers[idx].apiKey.isEmpty) {
                 final (_, fillKey) = await decodeIncomingProvider(m, secret);
+                if (envPresent && fillKey == null) {
+                  throw _SyncError(
+                      'provider $id: key decrypt returned null — holding pull');
+                }
                 if (fillKey != null && fillKey.isNotEmpty) {
-                  store.providers[idx].apiKey = fillKey;
-                  await SecureKeys.write(id, fillKey);
-                  appliedAny = true;
-            appliedCount++; // SYNC W5
+                  if (!await SecureKeys.tryWrite(id, fillKey)) {
+                    throw _SyncError(
+                        'provider $id: keystore write failed — holding pull');
+                  }
+                  // Re-resolve after the write await; adopt only if still empty
+                  // (a concurrent local edit may have set a key / removed it).
+                  final j = store.providers.indexWhere((p) => p.id == id);
+                  if (j >= 0 && store.providers[j].apiKey.isEmpty) {
+                    store.providers[j].apiKey = fillKey;
+                    appliedAny = true;
+                    appliedCount++; // SYNC W5
+                  }
                 }
               }
               continue;
@@ -976,26 +1064,37 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             // Decode config + (maybe) decrypt the key via the pure helper.
             final (incoming, decryptedKey) =
                 await decodeIncomingProvider(m, secret);
+            if (envPresent && decryptedKey == null) {
+              throw _SyncError(
+                  'provider $id: key decrypt returned null — holding pull');
+            }
             // Preserve the existing local plaintext key as the floor — a
-            // decrypt failure or a never-keyed record must NEVER wipe a key
-            // the user already has. New providers start with no key.
+            // never-keyed record must NEVER wipe a key the user already has.
             incoming.apiKey = idx >= 0 ? store.providers[idx].apiKey : '';
             if (decryptedKey != null) {
+              // Durable write FIRST (checked); adopt into RAM only on success.
+              if (!await SecureKeys.tryWrite(id, decryptedKey)) {
+                throw _SyncError(
+                    'provider $id: keystore write failed — holding pull');
+              }
               incoming.apiKey = decryptedKey;
-              await SecureKeys.write(id, decryptedKey);
-            } else if (m['apiKeyEnc'] is String &&
-                (m['apiKeyEnc'] as String).isNotEmpty) {
-              debugPrint('[SyncEngine] provider $id: key decrypt failed — '
-                  'keeping config, existing key untouched');
             }
-            if (idx >= 0) {
-              store.providers[idx] = incoming;
+            // Re-resolve after the awaits before committing (a concurrent local
+            // edit may have moved/removed the provider). Re-check the tombstone
+            // too (Codex r6) so a concurrent DELETE during the awaits doesn't
+            // get its provider resurrected by the add below.
+            if (store.isTombstonedNewer('provider', id, incomingMtime)) continue;
+            final j = store.providers.indexWhere((p) => p.id == id);
+            if (j >= 0) {
+              if (store.providers[j].mtime >= incomingMtime) continue; // lost LWW
+              store.providers[j] = incoming;
             } else {
               store.providers.add(incoming);
             }
             appliedAny = true;
             appliedCount++; // SYNC W5
           } catch (e) {
+            if (e is _SyncError) rethrow; // hold-worthy → abort tick, hold watermark
             debugPrint('[SyncEngine] skip bad provider "$id": $e');
           }
         }
@@ -1193,8 +1292,21 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
         if (touchedRefs.isNotEmpty) {
           await _reconcileAttachments(touchedRefs);
         }
-        if (appliedAny) {
-          store.notifyAndPersist();
+        // Sync-B (Codex review r6): persist pulled data DURABLY before the tick
+        // advances the pull watermark (the mirror of the /push stage-5 fix). The
+        // apply paths only schedule a debounced save (~600ms); the watermark is
+        // then written synchronously to SharedPreferences. A kill in that gap —
+        // or an AppStore persist failure while the prefs write succeeds — would
+        // load OLD data with a NEW cursor on restart, and the hub never
+        // re-sends → silent loss. Flush for any pull that RETURNED records (even
+        // all-superseded: a retry after a failed persist has the data in RAM but
+        // maybe not on disk). Hold the watermark (throw) on a persist failure.
+        if (pullReturnedData) {
+          if (appliedAny) store.notifyAndPersist(); // repaint on real change
+          await store.flushPersist();
+          if (store.lastPersistFailed) {
+            throw _SyncError('pull persist failed — holding watermark');
+          }
         }
       }
 
@@ -1214,13 +1326,17 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
       // the push response's `accepted` count). Stays 0 when there was nothing
       // dirty to send. Surfaced as "Pushed N".
       var pushedCount = 0;
-      // 2026-06-15 push-clock-domain fix: capture THIS device's clock NOW —
-      // BEFORE the collection snapshot — mirroring the server's stamp-before-
-      // select fix (S-BUG2): any record written after this capture has
-      // mtime > pushClock and is caught next tick rather than skipped. `pushRan`
-      // stays false when the push is skipped (generation in-flight / conflict
-      // abort) so the push cursor is HELD and those writes aren't lost.
-      final pushClock = DateTime.now().millisecondsSinceEpoch;
+      // Sync-B (2026-07-17, Codex, stage 2): capture the LOGICAL push boundary —
+      // the monotonic counter, NOT a wall clock — BEFORE the collection snapshot
+      // (mirrors the server's stamp-before-select fix, S-BUG2). Every locally
+      // stamped record has `mtime <= lastIssuedLocalMtime`, so advancing the
+      // cursor to this value marks exactly the shipped records clean; anything
+      // written after the capture gets a strictly higher mtime and is caught
+      // next tick. Using wall-clock here (the old `pushClock`) stranded records
+      // whose monotonic mtime out-ran a rolled-back clock ("dirty forever").
+      // `pushRan` stays false when the push is skipped (generation in-flight /
+      // conflict abort) so the cursor is HELD and those writes aren't lost.
+      final pushBoundary = store.lastIssuedLocalMtime;
       var pushRan = false;
       if (!GenerationKeepAlive.isGenerating && !conflictAbort) {
         pushRan = true;
@@ -1264,6 +1380,10 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
                   'content-type': 'application/json',
                 },
                 body: jsonEncode({
+                  // Sync-B stage 3 (2026-07-17, Codex): advertise v2 so the hub
+                  // returns exhaustive per-item `results`. An old hub ignores
+                  // this key and answers with the legacy {accepted, rejected}.
+                  'syncProtocol': 2,
                   'updates': dirty,
                   if (dirtyTombstones.isNotEmpty) 'tombstones': dirtyTombstones,
                 }),
@@ -1274,50 +1394,94 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
             throw _SyncError('Server revoked this device.');
           }
           if (pushResp.statusCode != 200) {
+            // Stage 5: a 503 means the hub could not PERSIST our push. Throwing
+            // holds the push cursor (the advance is gated on no error) so the
+            // records re-collect and re-push next tick — never silently lost.
             throw _SyncError(
                 'Push HTTP ${pushResp.statusCode}: ${pushResp.body}');
           }
-          // Inspect `rejected`. A pure server-newer rejection is fine to
-          // ignore (the next /pull reconciles it). Anything else is a hard
-          // reject that must NOT slide under the watermark.
+          var reconcileDirty = false;
           try {
             final j = jsonDecode(pushResp.body);
-            final rejected = (j['rejected'] as List?) ?? const [];
-            // SYNC W5 (transparency UI): how many records the server actually
-            // took. Tolerate either a numeric `accepted` count or (defensively)
-            // a list, so the metric is robust to a server shape tweak.
+            // SYNC W5 (transparency UI): how many records the hub took.
             final acc = j['accepted'];
             if (acc is num) {
               pushedCount = acc.toInt();
             } else if (acc is List) {
               pushedCount = acc.length;
             }
-            // The server (pyre_server.dart /push) tags benign LWW losses
-            // with this exact reason; treat every OTHER reason as hard.
-            const serverNewerReason = 'server has newer mtime';
-            pushHadHardReject = rejected.any((r) =>
-                r is Map && (r['reason']?.toString() ?? '') != serverNewerReason);
-            if (kDebugMode) {
-              debugPrint(
-                  '[SyncEngine] push response: ${j['accepted']} accepted, '
-                  '${rejected.length} rejected'
-                  '${pushHadHardReject ? ' (non-server-newer present — '
-                      'holding watermark for retry)' : ''}');
+            final results = j['results'];
+            if (results is List) {
+              // Sync-B stage 3: HONEST per-item path (v2 hub). See
+              // syncPushHoldForResults for the advance-vs-hold contract.
+              pushHadHardReject = syncPushHoldForResults(results);
+              // Blocker 2 (Codex review r2): reconcile every item the hub gave a
+              // revision (accepted AND superseded — the tie-divergence happens
+              // on a superseded snapshot too). Observing serverMtime stops the
+              // client re-minting the SAME value the hub restamped to (the tie);
+              // an item edited DURING the push is re-bumped above serverMtime so
+              // it re-pushes and wins instead of tying forever.
+              for (final r in results) {
+                if (r is! Map) continue;
+                final code = r['code'];
+                if (code != 'accepted' && code != 'superseded') continue;
+                final sm = (r['serverMtime'] as num?)?.toInt();
+                final cm = (r['clientMtime'] as num?)?.toInt();
+                if (sm == null || cm == null) continue;
+                reconcileDirty |= store.reconcilePushedRevision(
+                    r['collection']?.toString() ?? '', cm, sm,
+                    id: r['id']?.toString());
+              }
+              if (kDebugMode) {
+                debugPrint(
+                    '[SyncEngine] push v2: $pushedCount accepted, '
+                    '${results.length} results'
+                    '${pushHadHardReject ? ' (unsupported/garbled present — '
+                        'holding watermark for retry)' : ''}');
+              }
+            } else {
+              // LEGACY path (old hub, no `results`): key off the benign-reject
+              // reason string exactly as before — any OTHER reason is hard.
+              final rejected = (j['rejected'] as List?) ?? const [];
+              const serverNewerReason = 'server has newer mtime';
+              pushHadHardReject = rejected.any((r) =>
+                  r is Map &&
+                  (r['reason']?.toString() ?? '') != serverNewerReason);
+              if (kDebugMode) {
+                debugPrint(
+                    '[SyncEngine] push (legacy): ${j['accepted']} accepted, '
+                    '${rejected.length} rejected'
+                    '${pushHadHardReject ? ' (non-server-newer present — '
+                        'holding watermark for retry)' : ''}');
+              }
             }
           } catch (_) {
-            // Malformed/empty body — be conservative and DON'T treat it as
-            // a hard reject (a 200 with no parseable rejected list means
-            // the server accepted; advancing is safe and avoids a stuck
-            // watermark on an old/quiet server).
+            // We asked for v2; every real Pyre hub (v1 or v2) returns parseable
+            // JSON, so an unparseable 200 is anomalous. HOLD the cursor and
+            // retry rather than advance over records we can't confirm landed.
+            pushHadHardReject = true;
           }
-          // SYNC W7: records landed — now upload any attachment blobs the
-          // server is still MISSING (deduped negotiation; see
-          // _pushAttachments). Gated on hasDirty so a tombstone-only tick
-          // doesn't re-negotiate. Best-effort — never blocks the tick.
-          if (hasDirty) {
-            await _pushAttachments(collectReferencedAttachmentHashes(store));
+          // Blocker 2 (Codex review r2): a reconcile re-bump / counter raise
+          // must be DURABLE before we advance the push cursor. If the edit's own
+          // debounced save already ran and we only bumped in memory, a crash
+          // before the next save would restore the tied mtime and reopen the
+          // divergence. Persist now; if it fails, HOLD the cursor (the re-bumped
+          // record stays dirty and re-pushes next tick).
+          if (reconcileDirty) {
+            store.notifyAndPersist();
+            await store.flushPersist();
+            if (store.lastPersistFailed) pushHadHardReject = true;
           }
         }
+        // Sync-B stage 6 (2026-07-17, Codex): re-negotiate MISSING attachment
+        // blobs on EVERY non-generating tick — not only when a record was dirty
+        // this tick. The old hasDirty gate stranded a blob whose one upload
+        // failed: the record was accepted (cursor advanced), but with no later
+        // dirty record the negotiation never ran again, so a peer kept showing a
+        // broken image forever. The /attachments/missing round-trip is deduped
+        // and returns empty when the hub already holds everything, so a steady
+        // state costs one cheap request. Best-effort — never blocks the tick.
+        await _pushAttachments(collectReferencedAttachmentHashes(store));
       }
 
       // ---- 3. Persist new high-water mark ----
@@ -1331,15 +1495,15 @@ class SyncEngine extends ChangeNotifier with WidgetsBindingObserver {
       // /pull and the user gets another chance to resolve them.
       if (!pushHadHardReject && !conflictAbort) {
         _lastServerTime = serverTime;
-        // 2026-06-15 push-clock-domain fix: advance the CLIENT-domain push
-        // cursor too. nextPushCursor HOLDS it when the push didn't run
+        // Sync-B (stage 2): advance the LOGICAL push cursor to pushBoundary.
+        // nextPushCursor HOLDS it when the push didn't run
         // (pushRan == false, e.g. generation in-flight) so writes made while it
         // was skipped re-collect next tick, and never moves it backwards. The
         // hard-reject / conflict-abort gates are already enforced by this `if`,
         // but passing them keeps nextPushCursor self-contained + unit-testable.
         final newPushCursor = nextPushCursor(
           current: _lastPushTime,
-          pushClock: pushClock,
+          pushBoundary: pushBoundary,
           pushRan: pushRan,
           hardReject: pushHadHardReject,
           conflictAbort: conflictAbort,

@@ -1109,6 +1109,15 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     // unit-testable (test/backup_integrity_sweep_test.dart).
     pruneDanglingBackupRefs(s);
 
+    // Sync-B (Codex review r2): restore replaces collections in place and does
+    // NOT go through load(), so the monotonic counter never sees the imported
+    // mtimes. Rebase it here so `lastIssuedLocalMtime >= every restored mtime`
+    // — otherwise the NEXT local edit could mint an mtime below a restored
+    // record and demote it. This does NOT re-stamp the restored records or make
+    // the backup win over a peer (that stays a deliberate product decision); it
+    // only keeps the local logical clock consistent with the data on disk.
+    s.rebaseSyncClock();
+
     s.notifyAndPersist();
   }
 }

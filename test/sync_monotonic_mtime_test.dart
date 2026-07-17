@@ -24,6 +24,18 @@ class _NoopBackend implements StoreBackend {
   Future<void> clear() async {}
 }
 
+/// Captures the serialized blob (SAVE side) AND can replay it (LOAD side), so a
+/// full persist→load round-trip can be exercised through the real code paths.
+class _CaptureBackend implements StoreBackend {
+  Map<String, dynamic>? captured;
+  @override
+  Future<Map<String, dynamic>?> load() async => captured;
+  @override
+  Future<void> save(Map<String, dynamic> blob) async => captured = blob;
+  @override
+  Future<void> clear() async => captured = null;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -73,6 +85,96 @@ void main() {
       // toJson only emits it when > 0 (byte-clean for fresh installs).
       final fresh = AppStore(storage: _NoopBackend());
       expect(fresh.lastIssuedLocalMtime, 0);
+    });
+  });
+
+  group('sync-B stage 1 — complete the logical clock', () {
+    test('observeSyncMtime raises the counter but never lowers it', () {
+      final store = AppStore(storage: _NoopBackend());
+      store.lastIssuedLocalMtime = 1000;
+      store.observeSyncMtime(500); // below — ignored
+      expect(store.lastIssuedLocalMtime, 1000);
+      store.observeSyncMtime(2000); // above — adopted
+      expect(store.lastIssuedLocalMtime, 2000);
+      // The very next mint sits strictly above the observed revision.
+      expect(store.nextSyncMtime(), greaterThan(2000));
+    });
+
+    test('nextSyncMtimeAfter(floor) returns strictly above the floor', () {
+      final store = AppStore(storage: _NoopBackend());
+      final floor = DateTime.now().millisecondsSinceEpoch + 3600000; // +1h
+      final v = store.nextSyncMtimeAfter(floor);
+      expect(v, greaterThan(floor));
+      // And the counter is now parked at that value.
+      expect(store.lastIssuedLocalMtime, v);
+    });
+
+    test('_touchSettings is monotonic (backward clock cannot demote settings)',
+        () {
+      final store = AppStore(storage: _NoopBackend());
+      final future = DateTime.now().millisecondsSinceEpoch + 600000;
+      store.lastIssuedLocalMtime = future;
+      // Any synced-settings mutation flows through _touchSettings.
+      store.updateModelSettings(store.modelSettings);
+      expect(store.settingsMtime, greaterThan(future),
+          reason: 'settings must out-stamp the last issued value so the unit '
+              'is never hidden below the push cursor after a clock rollback');
+    });
+
+    test('_touchBotbooruProfile is monotonic', () {
+      final store = AppStore(storage: _NoopBackend());
+      final future = DateTime.now().millisecondsSinceEpoch + 600000;
+      store.lastIssuedLocalMtime = future;
+      store.setBotbooruUsername('kuru');
+      expect(store.botbooruProfileMtime, greaterThan(future));
+    });
+
+    test('applySyncedSettings win tracks the peer revision in the counter', () {
+      final store = AppStore(storage: _NoopBackend());
+      final hi = DateTime.now().millisecondsSinceEpoch + 900000;
+      store.applySyncedSettings({'mtime': hi, 'modelSettings': const {}});
+      expect(store.settingsMtime, hi);
+      expect(store.lastIssuedLocalMtime, greaterThanOrEqualTo(hi),
+          reason: 'after adopting a peer settings revision, the next local '
+              'edit must mint above it — else it demotes below what peers hold');
+      expect(store.nextSyncMtime(), greaterThan(hi));
+    });
+
+    test('rebaseSyncClock lifts the counter above a record that outran the '
+        'persisted lastIssuedLocalMtime (load-path rebase)', () {
+      // Simulate an OLD build (or a hub restamp) that left a character mtime
+      // far above the persisted counter — the classic demote-on-next-edit trap.
+      // rebaseSyncClock() is the exact call load() makes after fromJson.
+      final store = AppStore(storage: _NoopBackend());
+      final highMtime = DateTime.now().millisecondsSinceEpoch + 5_000_000;
+      store.characters.add(Character(
+          id: 'c', name: 'A', description: 'd', createdAt: 0, updatedAt: 0)
+        ..mtime = highMtime);
+      store.lastIssuedLocalMtime = 0; // counter "never maintained"
+
+      store.rebaseSyncClock();
+
+      expect(store.lastIssuedLocalMtime, greaterThanOrEqualTo(highMtime),
+          reason: 'the rebase must lift the counter to the highest on-disk '
+              'mtime so the next mint cannot land below an existing record');
+      // A rename now stamps strictly above the pre-existing record mtime.
+      final loaded = store.characters.firstWhere((x) => x.id == 'c');
+      store.updateCharacter(loaded..name = 'B');
+      expect(loaded.mtime, greaterThan(highMtime));
+    });
+
+    test('rebaseSyncClock also scans settings/profile/tombstone mtimes', () {
+      final store = AppStore(storage: _NoopBackend());
+      final hi = DateTime.now().millisecondsSinceEpoch + 7_000_000;
+      store.settingsMtime = hi;
+      store.botbooruProfileMtime = hi - 1;
+      store.tombstones['chat:x'] = hi + 5;
+      store.lastIssuedLocalMtime = 0;
+
+      store.rebaseSyncClock();
+
+      expect(store.lastIssuedLocalMtime, hi + 5,
+          reason: 'the highest of every mtime source (here a tombstone) wins');
     });
   });
 

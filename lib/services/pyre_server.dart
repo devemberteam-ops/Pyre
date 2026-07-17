@@ -25,7 +25,8 @@ import 'dart:io'
 import 'dart:math' show Random;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show debugPrint, kIsWeb, visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -51,6 +52,92 @@ bool get _supportsServer {
   if (kIsWeb) return false;
   return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 }
+
+/// Sync-B stage 3 (2026-07-17, Codex): the per-item apply outcome the hub
+/// reports back for EVERY pushed record, so the client never mistakes a silent
+/// omission (malformed/unknown) for "accepted" and drops the record forever.
+/// Wire codes (in the /push `results` array) are the snake_case names below.
+///   * [accepted]      — applied; the record now carries `serverMtime`.
+///   * [superseded]    — the hub already holds an equal/newer copy (benign LWW
+///                       loss; the client's next /pull reconciles).
+///   * [tombstoned]    — suppressed by a hub tombstone at/after this version
+///                       (the delete wins; benign).
+///   * [immutable]     — a locked default (preset/creatorPreset) can't be
+///                       overwritten via sync (benign).
+///   * [policyRejected]— provider gate closed (opt-out / non-native peer).
+///   * [invalidRecord] — malformed (non-Map / missing id / fromJson threw);
+///                       re-sending won't help, so the client drops it.
+///   * [unsupportedCollection] — the hub doesn't know this collection; the
+///                       client DEFERS it (re-scan when the hub upgrades),
+///                       rather than hold-looping every tick.
+///   * [retryableError] — a TRANSIENT apply failure (keystore/registry I/O),
+///                       NOT a malformed record. The client HOLDS and retries;
+///                       classifying it as invalid_record would drop it forever.
+enum _SyncApplyOutcome {
+  accepted,
+  superseded,
+  tombstoned,
+  immutable,
+  policyRejected,
+  invalidRecord,
+  unsupportedCollection,
+  retryableError,
+}
+
+/// Outcomes that force the client to HOLD its push cursor (retry) — the hub
+/// could not durably take the item and a retry may succeed. Everything else is
+/// terminal (advance). Kept next to the enum so the server's legacy-reason
+/// mapping and the client's classification agree.
+bool _outcomeHolds(_SyncApplyOutcome o) =>
+    o == _SyncApplyOutcome.unsupportedCollection ||
+    o == _SyncApplyOutcome.retryableError;
+
+/// The stable wire string for a [_SyncApplyOutcome] (snake_case `code`).
+String _outcomeCode(_SyncApplyOutcome o) {
+  switch (o) {
+    case _SyncApplyOutcome.accepted:
+      return 'accepted';
+    case _SyncApplyOutcome.superseded:
+      return 'superseded';
+    case _SyncApplyOutcome.tombstoned:
+      return 'tombstoned';
+    case _SyncApplyOutcome.immutable:
+      return 'immutable_record';
+    case _SyncApplyOutcome.policyRejected:
+      return 'policy_rejected';
+    case _SyncApplyOutcome.invalidRecord:
+      return 'invalid_record';
+    case _SyncApplyOutcome.unsupportedCollection:
+      return 'unsupported_collection';
+    case _SyncApplyOutcome.retryableError:
+      return 'retryable_error';
+  }
+}
+
+/// Blocker 3 (Codex review): pull a FUTURE-clock mtime back to the hub clock
+/// before apply. v2 restamping used to preserve a wildly-future incoming mtime
+/// verbatim, but load() still clamps future records to wall-clock on restart —
+/// demoting the stored copy below the (still-high) counter and hiding it from
+/// peers. Clamping on the way in keeps the stored mtime `<= serverNow` so the
+/// restart-time clamp is a no-op. A backward-clock mtime (`<= serverNow`) is
+/// untouched here; the restamp lifts it up separately.
+int clampFutureMtime(int incoming, int serverNow) =>
+    incoming > serverNow ? serverNow : incoming;
+
+/// The record collections the hub's /push understands. A collection outside this
+/// set (a newer client pushing a record type an older hub lacks) is reported as
+/// `unsupported_collection` instead of being silently rejected as "server newer".
+const Set<String> _knownPushCollections = {
+  'characters',
+  'personas',
+  'chats',
+  'presets',
+  'lorebooks',
+  'regexRules',
+  'folders',
+  'creatorPresets',
+  'providers',
+};
 
 /// Wave CY.18.260: pure gate for whether encrypted provider records may be
 /// emitted to (or accepted from) a peer. Providers carry the API key (as an
@@ -617,15 +704,19 @@ class PyreServer {
               .where((s) => s.isNotEmpty)
               .toSet();
 
-      // 2026-06-15 audit S-BUG2: stamp serverTime BEFORE the record selection
-      // snapshot. The old code stamped DateTime.now() AFTER serializing, so a
-      // record written to the AppStore during the await'd serialization could
-      // have mtime in (since, serverTime_old) — it wasn't in the response but
-      // the client's watermark would jump past it → permanent miss. By stamping
-      // first, the watermark only advances as far as the snapshot moment; any
-      // record written after the stamp but NOT in the response has
-      // mtime > serverTime → the next pull (since == serverTime) will catch it.
-      final serverTime = DateTime.now().millisecondsSinceEpoch;
+      // Sync-B stage 4 (2026-07-17, Codex): serverTime is the hub's LOGICAL
+      // high-water — `store.lastIssuedLocalMtime`, NOT a wall clock. Every
+      // record the hub holds has `mtime <= lastIssuedLocalMtime` (the stage-1
+      // load rebase + every accept's observeSyncMtime keep it a true
+      // high-water), so a client that adopts this as its next `since` sees
+      // exactly this snapshot and nothing re-appears next pull (no churn). The
+      // old wall-clock stamp could sit BELOW a hub-restamped record's mtime,
+      // which would then re-ship on every pull. We do NOT mint a new mtime here
+      // (an empty pull must not advance the clock — that would be pure churn);
+      // we only READ the counter. The S-BUG2 stamp-before-select discipline
+      // still holds: any record written after this read gets a strictly higher
+      // mtime and is caught on the next pull (since == this serverTime).
+      final serverTime = store.lastIssuedLocalMtime;
 
       final updates = <String, List<Map<String, dynamic>>>{};
 
@@ -798,135 +889,227 @@ class PyreServer {
           return Response(400, body: '{"error":"missing updates"}');
         }
 
+        // Sync-B stage 3 (2026-07-17, Codex): the client advertises the
+        // protocol it speaks in the push body. v2 clients get an exhaustive
+        // per-item `results` array (one honest outcome per pushed record) so a
+        // silent omission can never masquerade as "accepted". v1 (legacy)
+        // clients only read `accepted`/`rejected`, so we KEEP emitting a benign
+        // `reason:"server has newer mtime"` for every non-accepted item — that
+        // string is exactly what the old client treats as a soft loss it can
+        // advance past.
+        final protocol = (json['syncProtocol'] as num?)?.toInt() ?? 1;
+        final v2 = protocol >= 2;
+
         var accepted = 0;
         final rejected = <Map<String, dynamic>>[];
+        final results = <Map<String, dynamic>>[];
+        // Stage 5: only a state change requires a synchronous persist before the
+        // 200. Set on any accept, on a tombstone change/reap, AND on an
+        // equal-version superseded (a retry after a failed persist — the record
+        // is in memory but maybe not on disk, so persist again rather than 200
+        // it away).
+        var needsPersist = false;
 
-        // Wave CY.18.255 (FIX 5): clamp each incoming record's mtime to the
-        // server's own clock so a writer whose clock is AHEAD can't stamp a
-        // record with an mtime greater than the `serverTime` /pull hands
-        // back. Without this, a future-clock record sits ABOVE the puller's
-        // watermark and is then silently skipped on the next /pull (its
-        // mtime is not `> since`). We clamp to `min(incoming, serverNow)` —
-        // a record already at/below serverNow is left untouched, so normal
-        // (correct-clock) records behave exactly as before. The clamp is
-        // applied BEFORE the LWW compare AND written into the stored record
-        // (we overwrite `m['mtime']`, which `fromJson` reads), so the
-        // server's persisted copy carries the clamped value too.
-        //
-        // This is a low-effort mitigation. The richer fix is full
-        // server-authoritative re-stamping (server assigns the mtime on
-        // accept, ignoring the writer's clock entirely) — deferred because
-        // it changes the LWW contract for every client and needs care.
+        // Records one honest outcome for a pushed item. Appends the v2 result
+        // AND (for non-accepted) the legacy benign-reject entry old clients need.
+        void record({
+          String? id,
+          int? index,
+          required String collection,
+          required _SyncApplyOutcome outcome,
+          int? clientMtime,
+          int? serverMtime,
+        }) {
+          results.add({
+            'collection': collection,
+            'id': ?id,
+            if (id == null && index != null) 'index': index,
+            'code': _outcomeCode(outcome),
+            'clientMtime': ?clientMtime,
+            'serverMtime': ?serverMtime,
+          });
+          if (outcome != _SyncApplyOutcome.accepted) {
+            rejected.add({
+              'id': ?id,
+              'collection': collection,
+              // Legacy contract: a v1 client advances only on this exact
+              // string. Emit it for BENIGN terminal losses (superseded /
+              // tombstoned / immutable / policy / invalid) so old clients
+              // advance; for HOLD outcomes (unsupported / retryable) emit a
+              // DIFFERENT reason so a v1 client also holds and retries.
+              'reason': _outcomeHolds(outcome)
+                  ? 'retry: ${_outcomeCode(outcome)}'
+                  : 'server has newer mtime',
+              if (v2) 'code': _outcomeCode(outcome),
+            });
+          }
+        }
+
+        // Wave CY.18.255 (FIX 5): the v1 future-clock clamp — pull a record
+        // whose (ahead) clock outran serverNow back down so it can't sit above
+        // the /pull watermark and be skipped. v2 replaces this with hub
+        // re-stamping (see _acceptedRevision), so the clamp is v1-only now.
         final serverNow = DateTime.now().millisecondsSinceEpoch;
+
+        // Stage 4 helper: restamp a WINNING singleton (settings/profile) to a
+        // hub-monotonic revision so peers see it even under a rolled-back
+        // pusher clock. Only called on v2 + a win; mutates m['mtime'] in place.
+        void restampSingletonIfWin(Map<String, dynamic> m, int incoming, int localMtime) {
+          if (!v2 || incoming <= localMtime) return;
+          final floor = store.lastIssuedLocalMtime;
+          m['mtime'] = incoming > floor ? incoming : store.nextSyncMtimeAfter(floor);
+        }
 
         for (final entry in updates.entries) {
           final collection = entry.key.toString();
           final list = entry.value;
-          if (list is! List) continue;
-          for (final raw in list) {
+          if (list is! List) {
+            // Malformed collection payload (not a list). One invalid result for
+            // the whole entry — never a silent skip.
+            record(collection: collection, index: 0,
+                outcome: _SyncApplyOutcome.invalidRecord);
+            continue;
+          }
+          final isSingleton =
+              collection == 'settings' || collection == 'botbooruProfile';
+          final known = _knownPushCollections.contains(collection);
+          for (var index = 0; index < list.length; index++) {
+            final raw = list[index];
             // Audit 2026-06-04 (H1): per-record isolation. A single poison
-            // record (e.g. a numeric `id` that fails the `as String?` cast, or
-            // a malformed nested field that trips Character/Chat.fromJson) must
-            // NOT 500 the whole batch — that wedges the pushing device's sync
-            // forever (it holds its watermark and re-pushes the same bad batch
-            // every tick). The client SyncEngine already isolates per record;
-            // mirror that here.
+            // record must NOT 500 the whole batch (that wedges the pusher's
+            // sync forever). The client SyncEngine already isolates per record;
+            // mirror that here — but REPORT the failure instead of dropping it.
             try {
-              if (raw is! Map) continue;
+              if (raw is! Map) {
+                record(index: index, collection: collection,
+                    outcome: _SyncApplyOutcome.invalidRecord);
+                continue;
+              }
               final m = raw.cast<String, dynamic>();
-              // SYNC W3: the settings UNIT is a SINGLETON record with no `id`
-              // (it'd be skipped by the id-required path below). Handle it
-              // first: clamp its mtime to the server clock (same future-clock
-              // guard as records) so it can't outrun the /pull watermark, then
-              // apply under LWW. `applySyncedSettings` reads the mtime off the
-              // map and no-ops when not strictly newer (counts as a benign
-              // server-newer reject so the pusher advances cleanly).
+
+              // Unknown collection (a newer client pushing a record type this
+              // hub lacks). Report `unsupported_collection` — the client defers
+              // it (re-scan on hub upgrade) instead of us lying "server newer".
+              if (!isSingleton && !known) {
+                final uid = m['id'] as String?;
+                record(id: uid, index: index, collection: collection,
+                    outcome: _SyncApplyOutcome.unsupportedCollection,
+                    clientMtime: (m['mtime'] as num?)?.toInt());
+                continue;
+              }
+
+              // SYNC W3: the settings UNIT is a SINGLETON with no `id`. Apply
+              // under LWW; v2 restamps a win to a hub revision, v1 clamps a
+              // future clock.
               if (collection == 'settings') {
-                var sMtime = (m['mtime'] as num?)?.toInt() ?? 0;
-                if (sMtime > serverNow) {
-                  sMtime = serverNow;
-                  m['mtime'] = serverNow;
-                }
+                var cM = (m['mtime'] as num?)?.toInt() ?? 0;
                 final before = store.settingsMtime;
-                // 1.1.2: ignore a non-native (web) peer's provider-role pointers
-                // — they index its own provider list and would clobber the
-                // host's active-provider selection. The other settings (model,
-                // chat, memory…) still sync. applySyncedSettings preserves the
-                // stripped (absent) pointer keys instead of nulling them.
+                // Blocker 3 (r2): future-clamp is v1-only; v2 compares the
+                // ORIGINAL mtime under LWW and restamps a backward win up.
+                if (v2) {
+                  restampSingletonIfWin(m, cM, before);
+                } else if (cM > serverNow) {
+                  cM = clampFutureMtime(cM, serverNow);
+                  m['mtime'] = cM;
+                }
+                // 1.1.2: strip a non-native (web) peer's provider-role pointers
+                // — they index its own provider list and would clobber ours.
                 store.applySyncedSettings(
                   device?.isNative == true ? m : withoutProviderRolePointers(m),
                 );
                 if (store.settingsMtime != before) {
                   accepted++;
+                  needsPersist = true;
+                  record(index: index, collection: 'settings',
+                      outcome: _SyncApplyOutcome.accepted,
+                      clientMtime: cM, serverMtime: store.settingsMtime);
                 } else {
-                  rejected.add({
-                    'collection': 'settings',
-                    'reason': 'server has newer mtime',
-                  });
+                  // Superseded: no state change → no notify. The blocker-1
+                  // unconditional flush (any non-empty push) covers the
+                  // restamp-retry durability case.
+                  record(index: index, collection: 'settings',
+                      outcome: _SyncApplyOutcome.superseded,
+                      clientMtime: cM, serverMtime: store.settingsMtime);
                 }
                 continue;
               }
-              // The BotBooru PROFILE unit is also a SINGLETON record with no
-              // `id` — handle it exactly like `settings` (clamp future clock,
-              // apply under LWW, count accepted vs server-newer reject).
+              // The BotBooru PROFILE unit — same singleton shape as settings.
               if (collection == 'botbooruProfile') {
-                var pMtime = (m['mtime'] as num?)?.toInt() ?? 0;
-                if (pMtime > serverNow) {
-                  pMtime = serverNow;
-                  m['mtime'] = serverNow;
-                }
+                var cM = (m['mtime'] as num?)?.toInt() ?? 0;
                 final before = store.botbooruProfileMtime;
+                if (v2) {
+                  restampSingletonIfWin(m, cM, before);
+                } else if (cM > serverNow) {
+                  cM = clampFutureMtime(cM, serverNow);
+                  m['mtime'] = cM;
+                }
                 store.applySyncedBotbooruProfile(m);
                 if (store.botbooruProfileMtime != before) {
                   accepted++;
+                  needsPersist = true;
+                  record(index: index, collection: 'botbooruProfile',
+                      outcome: _SyncApplyOutcome.accepted,
+                      clientMtime: cM, serverMtime: store.botbooruProfileMtime);
                 } else {
-                  rejected.add({
-                    'collection': 'botbooruProfile',
-                    'reason': 'server has newer mtime',
-                  });
+                  record(index: index, collection: 'botbooruProfile',
+                      outcome: _SyncApplyOutcome.superseded,
+                      clientMtime: cM, serverMtime: store.botbooruProfileMtime);
                 }
                 continue;
               }
+
               final id = m['id'] as String?;
-              if (id == null) continue;
-              var incomingMtime = (m['mtime'] as num?)?.toInt() ?? 0;
-              if (incomingMtime > serverNow) {
-                // Future-clock record — pull it back to the server's now so it
-                // can't outrun the /pull watermark. Mutate the map too so the
-                // stored copy (built via fromJson) reflects the clamp.
-                incomingMtime = serverNow;
-                m['mtime'] = serverNow;
+              if (id == null) {
+                record(index: index, collection: collection,
+                    outcome: _SyncApplyOutcome.invalidRecord);
+                continue;
               }
-              // Wave CY.18.256: if the server has a tombstone for this record
-              // at/after the pushed version, the record was deleted here (or by
-              // another peer) — don't resurrect it. Reject benignly (NOT a hard
-              // reject: the pusher's NEXT /pull carries our tombstone and reaps
-              // its own copy, so the loss is intentional and converges).
+              var incomingMtime = (m['mtime'] as num?)?.toInt() ?? 0;
+              // Blocker 3 (Codex review r2): the future-clamp is v1-ONLY. For v2
+              // the LWW compare in _applyOne must see the ORIGINAL incoming mtime
+              // — clamping it down first could make a genuinely newer edit
+              // (2001 clamped to serverNow 1000) lose to a stale server copy
+              // (1500) and be dropped. v2 stays server-authoritative: the hub
+              // restamp handles a backward clock, and load()'s counter-aware
+              // ceiling handles the future case on restart.
+              if (!v2 && incomingMtime > serverNow) {
+                incomingMtime = clampFutureMtime(incomingMtime, serverNow);
+                m['mtime'] = incomingMtime;
+              }
+              // Wave CY.18.256: a server tombstone at/after this version means
+              // the record was deleted here — don't resurrect it. Benign: the
+              // pusher's NEXT /pull carries our tombstone and reaps its copy.
               final kind = _collectionToKind(collection);
               if (kind != null &&
                   store.isTombstonedNewer(kind, id, incomingMtime)) {
-                rejected.add({
-                  'id': id,
-                  'collection': collection,
-                  'reason': 'server has newer mtime',
-                });
+                record(id: id, collection: collection,
+                    outcome: _SyncApplyOutcome.tombstoned,
+                    clientMtime: incomingMtime);
                 continue;
               }
-              final applied =
-                  await _applyOne(store, collection, m, incomingMtime, device);
-              if (applied) {
+              final (outcome, serverMtime) = await _applyOne(
+                  store, collection, m, incomingMtime, device,
+                  restamp: v2);
+              if (outcome == _SyncApplyOutcome.accepted) {
                 accepted++;
-              } else {
-                rejected.add({
-                  'id': id,
-                  'collection': collection,
-                  'reason': 'server has newer mtime',
-                });
+                needsPersist = true;
               }
+              // A superseded/equal retry needs no needsPersist flag: blocker 1
+              // flushes on ANY non-empty push, so the restamp-retry durability
+              // case is covered without a false notify here.
+              record(id: id, collection: collection, outcome: outcome,
+                  clientMtime: incomingMtime, serverMtime: serverMtime);
             } catch (e) {
+              // Blocker 4 (Codex review r2): anything reaching THIS catch is a
+              // DETERMINISTIC parse/cast failure (fromJson / `as String`) —
+              // re-sending can't help → invalid_record (advance). TRANSIENT
+              // apply failures (provider key I/O) are caught inside _applyOne and
+              // returned as retryable_error, so they never reach here. A
+              // malformed provider therefore no longer wedges the cursor forever.
               debugPrint(
-                  '[PyreServer] /push skipped a malformed $collection record: $e');
-              continue;
+                  '[PyreServer] /push malformed $collection record: $e');
+              record(index: index, collection: collection,
+                  outcome: _SyncApplyOutcome.invalidRecord);
             }
           }
         }
@@ -946,33 +1129,75 @@ class PyreServer {
             final key = tEntry.key.toString();
             var incoming = (tEntry.value as num?)?.toInt() ?? 0;
             if (incoming <= 0) continue;
-            // Clamp future-clock tombstones to serverNow, same reasoning as
-            // the record clamp above — a tombstone whose mtime outran the
-            // /pull watermark would never propagate back out.
-            if (incoming > serverNow) incoming = serverNow;
+            // Blocker 3 (r2): future-clamp is v1-only (v2 restamps instead).
+            if (!v2 && incoming > serverNow) {
+              incoming = clampFutureMtime(incoming, serverNow);
+            }
             final existing = store.tombstones[key] ?? 0;
             if (incoming > existing) {
+              // Stage 4: v2 restamps a winning tombstone to a hub-monotonic
+              // revision so peers pull it even when the pusher's clock rolled
+              // back below the hub high-water.
+              if (v2 && incoming <= store.lastIssuedLocalMtime) {
+                incoming = store.nextSyncMtimeAfter(store.lastIssuedLocalMtime);
+              }
               store.tombstones[key] = incoming;
+              // D-#3 (Codex review): observe on BOTH v1 and v2 so the tombstone
+              // never sits above the counter — else /pull.serverTime (= counter)
+              // would be below it and a v1 tombstone-only push wouldn't ship.
+              store.observeSyncMtime(incoming);
               accepted++;
+              needsPersist = true;
             }
             final effective = store.tombstones[key] ?? incoming;
             final sep = key.indexOf(':');
             if (sep <= 0) continue;
             final reaped = await _reapTombstoned(
                 store, key.substring(0, sep), key.substring(sep + 1), effective);
-            if (reaped) accepted++;
+            if (reaped) {
+              accepted++;
+              needsPersist = true;
+            }
           }
         }
 
-        if (accepted > 0) {
-          // notifyAndPersist fires notifyListeners + schedules a
-          // debounced save, so a burst of /push calls collapses into
-          // one disk write at the tail.
-          store.notifyAndPersist();
+        // Stage 5 (2026-07-17, Codex): persist SYNCHRONOUSLY before the 200.
+        // The old code only scheduled a debounced save, so the hub could 200 a
+        // push, the client advance its cursor, and the hub crash before the
+        // save — losing the record with the client believing it delivered.
+        //
+        // Blocker 1 (Codex review): flush before EVERY non-empty push, not just
+        // when THIS batch changed state. The restamp-retry loses data otherwise:
+        // attempt 1 accepts+restamps a record (5000 → 10001) but the persist
+        // fails (503); the retry sees the in-memory 10001 as `superseded` with
+        // serverMtime(10001) != incomingMtime(5000), so the equal-version guard
+        // doesn't fire, needsPersist stays false, and a benign 200 lets the
+        // client advance while the record was never written to disk. Persisting
+        // on any non-empty push closes that: `stateChanged` still gates the
+        // notify (no needless repaint), but a non-empty push always flushes.
+        final stateChanged = needsPersist;
+        final pushCarriedItems = results.isNotEmpty ||
+            (pushedTombstones is Map && pushedTombstones.isNotEmpty);
+        if (pushCarriedItems) {
+          if (stateChanged) store.notifyAndPersist();
+          await store.flushPersist();
+          if (store.lastPersistFailed) {
+            return Response(503,
+                body: '{"error":"persist failed"}',
+                headers: {'content-type': 'application/json'});
+          }
         }
 
         return Response.ok(
-          jsonEncode({'accepted': accepted, 'rejected': rejected}),
+          jsonEncode({
+            'accepted': accepted,
+            'rejected': rejected,
+            // Sync-B stage 3: exhaustive per-item outcomes (additive — v1
+            // clients ignore it) + the hub's protocol so the client can trust
+            // `results` rather than the lossy `rejected`-only heuristic.
+            'results': results,
+            'syncProtocol': 2,
+          }),
           headers: {'content-type': 'application/json'},
         );
       } catch (e) {
@@ -1654,88 +1879,167 @@ class PyreServer {
   /// envelope (AES-GCM is async) and writes it to OS-secure storage. [device]
   /// is the authenticated peer (nullable) — only the `providers` case reads it
   /// (for the gate + per-peer decrypt secret); every other case ignores it.
-  Future<bool> _applyOne(
+  /// Sync-B stage 4 (2026-07-17, Codex): the hub is server-authoritative on the
+  /// revision it assigns an accepted write. [restamp] (v2 pushers only) stamps
+  /// the record with a value guaranteed to sit at or above the hub's monotonic
+  /// high-water, so EVERY peer's `mtime > since` pull sees it — even when the
+  /// pusher's [incomingMtime] came from a rolled-back clock and landed at/below
+  /// the hub's high-water (the "invisible to peers" loss). A well-behaved
+  /// incoming mtime already above the floor is kept as-is (no churn). v1
+  /// (legacy) pushers are NOT restamped — their mtime was future-clamped in the
+  /// push loop, and restamping them would echo/re-push under skew.
+  static int _acceptedRevision(AppStore store, int incomingMtime, bool restamp) {
+    if (!restamp) return incomingMtime;
+    final floor = store.lastIssuedLocalMtime;
+    return incomingMtime > floor
+        ? incomingMtime
+        : store.nextSyncMtimeAfter(floor);
+  }
+
+  /// Test seam for the /push apply core (LWW + hub restamp + outcome). Returns
+  /// the wire `code` + the record's resulting server revision. `device` is null
+  /// (provider decryption is out of scope for the unit tests that use this).
+  @visibleForTesting
+  static Future<(String, int)> applyPushRecordForTest(
+    AppStore store,
+    String collection,
+    Map<String, dynamic> j,
+    int incomingMtime, {
+    required bool restamp,
+  }) async {
+    final (outcome, serverMtime) =
+        await _applyOne(store, collection, j, incomingMtime, null, restamp: restamp);
+    return (_outcomeCode(outcome), serverMtime);
+  }
+
+  /// Applies one pushed record under LWW and reports the OUTCOME + the record's
+  /// resulting server revision. Returns [_SyncApplyOutcome.superseded] with the
+  /// EXISTING mtime when the local copy is at least as fresh (the caller uses
+  /// `serverMtime == incomingMtime` to detect an equal-version retry that still
+  /// needs a persist). Unknown collections are handled by the caller BEFORE this
+  /// runs, so the `default` arm is defensive only.
+  static Future<(_SyncApplyOutcome, int)> _applyOne(
     AppStore store,
     String collection,
     Map<String, dynamic> j,
     int incomingMtime,
-    PairedDevice? device,
-  ) async {
+    PairedDevice? device, {
+    required bool restamp,
+  }) async {
     switch (collection) {
       case 'characters':
         final id = j['id'] as String;
         final idx = store.characters.indexWhere((c) => c.id == id);
+        if (idx >= 0 && store.characters[idx].mtime >= incomingMtime) {
+          return (_SyncApplyOutcome.superseded, store.characters[idx].mtime);
+        }
+        final rev = _acceptedRevision(store, incomingMtime, restamp);
+        j['mtime'] = rev;
+        store.observeSyncMtime(rev);
         if (idx >= 0) {
-          if (store.characters[idx].mtime >= incomingMtime) return false;
           store.characters[idx] = Character.fromJson(j);
         } else {
           store.characters.add(Character.fromJson(j));
         }
-        return true;
+        return (_SyncApplyOutcome.accepted, rev);
       case 'personas':
         final id = j['id'] as String;
         final idx = store.personas.indexWhere((p) => p.id == id);
+        if (idx >= 0 && store.personas[idx].mtime >= incomingMtime) {
+          return (_SyncApplyOutcome.superseded, store.personas[idx].mtime);
+        }
+        final rev = _acceptedRevision(store, incomingMtime, restamp);
+        j['mtime'] = rev;
+        store.observeSyncMtime(rev);
         if (idx >= 0) {
-          if (store.personas[idx].mtime >= incomingMtime) return false;
           store.personas[idx] = Persona.fromJson(j);
         } else {
           store.personas.add(Persona.fromJson(j));
         }
-        return true;
+        return (_SyncApplyOutcome.accepted, rev);
       case 'chats':
         final id = j['id'] as String;
         final idx = store.chats.indexWhere((c) => c.id == id);
+        if (idx >= 0 && store.chats[idx].mtime >= incomingMtime) {
+          return (_SyncApplyOutcome.superseded, store.chats[idx].mtime);
+        }
+        final rev = _acceptedRevision(store, incomingMtime, restamp);
+        j['mtime'] = rev;
+        store.observeSyncMtime(rev);
         if (idx >= 0) {
-          if (store.chats[idx].mtime >= incomingMtime) return false;
           store.chats[idx] = Chat.fromJson(j);
         } else {
           store.chats.add(Chat.fromJson(j));
         }
-        return true;
+        return (_SyncApplyOutcome.accepted, rev);
       case 'presets':
         final id = j['id'] as String;
         final idx = store.presets.indexWhere((p) => p.id == id);
         if (idx >= 0) {
           // Never overwrite the locked default — it's rebuilt from the
           // app binary on every load anyway.
-          if (store.presets[idx].locked) return false;
-          if (store.presets[idx].mtime >= incomingMtime) return false;
+          if (store.presets[idx].locked) {
+            return (_SyncApplyOutcome.immutable, store.presets[idx].mtime);
+          }
+          if (store.presets[idx].mtime >= incomingMtime) {
+            return (_SyncApplyOutcome.superseded, store.presets[idx].mtime);
+          }
+        }
+        final rev = _acceptedRevision(store, incomingMtime, restamp);
+        j['mtime'] = rev;
+        store.observeSyncMtime(rev);
+        if (idx >= 0) {
           store.presets[idx] = Preset.fromJson(j);
         } else {
           store.presets.add(Preset.fromJson(j));
         }
-        return true;
+        return (_SyncApplyOutcome.accepted, rev);
       case 'lorebooks':
         final id = j['id'] as String;
         final idx = store.lorebooks.indexWhere((l) => l.id == id);
+        if (idx >= 0 && store.lorebooks[idx].mtime >= incomingMtime) {
+          return (_SyncApplyOutcome.superseded, store.lorebooks[idx].mtime);
+        }
+        final rev = _acceptedRevision(store, incomingMtime, restamp);
+        j['mtime'] = rev;
+        store.observeSyncMtime(rev);
         if (idx >= 0) {
-          if (store.lorebooks[idx].mtime >= incomingMtime) return false;
           store.lorebooks[idx] = Lorebook.fromJson(j);
         } else {
           store.lorebooks.add(Lorebook.fromJson(j));
         }
-        return true;
+        return (_SyncApplyOutcome.accepted, rev);
       case 'regexRules':
         final id = j['id'] as String;
         final idx = store.regexRules.indexWhere((r) => r.id == id);
+        if (idx >= 0 && store.regexRules[idx].mtime >= incomingMtime) {
+          return (_SyncApplyOutcome.superseded, store.regexRules[idx].mtime);
+        }
+        final rev = _acceptedRevision(store, incomingMtime, restamp);
+        j['mtime'] = rev;
+        store.observeSyncMtime(rev);
         if (idx >= 0) {
-          if (store.regexRules[idx].mtime >= incomingMtime) return false;
           store.regexRules[idx] = RegexRule.fromJson(j);
         } else {
           store.regexRules.add(RegexRule.fromJson(j));
         }
-        return true;
+        return (_SyncApplyOutcome.accepted, rev);
       case 'folders':
         // Mega-audit 2026-06-05 (F2): LWW by mtime, mirrors lorebooks.
         final id = j['id'] as String;
         final idx = store.folders.indexWhere((f) => f.id == id);
+        if (idx >= 0 && store.folders[idx].mtime >= incomingMtime) {
+          return (_SyncApplyOutcome.superseded, store.folders[idx].mtime);
+        }
+        final rev = _acceptedRevision(store, incomingMtime, restamp);
+        j['mtime'] = rev;
+        store.observeSyncMtime(rev);
         if (idx >= 0) {
-          if (store.folders[idx].mtime >= incomingMtime) return false;
           store.folders[idx] = Folder.fromJson(j);
         } else {
           store.folders.add(Folder.fromJson(j));
         }
-        return true;
+        return (_SyncApplyOutcome.accepted, rev);
       case 'creatorPresets':
         // Mega-audit 2026-06-05 (F2): LWW by mtime. The locked default is
         // refreshed-from-build on every load, so a synced copy must never
@@ -1744,80 +2048,136 @@ class PyreServer {
         final id = j['id'] as String;
         final idx = store.creatorPresets.indexWhere((p) => p.id == id);
         if (idx >= 0) {
-          if (store.creatorPresets[idx].locked) return false;
-          if (store.creatorPresets[idx].mtime >= incomingMtime) return false;
+          if (store.creatorPresets[idx].locked) {
+            return (_SyncApplyOutcome.immutable, store.creatorPresets[idx].mtime);
+          }
+          if (store.creatorPresets[idx].mtime >= incomingMtime) {
+            return (_SyncApplyOutcome.superseded, store.creatorPresets[idx].mtime);
+          }
+        }
+        // Never add a second "locked default" via sync.
+        if (idx < 0 && CreatorPreset.fromJson(j).locked) {
+          return (_SyncApplyOutcome.immutable, incomingMtime);
+        }
+        final rev = _acceptedRevision(store, incomingMtime, restamp);
+        j['mtime'] = rev;
+        store.observeSyncMtime(rev);
+        if (idx >= 0) {
           store.creatorPresets[idx] = CreatorPreset.fromJson(j);
         } else {
-          final incoming = CreatorPreset.fromJson(j);
-          // Never add a second "locked default" via sync.
-          if (incoming.locked) return false;
-          store.creatorPresets.add(incoming);
+          store.creatorPresets.add(CreatorPreset.fromJson(j));
         }
-        return true;
+        return (_SyncApplyOutcome.accepted, rev);
       case 'providers':
         // Wave CY.18.260: providers carry the API key — gated identically to
         // the pull (opt-in flag AND peer-native). A non-native peer (e.g. web)
-        // or an opted-out host has its provider records silently ignored.
+        // or an opted-out host has its provider records ignored (policy reject).
         if (!shouldSyncProviders(
             store.uiPrefs.syncProviderKeys, device?.isNative == true)) {
-          return false;
+          return (_SyncApplyOutcome.policyRejected, 0);
         }
         final id = j['id'] as String;
-        // LWW on mtime. Build the config-only record first (fromJson never
-        // pulls the plaintext key out of the synced blob; it only rehydrates
-        // the transient apiKeyEnc envelope).
+        // Parse OUTSIDE the I/O try: a malformed provider (fromJson throws) is
+        // a DETERMINISTIC failure → it propagates to the caller's per-item catch
+        // as invalid_record (advance), NOT retryable. fromJson never pulls the
+        // plaintext key; it only rehydrates the apiKeyEnc envelope.
         final incoming = ApiProvider.fromJson(j);
-        final idx = store.providers.indexWhere((p) => p.id == id);
-        if (idx >= 0 && store.providers[idx].mtime >= incomingMtime) {
-          // Wave CY.18.267: config is at least as fresh so we don't replace
-          // it, but backfill a MISSING key from the peer's envelope (never
-          // overwrite an existing key, never touch config). Mirrors
-          // SyncEngine.applyProviders — covers "this device restored a keyless
-          // backup, then a paired peer pushes the key".
-          if (store.providers[idx].apiKey.isEmpty) {
-            final env = j['apiKeyEnc'];
-            if (env is String && env.isNotEmpty && device != null) {
-              final secret =
-                  await DeviceRegistry.instance.secretForDevice(device);
-              final decrypted = await KeyCrypto.decryptApiKey(env, secret);
-              if (decrypted != null && decrypted.isNotEmpty) {
-                store.providers[idx].apiKey = decrypted;
-                await SecureKeys.write(id, decrypted);
-                return true;
-              }
-            }
-          }
-          return false;
-        }
-        // Preserve the existing local plaintext key as the floor — a decrypt
-        // failure (re-paired, tampered, wrong bearer) must NEVER wipe a key
-        // the user already has. New providers start with no key.
-        final existingKey = idx >= 0 ? store.providers[idx].apiKey : '';
-        incoming.apiKey = existingKey;
-        // Decrypt the key envelope, if present, with THIS peer's secret. On
-        // success: adopt + persist to OS-secure storage. On failure: keep the
-        // config, leave the existing key untouched, log one line.
+
+        // Blocker 4 (Codex review r3): decrypt UP FRONT (the only async I/O that
+        // isn't the durable write) into a local, touching NO store state. A
+        // transient secret/decrypt failure → retryable, store untouched.
+        String? decrypted;
         final env = j['apiKeyEnc'];
-        if (env is String && env.isNotEmpty && device != null) {
-          final secret =
-              await DeviceRegistry.instance.secretForDevice(device);
-          final decrypted = await KeyCrypto.decryptApiKey(env, secret);
-          if (decrypted != null) {
-            incoming.apiKey = decrypted;
-            await SecureKeys.write(id, decrypted);
-          } else {
-            debugPrint('[PyreServer] provider $id: key decrypt failed — '
-                'keeping config, existing key untouched');
+        final envelopePresent = env is String && env.isNotEmpty && device != null;
+        if (envelopePresent) {
+          try {
+            final secret =
+                await DeviceRegistry.instance.secretForDevice(device);
+            decrypted = await KeyCrypto.decryptApiKey(env, secret);
+          } catch (e) {
+            debugPrint('[PyreServer] provider $id secret/decrypt I/O: $e');
+            return (_SyncApplyOutcome.retryableError, incomingMtime);
+          }
+          // Blocker (Codex review r4): KeyCrypto.decryptApiKey returns NULL (it
+          // never throws) on a bad envelope / wrong secret / tampering. The
+          // envelope PROMISED a key — committing now would accept the config and
+          // silently DROP the key while the client advances its cursor, so the
+          // key never arrives. HOLD + retry instead (a re-pair fixes a secret
+          // mismatch); never swallow a promised key.
+          if (decrypted == null) {
+            debugPrint('[PyreServer] provider $id: key decrypt returned null — '
+                'holding for retry (envelope present)');
+            return (_SyncApplyOutcome.retryableError, incomingMtime);
           }
         }
+
+        // RE-RESOLVE + re-do the LWW compare AFTER the decrypt awaits — a
+        // concurrent local edit (updateProvider) may have changed providers
+        // while we were decrypting. Never act on a stale index/decision.
+        var idx = store.providers.indexWhere((p) => p.id == id);
+        if (idx >= 0 && store.providers[idx].mtime >= incomingMtime) {
+          // Wave CY.18.267: config is fresh — don't replace it — but backfill a
+          // MISSING key. Uses the CHECKED write and only mutates RAM AFTER the
+          // key is durably on disk (blocker 4: a swallowed write failure used to
+          // put the key in RAM, answer accepted, then lose it on restart).
+          if (store.providers[idx].apiKey.isEmpty &&
+              decrypted != null &&
+              decrypted.isNotEmpty) {
+            // retryable returns use incomingMtime (never a pre-await index) so a
+            // concurrent DELETE can't turn a benign retry into a RangeError.
+            if (!await SecureKeys.tryWrite(id, decrypted)) {
+              return (_SyncApplyOutcome.retryableError, incomingMtime);
+            }
+            // Re-resolve after the write await; only adopt if still empty (a
+            // concurrent edit may have set a key meanwhile — don't clobber RAM).
+            idx = store.providers.indexWhere((p) => p.id == id);
+            if (idx >= 0 && store.providers[idx].apiKey.isEmpty) {
+              store.providers[idx].apiKey = decrypted;
+              return (_SyncApplyOutcome.accepted, store.providers[idx].mtime);
+            }
+            return (
+              _SyncApplyOutcome.superseded,
+              idx >= 0 ? store.providers[idx].mtime : incomingMtime
+            );
+          }
+          return (_SyncApplyOutcome.superseded, store.providers[idx].mtime);
+        }
+
+        // Accept path (config wins or new provider). Write the key (if any) to
+        // secure storage FIRST; only commit config to RAM once it's durable.
+        if (decrypted != null) {
+          if (!await SecureKeys.tryWrite(id, decrypted)) {
+            return (_SyncApplyOutcome.retryableError, incomingMtime);
+          }
+        }
+        // Re-resolve + re-check LWW after the write await — respect a concurrent
+        // edit that won during it (its own key is already in secure storage via
+        // its path; we don't overwrite its config here).
+        idx = store.providers.indexWhere((p) => p.id == id);
+        if (idx >= 0 && store.providers[idx].mtime >= incomingMtime) {
+          return (_SyncApplyOutcome.superseded, store.providers[idx].mtime);
+        }
+        // Codex review r4: re-validate the tombstone after the awaits too — a
+        // concurrent DELETE during the decrypt/write would otherwise let the
+        // accept path RESURRECT the just-deleted provider.
+        if (store.isTombstonedNewer('provider', id, incomingMtime)) {
+          return (_SyncApplyOutcome.tombstoned, incomingMtime);
+        }
+        // Preserve the existing local key as the floor — a decrypt miss must
+        // NEVER wipe a key the user already has. New providers start keyless.
+        incoming.apiKey = decrypted ?? (idx >= 0 ? store.providers[idx].apiKey : '');
+        final rev = _acceptedRevision(store, incomingMtime, restamp);
+        incoming.mtime = rev;
+        store.observeSyncMtime(rev);
+        // No await between here and the return → the commit is atomic.
         if (idx >= 0) {
           store.providers[idx] = incoming;
         } else {
           store.providers.add(incoming);
         }
-        return true;
+        return (_SyncApplyOutcome.accepted, rev);
       default:
-        return false;
+        return (_SyncApplyOutcome.superseded, incomingMtime);
     }
   }
 

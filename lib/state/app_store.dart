@@ -103,12 +103,193 @@ class AppStore extends ChangeNotifier {
   /// survives a restart. Wire-compatible: it only ever raises mtimes.
   int lastIssuedLocalMtime = 0;
 
-  /// The monotonic sync timestamp source. See [lastIssuedLocalMtime].
-  int nextSyncMtime() {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final next = now > lastIssuedLocalMtime ? now : lastIssuedLocalMtime + 1;
+  /// The monotonic sync timestamp source. See [lastIssuedLocalMtime]. Pass an
+  /// already-read [now] to reuse a single wall-clock sample (so a caller can
+  /// stamp a human-time field AND the monotonic mtime from the SAME instant
+  /// without a second clock read racing past the first).
+  int nextSyncMtime([int? now]) {
+    final n = now ?? DateTime.now().millisecondsSinceEpoch;
+    final next = n > lastIssuedLocalMtime ? n : lastIssuedLocalMtime + 1;
     lastIssuedLocalMtime = next;
     return next;
+  }
+
+  /// Sync-B (2026-07-17, Codex): raise the monotonic counter to a revision we
+  /// RECEIVED (from a hub restamp or a peer's higher mtime) so the next locally
+  /// minted mtime is strictly greater. Without this a hub-assigned revision
+  /// above our counter would let the NEXT edit demote its own record below the
+  /// version peers already hold.
+  void observeSyncMtime(int value) {
+    if (value > lastIssuedLocalMtime) lastIssuedLocalMtime = value;
+  }
+
+  /// Sync-B: mint the next monotonic mtime guaranteed strictly greater than
+  /// [floor] (the hub uses this to restamp an accepted record above its own
+  /// durable high-water). Pure convenience over [observeSyncMtime]+[nextSyncMtime].
+  int nextSyncMtimeAfter(int floor) {
+    observeSyncMtime(floor);
+    return nextSyncMtime();
+  }
+
+  /// Sync-B blocker 2 (2026-07-17, Codex review): reconcile a locally-held
+  /// record with the revision the hub ASSIGNED it on /push (`serverMtime`).
+  ///
+  /// [observeSyncMtime] is always applied so a later local edit can never mint
+  /// the SAME value the hub restamped to — the tie that causes permanent
+  /// divergence. Then, if the record was edited locally DURING the push (its
+  /// mtime no longer equals [clientMtime], the value we sent) and now sits
+  /// at/below the hub revision, it is re-bumped strictly above [serverMtime] so
+  /// the concurrent edit re-pushes and WINS, instead of tying forever with the
+  /// hub's (older-data) copy at the same mtime. When the record is untouched
+  /// (mtime still == clientMtime) we leave it — the hub's copy is identical, so
+  /// the one benign pull-echo reconciles it.
+  /// Returns true if it mutated persistent state (raised the counter or
+  /// re-bumped a record) so the caller can persist the reconcile before
+  /// advancing the push cursor — a rebump left only in memory would be lost on a
+  /// crash, reopening the tie/divergence (Codex review r2).
+  bool reconcilePushedRevision(
+    String collection,
+    int clientMtime,
+    int serverMtime, {
+    String? id,
+  }) {
+    var changed = serverMtime > lastIssuedLocalMtime;
+    observeSyncMtime(serverMtime);
+
+    // Singletons carry no id; their "record mtime" is the unit watermark.
+    if (collection == 'settings') {
+      if (settingsMtime != clientMtime && settingsMtime <= serverMtime) {
+        settingsMtime = nextSyncMtimeAfter(serverMtime);
+        changed = true;
+      }
+      return changed;
+    }
+    if (collection == 'botbooruProfile') {
+      if (botbooruProfileMtime != clientMtime &&
+          botbooruProfileMtime <= serverMtime) {
+        botbooruProfileMtime = nextSyncMtimeAfter(serverMtime);
+        changed = true;
+      }
+      return changed;
+    }
+    if (id == null) return changed;
+
+    // Records: re-bump the one edited during the push so it re-pushes + wins.
+    bool editedDuringPush(int m) => m != clientMtime && m <= serverMtime;
+    switch (collection) {
+      case 'characters':
+        final i = characters.indexWhere((c) => c.id == id);
+        if (i >= 0 && editedDuringPush(characters[i].mtime)) {
+          characters[i].mtime = nextSyncMtimeAfter(serverMtime);
+          changed = true;
+        }
+        break;
+      case 'personas':
+        final i = personas.indexWhere((p) => p.id == id);
+        if (i >= 0 && editedDuringPush(personas[i].mtime)) {
+          personas[i].mtime = nextSyncMtimeAfter(serverMtime);
+          changed = true;
+        }
+        break;
+      case 'chats':
+        final i = chats.indexWhere((c) => c.id == id);
+        if (i >= 0 && editedDuringPush(chats[i].mtime)) {
+          chats[i].mtime = nextSyncMtimeAfter(serverMtime);
+          changed = true;
+        }
+        break;
+      case 'presets':
+        final i = presets.indexWhere((p) => p.id == id);
+        if (i >= 0 && editedDuringPush(presets[i].mtime)) {
+          presets[i].mtime = nextSyncMtimeAfter(serverMtime);
+          changed = true;
+        }
+        break;
+      case 'lorebooks':
+        final i = lorebooks.indexWhere((l) => l.id == id);
+        if (i >= 0 && editedDuringPush(lorebooks[i].mtime)) {
+          lorebooks[i].mtime = nextSyncMtimeAfter(serverMtime);
+          changed = true;
+        }
+        break;
+      case 'regexRules':
+        final i = regexRules.indexWhere((r) => r.id == id);
+        if (i >= 0 && editedDuringPush(regexRules[i].mtime)) {
+          regexRules[i].mtime = nextSyncMtimeAfter(serverMtime);
+          changed = true;
+        }
+        break;
+      case 'folders':
+        final i = folders.indexWhere((f) => f.id == id);
+        if (i >= 0 && editedDuringPush(folders[i].mtime)) {
+          folders[i].mtime = nextSyncMtimeAfter(serverMtime);
+          changed = true;
+        }
+        break;
+      case 'creatorPresets':
+        final i = creatorPresets.indexWhere((p) => p.id == id);
+        if (i >= 0 && editedDuringPush(creatorPresets[i].mtime)) {
+          creatorPresets[i].mtime = nextSyncMtimeAfter(serverMtime);
+          changed = true;
+        }
+        break;
+      case 'providers':
+        final i = providers.indexWhere((p) => p.id == id);
+        if (i >= 0 && editedDuringPush(providers[i].mtime)) {
+          providers[i].mtime = nextSyncMtimeAfter(serverMtime);
+          changed = true;
+        }
+        break;
+    }
+    return changed;
+  }
+
+  /// Sync-B (2026-07-17, Codex, stage 1): raise [lastIssuedLocalMtime] to the
+  /// highest mtime actually present on disk. Called once at the end of [load].
+  /// The persisted counter could lag the data — e.g. a hub RESTAMP raised a
+  /// record's mtime above the counter, or an older build wrote mtimes without
+  /// maintaining it. If the counter started below stored data, the next
+  /// [nextSyncMtime] could mint an mtime BELOW an existing record and demote it.
+  /// Scanning every mtime source keeps the counter a true high-water.
+  void rebaseSyncClock() {
+    var hw = lastIssuedLocalMtime;
+    void bump(int v) {
+      if (v > hw) hw = v;
+    }
+
+    for (final c in characters) {
+      bump(c.mtime);
+    }
+    for (final p in personas) {
+      bump(p.mtime);
+    }
+    for (final c in chats) {
+      bump(c.mtime);
+    }
+    for (final p in presets) {
+      bump(p.mtime);
+    }
+    for (final l in lorebooks) {
+      bump(l.mtime);
+    }
+    for (final f in folders) {
+      bump(f.mtime);
+    }
+    for (final p in creatorPresets) {
+      bump(p.mtime);
+    }
+    for (final r in regexRules) {
+      bump(r.mtime);
+    }
+    for (final p in providers) {
+      bump(p.mtime);
+    }
+    bump(settingsMtime);
+    bump(botbooruProfileMtime);
+    for (final t in tombstones.values) {
+      bump(t);
+    }
+    lastIssuedLocalMtime = hw;
   }
   /// Optional override: when non-null, the AI character builder uses
   /// this provider instead of [activeProviderId]. Useful when the user
@@ -911,25 +1092,38 @@ class AppStore extends ChangeNotifier {
     // server `/push` already clamps those; clamping a legitimately newer remote
     // record to the receiver's clock could drop a real update under skew).
     final mtimeNow = DateTime.now().millisecondsSinceEpoch;
+    // Sync-B blocker 3 (2026-07-17, Codex review): the future-clamp CEILING is
+    // `max(now, persisted lastIssuedLocalMtime)`, NOT bare wall-clock. A v2
+    // /push now legitimately preserves an incoming mtime that is ahead of the
+    // receiver's clock (the hub is server-authoritative on revisions), and the
+    // persisted counter is raised to cover it. Clamping such a record down to
+    // wall-clock on restart would demote it BELOW the (still-high) counter, so
+    // `/pull.serverTime` (= counter) would sit above it and peers with a higher
+    // `since` would never see it. A record ABOVE the counter (a genuinely
+    // corrupt/hostile future value the counter never issued) is still clamped.
+    // `lastIssuedLocalMtime` here is the PERSISTED value (the rebase runs later
+    // in this method), i.e. the trusted high-water this device actually issued.
+    final clampCeiling =
+        mtimeNow > lastIssuedLocalMtime ? mtimeNow : lastIssuedLocalMtime;
     for (final c in characters) {
-      c.mtime = clampMtime(stampMtimeIfZero(c.mtime, c.updatedAt, mtimeNow), mtimeNow);
+      c.mtime = clampMtime(stampMtimeIfZero(c.mtime, c.updatedAt, mtimeNow), clampCeiling);
     }
     for (final p in personas) {
-      p.mtime = clampMtime(stampMtimeIfZero(p.mtime, p.updatedAt, mtimeNow), mtimeNow);
+      p.mtime = clampMtime(stampMtimeIfZero(p.mtime, p.updatedAt, mtimeNow), clampCeiling);
     }
     for (final ch in chats) {
-      ch.mtime = clampMtime(stampMtimeIfZero(ch.mtime, ch.updatedAt, mtimeNow), mtimeNow);
+      ch.mtime = clampMtime(stampMtimeIfZero(ch.mtime, ch.updatedAt, mtimeNow), clampCeiling);
     }
     for (final p in presets) {
       // Preset tracks `createdAt` instead of `updatedAt`.
-      p.mtime = clampMtime(stampMtimeIfZero(p.mtime, p.createdAt, mtimeNow), mtimeNow);
+      p.mtime = clampMtime(stampMtimeIfZero(p.mtime, p.createdAt, mtimeNow), clampCeiling);
     }
     for (final l in lorebooks) {
-      l.mtime = clampMtime(stampMtimeIfZero(l.mtime, l.updatedAt, mtimeNow), mtimeNow);
+      l.mtime = clampMtime(stampMtimeIfZero(l.mtime, l.updatedAt, mtimeNow), clampCeiling);
     }
     for (final r in regexRules) {
       // RegexRule has no `updatedAt`; only zero-fill + future-clamp apply.
-      r.mtime = clampMtime(stampMtimeIfZero(r.mtime, mtimeNow, mtimeNow), mtimeNow);
+      r.mtime = clampMtime(stampMtimeIfZero(r.mtime, mtimeNow, mtimeNow), clampCeiling);
     }
     // Wave CY.18.268: providers were MISSING from this repair pass, so a
     // provider created before the mtime field existed (or by the old
@@ -938,7 +1132,7 @@ class AppStore extends ChangeNotifier {
     // installedAt is the stable fallback (now() on a fresh install).
     for (final p in providers) {
       p.mtime = clampMtime(
-          stampMtimeIfZero(p.mtime, installedAt ?? mtimeNow, mtimeNow), mtimeNow);
+          stampMtimeIfZero(p.mtime, installedAt ?? mtimeNow, mtimeNow), clampCeiling);
     }
 
     // Wave CY.18.44: load-time reference-integrity sweep. Pre-Wave this
@@ -1070,6 +1264,10 @@ class AppStore extends ChangeNotifier {
     // layer (a static — it can't watch the store). Runs on BOTH load paths
     // (fresh install and hydrated blob); the setter keeps it in sync after.
     GenerationKeepAlive.promoteAllToHeavy = uiPrefs.backgroundGeneration;
+
+    // Sync-B (2026-07-17, Codex, stage 1): lift the monotonic counter to the
+    // highest mtime on disk so the next mint can't demote an existing record.
+    rebaseSyncClock();
 
     _loaded = true;
     notifyListeners();
@@ -2734,7 +2932,13 @@ class AppStore extends ChangeNotifier {
         //     persona would NEVER sync. A synced chat then points at a Ren
         //     persona the phone doesn't have → broken link. One `now` for
         //     the whole seed keeps the batch consistent.
-        final seedNow = DateTime.now().millisecondsSinceEpoch;
+        // Sync-B (Codex review): MINT the seed stamp via nextSyncMtime() rather
+        // than wall-clock. On a factory reset whose counter is already in the
+        // future (e.g. it observed a peer's future revision), a wall-clock stamp
+        // + observe would leave the seed BELOW the counter → below the push
+        // cursor → the seeded content would never sync out. Minting guarantees
+        // seedNow > counter. One value for the whole batch keeps it consistent.
+        final seedNow = nextSyncMtime();
         content.lorebook.mtime = content.lorebook.updatedAt = seedNow;
         for (final c in content.characters) {
           c.mtime = c.updatedAt = seedNow;
@@ -3402,8 +3606,13 @@ class AppStore extends ChangeNotifier {
   /// edit through here stamps `mtime` (and `updatedAt`) and persists +
   /// notifies once — mirroring `addMessage` / `setChatPersona`.
   void touchChat(Chat chat) {
-    chat.updatedAt = DateTime.now().millisecondsSinceEpoch;
-    chat.mtime = nextSyncMtime();
+    // Read the wall clock ONCE: updatedAt stays a human timestamp, and the
+    // monotonic sync mtime is minted from the SAME sample (so no second clock
+    // read can tick past updatedAt and break the `mtime >= updatedAt`
+    // invariant — the flake that surfaced under load). Codex review r3.
+    final now = DateTime.now().millisecondsSinceEpoch;
+    chat.updatedAt = now;
+    chat.mtime = nextSyncMtime(now);
     _bump();
   }
 
@@ -3694,7 +3903,10 @@ class AppStore extends ChangeNotifier {
   bool seedDefaultRegexRulesIfNeeded() {
     if (defaultRegexRulesSeeded) return false;
     var added = false;
-    final now = DateTime.now().millisecondsSinceEpoch;
+    // Sync-B (Codex review): MINT the seed stamp so it is strictly above the
+    // monotonic counter — factoryReset() re-seeds WITHOUT load()'s rebase, and a
+    // wall-clock stamp could sit below a future counter and never sync out.
+    final now = nextSyncMtime();
     for (final r in buildDefaultRegexRules()) {
       if (regexRules.any((x) => x.id == r.id)) continue;
       r.mtime = now;
@@ -3714,7 +3926,10 @@ class AppStore extends ChangeNotifier {
   /// notify/persist in that mutation, so the new mtime rides the SAME disk
   /// write. The whole unit syncs under LWW keyed by this value.
   void _touchSettings() {
-    settingsMtime = DateTime.now().millisecondsSinceEpoch;
+    // Sync-B (2026-07-17, Codex): use the MONOTONIC clock, not wall-clock. A
+    // backward NTP correction could otherwise mint a settingsMtime below the
+    // push cursor and hide the edit from `mtime > cursor` push snapshots.
+    settingsMtime = nextSyncMtime();
   }
 
   /// SYNC W3: serialise the settings UNIT for sync — the small usage settings
@@ -3844,6 +4059,9 @@ class AppStore extends ChangeNotifier {
     }
 
     settingsMtime = m;
+    // Sync-B (2026-07-17, Codex): a WON apply raised our settings revision to a
+    // peer's value; track it so our next locally minted mtime stays above it.
+    observeSyncMtime(m);
   }
 
   /// Stamp [botbooruProfileMtime] to NOW. Mirrors [_touchSettings]: called by
@@ -3851,7 +4069,8 @@ class AppStore extends ChangeNotifier {
   /// so the new mtime rides the SAME disk write. The whole profile syncs under
   /// LWW keyed by this value.
   void _touchBotbooruProfile() {
-    botbooruProfileMtime = DateTime.now().millisecondsSinceEpoch;
+    // Sync-B (2026-07-17, Codex): monotonic clock — see [_touchSettings].
+    botbooruProfileMtime = nextSyncMtime();
   }
 
   /// Serialise the BotBooru PROFILE unit for sync — the small profile fields
@@ -3903,6 +4122,7 @@ class AppStore extends ChangeNotifier {
     botbooruFeaturedCharacterId = j['botbooruFeaturedCharacterId'] as String?;
 
     botbooruProfileMtime = m;
+    observeSyncMtime(m); // Sync-B: track the peer revision we just adopted.
   }
 
   void updateModelSettings(ModelSettings ms) {

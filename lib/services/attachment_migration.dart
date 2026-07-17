@@ -41,7 +41,13 @@ class AttachmentMigration {
 
     var anyMigrated = false;
     var anyRemainingInline = false;
-    final now = DateTime.now().millisecondsSinceEpoch;
+    // Sync-B (Codex review r2): Character/Persona are top-level SYNCED records,
+    // so their migrated-mtime must ride the MONOTONIC counter — a raw wall-clock
+    // stamp below the logical push cursor would leave the migration invisible to
+    // peers. Mint one revision lazily on the first record actually migrated
+    // (nextSyncMtime is a no-op cost until then).
+    int? migratedMtime;
+    int syncMtime() => migratedMtime ??= store.nextSyncMtime();
 
     Future<String?> migrate(String? maybeUrl) async {
       if (maybeUrl == null) return null;
@@ -64,7 +70,7 @@ class AttachmentMigration {
       final next = await migrate(c.avatar);
       if (next != null) {
         c.avatar = next;
-        c.mtime = now;
+        c.mtime = syncMtime();
         anyMigrated = true;
       }
     }
@@ -72,7 +78,7 @@ class AttachmentMigration {
       final next = await migrate(p.avatar);
       if (next != null) {
         p.avatar = next;
-        p.mtime = now;
+        p.mtime = syncMtime();
         anyMigrated = true;
       }
     }
